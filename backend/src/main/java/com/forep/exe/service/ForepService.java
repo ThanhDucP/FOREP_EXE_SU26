@@ -1,6 +1,7 @@
 package com.forep.exe.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.ai.AiServiceClient;
 import com.forep.exe.ai.AiServiceClient.AiEmployeeWorkload;
 import com.forep.exe.ai.AiServiceClient.AiRecommendAssigneeInput;
@@ -16,6 +17,7 @@ import com.forep.exe.dto.Requests.AssignTaskRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
+import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
@@ -49,6 +51,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -365,7 +368,8 @@ public class ForepService {
         long active = scopedTasks.stream().filter(task -> List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED).contains(task.getStatus())).count();
         long completed = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
         long overdue = scopedTasks.stream().filter(this::isOverdue).count();
-        return new OwnerDashboardView(total, active, completed, overdue, workload(), scopedTasks.stream().limit(5).map(this::toTaskView).toList(), List.of());
+        List<WorkloadView> currentWorkload = workload();
+        return new OwnerDashboardView(total, active, completed, overdue, currentWorkload, scopedTasks.stream().limit(5).map(this::toTaskView).toList(), cachedDashboardRecommendations());
     }
 
     public WorkloadView employeeWorkload(UUID employeeId) {
@@ -386,17 +390,19 @@ public class ForepService {
 
     public List<AssigneeRecommendationView> recommendAssignee(RecommendAssigneeRequest request) {
         requireOwner();
-        List<WorkloadView> currentWorkload = workload();
         if (request == null) return List.of();
+        List<AiEmployeeWorkload> candidates = assigneeCandidates();
+        if (candidates.isEmpty()) return List.of();
         List<AssigneeRecommendationView> recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
                 request.title(),
                 request.requirements(),
                 request.deadline().toString(),
                 request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
-                currentWorkload.stream().map(AiEmployeeWorkload::from).toList()
+                candidates
         ));
-        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, recommendations);
-        return recommendations;
+        List<AssigneeRecommendationView> normalized = normalizeRecommendations(recommendations, candidates);
+        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, normalized);
+        return normalized;
     }
 
     public Map<String, Object> workloadSummary() {
@@ -415,22 +421,101 @@ public class ForepService {
         return aiServiceClient.delayRisks(taskViews, employeeNames);
     }
 
-    public BusinessSummaryView businessSummary() {
+    public Map<String, Object> businessSummary(String period) {
         requireOwner();
-        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
-        long completed = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
-        long overdue = scopedTasks.stream().filter(this::isOverdue).count();
-        long overloaded = workload().stream().filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED).count();
-        long idle = workload().stream().filter(item -> item.workloadLevel() == WorkloadLevel.NO_WORK).count();
-        BusinessSummaryView summary = new BusinessSummaryView(completed, overdue, overloaded, idle, "Tuần này có " + completed + " task hoàn thành, " + overdue + " task quá hạn, " + overloaded + " nhân viên quá tải và " + idle + " nhân viên đang rảnh.");
-        saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, scopedTasks.stream().map(this::toTaskView).toList(), summary);
-        return summary;
+        Map<String, Object> payload = businessSummaryPayload(period);
+        Map<String, Object> output = aiServiceClient.businessSummary(payload);
+        saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, payload, output);
+        return output;
     }
 
     public Map<String, Object> dailyAiSummary() {
-        BusinessSummaryView summary = businessSummary();
-        Map<String, Object> output = aiServiceClient.dailySummary(summary);
-        saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, summary, output);
+        return businessSummary("daily");
+    }
+
+    public Map<String, Object> dailyReportInsights() {
+        requireOwner();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("reports", dailyReportInsightPayloads(LocalDate.now().minusDays(6)));
+        Map<String, Object> output = aiServiceClient.dailyReportInsights(payload);
+        saveAiSuggestion(AiSuggestionType.DAILY_REPORT_INSIGHTS, payload, output);
+        return output;
+    }
+
+    public Map<String, Object> extractTasks(ExtractTasksRequest request) {
+        requireOwner();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("text", request.text());
+        payload.put("defaultDeadline", request.defaultDeadline() == null ? null : request.defaultDeadline().toString());
+        payload.put("employees", assigneeCandidates());
+        Map<String, Object> output = aiServiceClient.extractTasks(payload);
+        saveAiSuggestion(AiSuggestionType.TASK_EXTRACTION, payload, output);
+        return output;
+    }
+
+    public Map<String, Object> splitTask(UUID taskId) {
+        requireOwner();
+        TaskEntity task = requireTask(taskId);
+        Map<String, Object> payload = Map.of("task", aiTaskPayload(task, employeeNames()));
+        Map<String, Object> output = aiServiceClient.splitTask(payload);
+        saveAiSuggestion(AiSuggestionType.TASK_SPLIT, payload, output);
+        return output;
+    }
+
+    public Map<String, Object> taskAdjustment(UUID taskId) {
+        requireOwner();
+        TaskEntity task = requireTask(taskId);
+        Map<String, Object> payload = Map.of("task", aiTaskPayload(task, employeeNames()));
+        Map<String, Object> output = aiServiceClient.taskAdjustment(payload);
+        saveAiSuggestion(AiSuggestionType.TASK_ADJUSTMENT, payload, output);
+        return output;
+    }
+
+    public Map<String, Object> missingReports() {
+        requireOwner();
+        LocalDate reportDate = LocalDate.now();
+        Map<UUID, String> names = employeeNames();
+        List<UUID> submittedEmployeeIds = reports.findByWorkspaceIdOrderByReportDateDesc(currentUser().workspaceId()).stream()
+                .filter(report -> report.getReportDate().equals(reportDate))
+                .map(DailyReportEntity::getUserId)
+                .toList();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("reportDate", reportDate.toString());
+        payload.put("employees", users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream()
+                .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
+                .filter(employee -> !submittedEmployeeIds.contains(employee.getId()))
+                .map(employee -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("employeeId", employee.getId().toString());
+                    item.put("fullName", employee.getFullName());
+                    item.put("status", employee.getStatus().name());
+                    return item;
+                })
+                .toList());
+        payload.put("reports", reports.findByWorkspaceIdOrderByReportDateDesc(currentUser().workspaceId()).stream()
+                .filter(report -> report.getReportDate().equals(reportDate))
+                .map(report -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("reportId", report.getId().toString());
+                    item.put("userId", report.getUserId().toString());
+                    item.put("userName", names.getOrDefault(report.getUserId(), "Unknown"));
+                    item.put("reportDate", report.getReportDate().toString());
+                    return item;
+                })
+                .toList());
+        Map<String, Object> output = aiServiceClient.missingReports(payload);
+        saveAiSuggestion(AiSuggestionType.MISSING_REPORT, payload, output);
+        return output;
+    }
+
+    public Map<String, Object> actionSuggestions() {
+        requireOwner();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("tasks", taskPayloads(LocalDate.now().minusDays(30)));
+        payload.put("reports", reportPayloads(LocalDate.now().minusDays(6)));
+        payload.put("workload", workload().stream().map(AiEmployeeWorkload::from).toList());
+        Map<String, Object> output = aiServiceClient.actionSuggestions(payload);
+        saveAiSuggestion(AiSuggestionType.ACTION_SUGGESTION, payload, output);
         return output;
     }
 
@@ -472,6 +557,235 @@ public class ForepService {
         if (!suggestion.getWorkspaceId().equals(currentUser().workspaceId())) throw new IllegalArgumentException("AI suggestion không thuộc workspace hiện tại.");
         suggestion.setStatus(status);
         return toAiSuggestionView(aiSuggestions.save(suggestion));
+    }
+
+    private List<DashboardAiRecommendationView> cachedDashboardRecommendations() {
+        return aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream()
+                .filter(suggestion -> suggestion.getStatus() == AiSuggestionStatus.GENERATED)
+                .filter(suggestion -> List.of(
+                        AiSuggestionType.ASSIGNEE_RECOMMENDATION,
+                        AiSuggestionType.ACTION_SUGGESTION,
+                        AiSuggestionType.MISSING_REPORT,
+                        AiSuggestionType.TASK_ADJUSTMENT,
+                        AiSuggestionType.DAILY_REPORT_INSIGHTS,
+                        AiSuggestionType.BUSINESS_SUMMARY
+                ).contains(suggestion.getType()))
+                .limit(5)
+                .map(suggestion -> new DashboardAiRecommendationView(
+                        suggestion.getId(),
+                        suggestion.getType(),
+                        "CACHE",
+                        suggestion.getOutputData(),
+                        suggestion.getCreatedAt()
+                ))
+                .toList();
+    }
+
+    private List<AiEmployeeWorkload> assigneeCandidates() {
+        UUID workspaceId = currentUser().workspaceId();
+        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
+        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).stream()
+                .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
+                .map(employee -> {
+                    WorkloadView workload = workloadForEmployee(employee, scopedTasks);
+                    Map<String, Object> scoreComponents = scoreComponents(workload);
+                    return new AiEmployeeWorkload(
+                            workload.employeeId().toString(),
+                            workload.fullName(),
+                            workload.openTasks(),
+                            workload.overdueTasks(),
+                            workload.blockedTasks(),
+                            workload.estimatedWorkload().doubleValue(),
+                            workload.workloadLevel(),
+                            employee.getStatus().name(),
+                            (int) scoreComponents.get("candidateScore"),
+                            scoreComponents
+                    );
+                })
+                .sorted(Comparator.comparing(AiEmployeeWorkload::candidateScore).reversed())
+                .limit(10)
+                .toList();
+    }
+
+    private Map<String, Object> scoreComponents(WorkloadView workload) {
+        int levelPenalty = switch (workload.workloadLevel()) {
+            case NO_WORK -> 0;
+            case LOW -> 4;
+            case NORMAL -> 12;
+            case HIGH -> 28;
+            case OVERLOADED -> 50;
+        };
+        double openPenalty = workload.openTasks() * 6.0;
+        double overduePenalty = workload.overdueTasks() * 18.0;
+        double blockedPenalty = workload.blockedTasks() * 12.0;
+        double workloadPenalty = workload.estimatedWorkload().doubleValue() / 2.0;
+        int candidateScore = (int) Math.max(0, Math.min(100, Math.round(100 - openPenalty - overduePenalty - blockedPenalty - workloadPenalty - levelPenalty)));
+        Map<String, Object> components = new LinkedHashMap<>();
+        components.put("candidateScore", candidateScore);
+        components.put("openTasksPenalty", openPenalty);
+        components.put("overdueTasksPenalty", overduePenalty);
+        components.put("blockedTasksPenalty", blockedPenalty);
+        components.put("estimatedWorkloadPenalty", workloadPenalty);
+        components.put("workloadLevelPenalty", levelPenalty);
+        return components;
+    }
+
+    private List<AssigneeRecommendationView> normalizeRecommendations(List<AssigneeRecommendationView> recommendations, List<AiEmployeeWorkload> candidates) {
+        Map<UUID, AiEmployeeWorkload> candidateById = candidates.stream()
+                .collect(java.util.stream.Collectors.toMap(item -> UUID.fromString(item.employeeId()), item -> item));
+        return recommendations.stream()
+                .filter(item -> candidateById.containsKey(item.employeeId()))
+                .map(item -> {
+                    AiEmployeeWorkload candidate = candidateById.get(item.employeeId());
+                    return new AssigneeRecommendationView(
+                            item.employeeId(),
+                            candidate.fullName(),
+                            candidate.candidateScore(),
+                            candidate.workloadLevel(),
+                            item.reason(),
+                            item.risk()
+                    );
+                })
+                .sorted(Comparator.comparing(AssigneeRecommendationView::score).reversed())
+                .limit(3)
+                .toList();
+    }
+
+    private double taskRiskScore(TaskEntity task) {
+        double score = 0;
+        if (isOverdue(task)) score += 100;
+        if (task.getStatus() == TaskStatus.BLOCKED) score += 70;
+        score += Math.max(0, 100 - task.getProgressPercent()) / 10.0;
+        if (task.getDeadline().isBefore(OffsetDateTime.now().plusDays(2))) score += 20;
+        return score;
+    }
+
+    private Map<String, Object> businessSummaryPayload(String period) {
+        LocalDate start = periodStart(period);
+        LocalDate end = LocalDate.now();
+        List<Map<String, Object>> taskPayloads = taskPayloads(start);
+        List<Map<String, Object>> reportPayloads = reportPayloads(start);
+        List<WorkloadView> currentWorkload = workload();
+        List<TaskEntity> periodTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream()
+                .filter(task -> isRelevantToPeriod(task, start))
+                .toList();
+        long completedTasks = periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
+        long activeTasks = periodTasks.stream().filter(task -> List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED).contains(task.getStatus())).count();
+        long overdueTasks = periodTasks.stream().filter(this::isOverdue).count();
+        long blockedTasks = periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.BLOCKED).count();
+        long totalTracked = Math.max(1, periodTasks.size());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("period", period);
+        payload.put("periodType", (period == null ? "DAILY" : period.toUpperCase()));
+        payload.put("periodStart", start.toString());
+        payload.put("periodEnd", end.toString());
+        payload.put("completedTasks", completedTasks);
+        payload.put("activeTasks", activeTasks);
+        payload.put("overdueTasks", overdueTasks);
+        payload.put("blockedTasks", blockedTasks);
+        payload.put("completionRate", completedTasks * 1.0 / totalTracked);
+        payload.put("missingDailyReports", missingReportCount(end));
+        payload.put("overloadedEmployees", currentWorkload.stream().filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED).count());
+        payload.put("idleEmployees", currentWorkload.stream().filter(item -> item.workloadLevel() == WorkloadLevel.NO_WORK).count());
+        payload.put("tasks", taskPayloads);
+        payload.put("reports", reportPayloads);
+        payload.put("workload", currentWorkload.stream().map(AiEmployeeWorkload::from).toList());
+        return payload;
+    }
+
+    private LocalDate periodStart(String period) {
+        LocalDate today = LocalDate.now();
+        return switch (period == null ? "daily" : period.toLowerCase()) {
+            case "monthly" -> today.withDayOfMonth(1);
+            case "weekly" -> today.minusDays(6);
+            default -> today;
+        };
+    }
+
+    private List<Map<String, Object>> taskPayloads(LocalDate start) {
+        Map<UUID, String> names = employeeNames();
+        return tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream()
+                .filter(task -> isRelevantToPeriod(task, start))
+                .map(task -> aiTaskPayload(task, names))
+                .toList();
+    }
+
+    private List<Map<String, Object>> reportPayloads(LocalDate start) {
+        Map<UUID, String> names = employeeNames();
+        return reports.findByWorkspaceIdOrderByReportDateDesc(currentUser().workspaceId()).stream()
+                .filter(report -> !report.getReportDate().isBefore(start))
+                .map(report -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("reportId", report.getId().toString());
+                    item.put("employeeId", report.getUserId().toString());
+                    item.put("userName", names.getOrDefault(report.getUserId(), "Unknown"));
+                    item.put("reportDate", report.getReportDate().toString());
+                    item.put("todayCompleted", report.getTodayCompleted());
+                    item.put("currentWork", report.getCurrentWork());
+                    item.put("blockers", report.getBlockers());
+                    item.put("tomorrowPlan", report.getTomorrowPlan());
+                    item.put("reviewed", report.getReviewedAt() != null);
+                    return item;
+                })
+                .toList();
+    }
+
+    private List<Map<String, Object>> dailyReportInsightPayloads(LocalDate start) {
+        Map<UUID, String> names = employeeNames();
+        return reports.findByWorkspaceIdOrderByReportDateDesc(currentUser().workspaceId()).stream()
+                .filter(report -> !report.getReportDate().isBefore(start))
+                .map(report -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("reportId", report.getId().toString());
+                    item.put("employeeId", report.getUserId().toString());
+                    item.put("employeeName", names.getOrDefault(report.getUserId(), "Unknown"));
+                    item.put("reportDate", report.getReportDate().toString());
+                    item.put("todayCompleted", report.getTodayCompleted());
+                    item.put("currentWork", report.getCurrentWork());
+                    item.put("blockers", report.getBlockers());
+                    item.put("tomorrowPlan", report.getTomorrowPlan());
+                    return item;
+                })
+                .toList();
+    }
+
+    private long missingReportCount(LocalDate reportDate) {
+        List<UUID> submitted = reports.findByWorkspaceIdOrderByReportDateDesc(currentUser().workspaceId()).stream()
+                .filter(report -> report.getReportDate().equals(reportDate))
+                .map(DailyReportEntity::getUserId)
+                .toList();
+        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream()
+                .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
+                .filter(employee -> !submitted.contains(employee.getId()))
+                .count();
+    }
+
+    private Map<String, Object> aiTaskPayload(TaskEntity task, Map<UUID, String> employeeNames) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("taskId", task.getId().toString());
+        item.put("title", task.getTitle());
+        item.put("requirements", task.getRequirements());
+        item.put("description", task.getDescription());
+        item.put("assigneeName", employeeNames.getOrDefault(task.getAssigneeId(), "Unknown"));
+        item.put("priority", task.getPriority().name());
+        item.put("status", task.getStatus().name());
+        item.put("deadline", task.getDeadline().toString());
+        item.put("progressPercent", task.getProgressPercent());
+        item.put("estimatedHours", task.getEstimatedHours() == null ? 0 : task.getEstimatedHours().doubleValue());
+        item.put("overdue", isOverdue(task));
+        return item;
+    }
+
+    private Map<UUID, String> employeeNames() {
+        return users.findByWorkspaceId(currentUser().workspaceId()).stream()
+                .collect(java.util.stream.Collectors.toMap(UserEntity::getId, UserEntity::getFullName));
+    }
+
+    private boolean isRelevantToPeriod(TaskEntity task, LocalDate start) {
+        return !task.getCreatedAt().toLocalDate().isBefore(start)
+                || !task.getUpdatedAt().toLocalDate().isBefore(start)
+                || (task.getCompletedAt() != null && !task.getCompletedAt().toLocalDate().isBefore(start))
+                || !task.getDeadline().toLocalDate().isBefore(start);
     }
 
     private void applyTaskStatus(TaskEntity task, TaskStatus status, int progressPercent) {
@@ -608,7 +922,8 @@ public class ForepService {
     public record NotificationView(UUID id, UUID workspaceId, UUID userId, String type, String title, String message, String relatedEntityType, UUID relatedEntityId, boolean isRead, OffsetDateTime createdAt) {}
     public record WorkloadView(UUID employeeId, String fullName, long openTasks, long inProgressTasks, long blockedTasks, long completedTasks, long overdueTasks, BigDecimal estimatedWorkload, double workloadScore, WorkloadLevel workloadLevel) {}
     public record AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String reason, String risk) {}
-    public record OwnerDashboardView(long totalTasks, long activeTasks, long completedTasks, long overdueTasks, List<WorkloadView> employeeWorkload, List<TaskView> recentlyUpdatedTasks, List<AssigneeRecommendationView> aiRecommendations) {}
+    public record OwnerDashboardView(long totalTasks, long activeTasks, long completedTasks, long overdueTasks, List<WorkloadView> employeeWorkload, List<TaskView> recentlyUpdatedTasks, List<DashboardAiRecommendationView> aiRecommendations) {}
+    public record DashboardAiRecommendationView(UUID suggestionId, AiSuggestionType type, String source, String outputData, OffsetDateTime createdAt) {}
     public record BusinessSummaryView(long completedTasks, long overdueTasks, long overloadedEmployees, long idleEmployees, String summary) {}
     public record LoginView(String token, UserView user) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}

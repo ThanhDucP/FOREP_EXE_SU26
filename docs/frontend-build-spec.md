@@ -272,6 +272,12 @@ Tat ca endpoint AI chi danh cho OWNER.
 | Goi y nguoi nhan | POST | `/ai/recommend-assignee` | `{ title, requirements, deadline, estimatedHours }` |
 | Tom tat workload | GET | `/ai/workload-summary` | none |
 | Rui ro tre han | GET | `/ai/delay-risks` | none |
+| Phan tich daily reports | GET | `/ai/daily-reports/insights` | none |
+| Nhan vien thieu report | GET | `/ai/daily-reports/missing` | none |
+| Tao task tu mo ta/bien ban | POST | `/ai/tasks/extract` | `{ text, defaultDeadline }` |
+| De xuat chia nho task | POST | `/ai/tasks/{id}/split` | none |
+| De xuat deadline/priority | POST | `/ai/tasks/{id}/adjust` | none |
+| Goi y action cho owner | GET | `/ai/action-suggestions` | none |
 | Danh sach AI suggestion | GET | `/ai/suggestions` | none |
 | Doi trang thai suggestion | PATCH | `/ai/suggestions/{id}/status?status=ACCEPTED` | query `status` |
 | Tom tat ngay | GET | `/ai/business-summary/daily` | none |
@@ -279,6 +285,8 @@ Tat ca endpoint AI chi danh cho OWNER.
 | Tom tat thang | GET | `/ai/business-summary/monthly` | none |
 
 `outputData` va `inputData` cua AI suggestion la string JSON. Front-end nen parse an toan bang try/catch.
+
+`aiRecommendations` tren owner dashboard la cache tu `ai_suggestions`, khong phai LLM call moi moi lan refresh. Moi item co `{ suggestionId, type, source, outputData, createdAt }`; `source` hien tai la `CACHE`.
 
 ### Daily reports
 
@@ -606,6 +614,12 @@ APIs:
 
 - `GET /ai/workload-summary`
 - `GET /ai/delay-risks`
+- `GET /ai/daily-reports/insights`
+- `GET /ai/daily-reports/missing`
+- `POST /ai/tasks/extract`
+- `POST /ai/tasks/{id}/split`
+- `POST /ai/tasks/{id}/adjust`
+- `GET /ai/action-suggestions`
 - `GET /ai/business-summary/daily`
 - `GET /ai/business-summary/weekly`
 - `GET /ai/business-summary/monthly`
@@ -616,6 +630,11 @@ UI sections:
 - Workload summary.
 - Delay risks list.
 - Daily/weekly/monthly business summary.
+- Daily report insights: summary, blockers `{ severity, description }`, actionSuggestions.
+- Missing report list with `employeeId`, `employeeName`, `reportDate`, `daysMissing`, `recommendedAction`, `confidence`.
+- Task extraction form from text/minutes.
+- Task split and deadline/priority recommendation for selected task.
+- Owner action suggestions with `actionType`, target entity, reason, confidence trong khoang `0..1`.
 - AI suggestion history.
 
 Buttons:
@@ -639,6 +658,10 @@ Buttons:
 | Luu task | Task form | OWNER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
 | Goi y nguoi nhan | Task form | OWNER | `POST /ai/recommend-assignee` | thieu title/requirements/deadline/loading |
 | Chon nguoi nay | AI recommendation | OWNER | none, set assignee | employee inactive neu co data |
+| Tao task bang AI | AI center | OWNER | `POST /ai/tasks/extract` | text empty/loading |
+| Chia nho task | Task detail | OWNER | `POST /ai/tasks/{id}/split` | loading |
+| De xuat deadline/priority | Task detail | OWNER | `POST /ai/tasks/{id}/adjust` | loading |
+| Xem action AI | AI center | OWNER | `GET /ai/action-suggestions` | loading |
 | Giao lai | Task detail | OWNER | `PATCH /tasks/{id}/assign` | no assignee/loading |
 | Huy task | Task detail | OWNER | `PATCH /tasks/{id}/cancel` | status CANCELLED/COMPLETED/loading |
 | Doi trang thai | Task detail | OWNER/assignee | `PATCH /tasks/{id}/status` | no status/loading |
@@ -709,7 +732,7 @@ Neu dung TanStack Query hoac thu vien tuong tu:
 - `workload`: invalidate sau task mutation va employee status mutation.
 - `notifications`: refetch khi mo popover, invalidate sau read/read-all.
 - `dailyReports`: invalidate sau create/review.
-- `aiSuggestions`: invalidate sau recommend-assignee va status change.
+- `aiSuggestions`: invalidate sau recommend-assignee, AI summaries, AI task tools, action suggestions va status change.
 
 ## 14. Bao mat front-end
 

@@ -1,7 +1,15 @@
-from pydantic import BaseModel, Field
+﻿from __future__ import annotations
+
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class EmployeeWorkload(BaseModel):
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class EmployeeWorkload(StrictModel):
     employee_id: str = Field(alias="employeeId")
     full_name: str = Field(alias="fullName")
     open_tasks: int = Field(alias="openTasks")
@@ -9,9 +17,12 @@ class EmployeeWorkload(BaseModel):
     blocked_tasks: int = Field(default=0, alias="blockedTasks")
     estimated_workload: float = Field(alias="estimatedWorkload")
     workload_level: str = Field(alias="workloadLevel")
+    status: str = "ACTIVE"
+    candidate_score: Optional[int] = Field(default=None, alias="candidateScore")
+    score_components: dict[str, Any] = Field(default_factory=dict, alias="scoreComponents")
 
 
-class RecommendAssigneeRequest(BaseModel):
+class RecommendAssigneeRequest(StrictModel):
     title: str
     requirements: str
     deadline: str
@@ -19,7 +30,7 @@ class RecommendAssigneeRequest(BaseModel):
     employees: list[EmployeeWorkload]
 
 
-class AssigneeRecommendation(BaseModel):
+class AssigneeRecommendation(StrictModel):
     employee_id: str = Field(alias="employeeId")
     full_name: str = Field(alias="fullName")
     score: int
@@ -28,18 +39,18 @@ class AssigneeRecommendation(BaseModel):
     risk: str
 
 
-class WorkloadSummaryRequest(BaseModel):
+class WorkloadSummaryRequest(StrictModel):
     employees: list[EmployeeWorkload]
 
 
-class WorkloadSummaryResponse(BaseModel):
+class WorkloadSummaryResponse(StrictModel):
     summary: str
     overloaded_employees: list[str] = Field(alias="overloadedEmployees")
     idle_employees: list[str] = Field(alias="idleEmployees")
     overdue_employees: list[str] = Field(alias="overdueEmployees")
 
 
-class DelayRiskTask(BaseModel):
+class DelayRiskTask(StrictModel):
     task_id: str = Field(alias="taskId")
     title: str
     assignee_name: str = Field(alias="assigneeName")
@@ -48,11 +59,11 @@ class DelayRiskTask(BaseModel):
     overdue: bool
 
 
-class DelayRiskRequest(BaseModel):
+class DelayRiskRequest(StrictModel):
     tasks: list[DelayRiskTask]
 
 
-class DelayRisk(BaseModel):
+class DelayRisk(StrictModel):
     task_id: str = Field(alias="taskId")
     title: str
     risk_level: str = Field(alias="riskLevel")
@@ -60,20 +71,22 @@ class DelayRisk(BaseModel):
     recommended_action: str = Field(alias="recommendedAction")
 
 
-class DailySummaryRequest(BaseModel):
+class DailySummaryRequest(StrictModel):
     completed_tasks: int = Field(alias="completedTasks")
     overdue_tasks: int = Field(alias="overdueTasks")
     overloaded_employees: int = Field(alias="overloadedEmployees")
     idle_employees: int = Field(alias="idleEmployees")
 
 
-class DailySummaryResponse(BaseModel):
+class DailySummaryResponse(StrictModel):
     summary: str
 
 
-class BusinessSummaryTask(BaseModel):
+class BusinessSummaryTask(StrictModel):
     task_id: str = Field(alias="taskId")
     title: str
+    requirements: Optional[str] = None
+    description: Optional[str] = None
     assignee_name: str = Field(alias="assigneeName")
     priority: str
     status: str
@@ -83,21 +96,29 @@ class BusinessSummaryTask(BaseModel):
     overdue: bool
 
 
-class BusinessSummaryReport(BaseModel):
+class BusinessSummaryReport(StrictModel):
     report_id: str = Field(alias="reportId")
+    employee_id: Optional[str] = Field(default=None, alias="employeeId")
     user_name: str = Field(alias="userName")
     report_date: str = Field(alias="reportDate")
     today_completed: str = Field(alias="todayCompleted")
     current_work: str = Field(alias="currentWork")
-    blockers: str | None = None
-    tomorrow_plan: str | None = Field(default=None, alias="tomorrowPlan")
+    blockers: Optional[str] = None
+    tomorrow_plan: Optional[str] = Field(default=None, alias="tomorrowPlan")
     reviewed: bool
 
 
-class BusinessSummaryRequest(BaseModel):
+class BusinessSummaryRequest(StrictModel):
     period: str
+    period_type: Optional[str] = Field(default=None, alias="periodType")
+    period_start: Optional[str] = Field(default=None, alias="periodStart")
+    period_end: Optional[str] = Field(default=None, alias="periodEnd")
     completed_tasks: int = Field(alias="completedTasks")
+    active_tasks: int = Field(default=0, alias="activeTasks")
     overdue_tasks: int = Field(alias="overdueTasks")
+    blocked_tasks: int = Field(default=0, alias="blockedTasks")
+    completion_rate: float = Field(default=0, alias="completionRate")
+    missing_daily_reports: int = Field(default=0, alias="missingDailyReports")
     overloaded_employees: int = Field(alias="overloadedEmployees")
     idle_employees: int = Field(alias="idleEmployees")
     tasks: list[BusinessSummaryTask]
@@ -105,38 +126,162 @@ class BusinessSummaryRequest(BaseModel):
     workload: list[EmployeeWorkload] = Field(default_factory=list)
 
 
-class BusinessSummaryResponse(BaseModel):
+class BusinessSummaryResponse(StrictModel):
+    period_type: Optional[str] = Field(default=None, alias="periodType")
+    period_start: Optional[str] = Field(default=None, alias="periodStart")
+    period_end: Optional[str] = Field(default=None, alias="periodEnd")
     summary: str
     highlights: list[str]
     risks: list[str]
-    recommended_actions: list[str] = Field(alias="recommendedActions")
+    action_suggestions: list["ActionSuggestion"] = Field(default_factory=list, alias="actionSuggestions")
 
 
-class DailyReportInsightsRequest(BaseModel):
-    reports: list[BusinessSummaryReport]
+class DailyReportInsightReport(StrictModel):
+    report_id: str = Field(alias="reportId")
+    employee_id: str = Field(alias="employeeId")
+    employee_name: str = Field(alias="employeeName")
+    report_date: str = Field(alias="reportDate")
+    today_completed: str = Field(alias="todayCompleted")
+    current_work: str = Field(alias="currentWork")
+    blockers: Optional[str] = None
+    tomorrow_plan: Optional[str] = Field(default=None, alias="tomorrowPlan")
 
 
-class DailyReportInsightsResponse(BaseModel):
+class DailyReportInsightsRequest(StrictModel):
+    reports: list[DailyReportInsightReport]
+
+
+class DailyReportBlocker(StrictModel):
+    severity: str
+    description: str
+
+
+class DailyReportInsightsResponse(StrictModel):
     summary: str
-    blockers: list[str]
-    follow_up_questions: list[str] = Field(alias="followUpQuestions")
-    recommended_actions: list[str] = Field(alias="recommendedActions")
+    blockers: list[DailyReportBlocker]
+    action_suggestions: list["ActionSuggestion"] = Field(alias="actionSuggestions")
 
 
-class ExtractTasksRequest(BaseModel):
+class ExtractTasksRequest(StrictModel):
     text: str
-    default_deadline: str | None = Field(default=None, alias="defaultDeadline")
+    default_deadline: Optional[str] = Field(default=None, alias="defaultDeadline")
+    employees: list[EmployeeWorkload] = Field(default_factory=list)
 
 
-class ExtractedTask(BaseModel):
+class ExtractedTask(StrictModel):
     title: str
     requirements: str
-    description: str | None = None
+    description: Optional[str] = None
     priority: str
-    deadline: str | None = None
-    estimated_hours: float | None = Field(default=None, alias="estimatedHours")
-    confidence: int
+    suggested_assignee_id: Optional[str] = Field(default=None, alias="suggestedAssigneeId")
+    deadline_suggestion: Optional[str] = Field(default=None, alias="deadlineSuggestion")
+    estimated_hours: Optional[float] = Field(default=None, alias="estimatedHours")
+    confidence: float
+    missing_information: list[str] = Field(default_factory=list, alias="missingInformation")
 
 
-class ExtractTasksResponse(BaseModel):
+class ExtractTasksResponse(StrictModel):
     tasks: list[ExtractedTask]
+
+
+class TaskContext(StrictModel):
+    task_id: Optional[str] = Field(default=None, alias="taskId")
+    title: str
+    requirements: str
+    description: Optional[str] = None
+    assignee_name: Optional[str] = Field(default=None, alias="assigneeName")
+    priority: str
+    status: Optional[str] = None
+    deadline: str
+    progress_percent: int = Field(default=0, alias="progressPercent")
+    estimated_hours: Optional[float] = Field(default=None, alias="estimatedHours")
+    overdue: bool = False
+
+
+class SplitTaskRequest(StrictModel):
+    task: TaskContext
+
+
+class SubtaskSuggestion(StrictModel):
+    title: str
+    requirements: str
+    estimated_hours: Optional[float] = Field(default=None, alias="estimatedHours")
+    suggested_order: int = Field(alias="suggestedOrder")
+    dependency_note: Optional[str] = Field(default=None, alias="dependencyNote")
+    confidence: float
+
+
+class SplitTaskResponse(StrictModel):
+    parent_task_id: str = Field(alias="parentTaskId")
+    subtasks: list[SubtaskSuggestion]
+
+
+class TaskAdjustmentRequest(StrictModel):
+    task: TaskContext
+
+
+class TaskAdjustmentSuggestion(StrictModel):
+    action_type: str = Field(alias="actionType")
+    target_entity_id: str = Field(alias="targetEntityId")
+    suggested_deadline: Optional[str] = Field(default=None, alias="suggestedDeadline")
+    suggested_priority: Optional[str] = Field(default=None, alias="suggestedPriority")
+    reason: str
+    risk_if_ignored: str = Field(alias="riskIfIgnored")
+    confidence: float
+
+
+class TaskAdjustmentResponse(StrictModel):
+    task_id: str = Field(alias="taskId")
+    suggestions: list[TaskAdjustmentSuggestion]
+
+
+class MissingReportEmployee(StrictModel):
+    employee_id: str = Field(alias="employeeId")
+    full_name: str = Field(alias="fullName")
+    status: str
+
+
+class MissingReportReport(StrictModel):
+    report_id: str = Field(alias="reportId")
+    user_id: str = Field(alias="userId")
+    user_name: str = Field(alias="userName")
+    report_date: str = Field(alias="reportDate")
+
+
+class MissingReportsRequest(StrictModel):
+    report_date: str = Field(alias="reportDate")
+    employees: list[MissingReportEmployee]
+    reports: list[MissingReportReport] = Field(default_factory=list)
+
+
+class MissingReportSuggestion(StrictModel):
+    employee_id: str = Field(alias="employeeId")
+    employee_name: str = Field(alias="employeeName")
+    report_date: str = Field(alias="reportDate")
+    days_missing: int = Field(alias="daysMissing")
+    recommended_action: str = Field(alias="recommendedAction")
+    confidence: float
+
+
+class MissingReportsResponse(StrictModel):
+    missing_reports: list[MissingReportSuggestion] = Field(alias="missingReports")
+
+
+class ActionSuggestionsRequest(StrictModel):
+    tasks: list[BusinessSummaryTask] = Field(default_factory=list)
+    reports: list[BusinessSummaryReport] = Field(default_factory=list)
+    workload: list[EmployeeWorkload] = Field(default_factory=list)
+
+
+class ActionSuggestion(StrictModel):
+    action_type: str = Field(alias="actionType")
+    target_entity_type: str = Field(alias="targetEntityType")
+    target_entity_id: str = Field(alias="targetEntityId")
+    title: str
+    reason: str
+    confidence: float
+
+
+class ActionSuggestionsResponse(StrictModel):
+    suggestions: list[ActionSuggestion]
+

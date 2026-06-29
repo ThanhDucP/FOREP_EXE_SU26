@@ -275,6 +275,31 @@ Ví dụ tuần:
 - 2 nhân viên quá tải.
 - 4 nhân viên đang rảnh.
 
+### AI Feature 4: Daily Report Insights
+
+AI phân tích daily reports để tìm:
+
+- Blocker đang lặp lại.
+- Câu hỏi follow-up cho OWNER.
+- Recommended actions cho team.
+
+### AI Feature 5: Task Intelligence
+
+AI hỗ trợ:
+
+- Tạo task từ mô tả hoặc biên bản.
+- Chia nhỏ task thành subtask có outcome rõ.
+- Đề xuất đổi deadline/priority dựa trên overdue, blocked, progress thấp và deadline gần.
+
+### AI Feature 6: Missing Reports và Action Suggestions
+
+AI phát hiện nhân viên ACTIVE chưa gửi daily report và trả suggestion có:
+
+- `actionType`.
+- `targetEntityId`.
+- `confidence` trong khoảng `0..1`.
+- Lý do tiếng Việt nhất quán.
+
 ### Voice
 
 Không thuộc MVP.
@@ -407,7 +432,7 @@ Voice không bao giờ là bắt buộc.
 | --- | --- | --- |
 | id | uuid | Primary key |
 | workspace_id | uuid | Required |
-| type | enum | ASSIGNEE_RECOMMENDATION, WORKLOAD_SUMMARY, BUSINESS_SUMMARY, TASK_EXTRACTION |
+| type | enum | ASSIGNEE_RECOMMENDATION, WORKLOAD_SUMMARY, BUSINESS_SUMMARY, TASK_EXTRACTION, DAILY_REPORT_INSIGHTS, TASK_SPLIT, TASK_ADJUSTMENT, MISSING_REPORT, ACTION_SUGGESTION |
 | input_data | jsonb | Required |
 | output_data | jsonb | Required |
 | status | enum | GENERATED, ACCEPTED, REJECTED |
@@ -512,6 +537,14 @@ erDiagram
 
 - POST `/ai/recommend-assignee`
 - GET `/ai/workload-summary`
+- GET `/ai/delay-risks`
+- GET `/ai/daily-reports/insights`
+- GET `/ai/daily-reports/missing`
+- POST `/ai/tasks/extract`
+- POST `/ai/tasks/{id}/split`
+- POST `/ai/tasks/{id}/adjust`
+- GET `/ai/action-suggestions`
+- GET `/ai/suggestions`
 - GET `/ai/business-summary/daily`
 - GET `/ai/business-summary/weekly`
 - GET `/ai/business-summary/monthly`
@@ -636,9 +669,17 @@ base_score = 100
 Rule:
 
 - Không đề xuất employee INACTIVE.
+- Không được tự bịa employee ngoài danh sách input.
+- Backend là nguồn quyết định eligibility, workloadLevel, score/candidateScore và ranking candidate.
+- AI chỉ sinh reason/risk tiếng Việt từ candidate đã được backend lọc.
 - Ưu tiên employee NO_WORK hoặc LOW.
 - Nếu employee có overdue task thì giảm mạnh điểm.
 - Nếu employee OVERLOADED thì chỉ hiển thị như cảnh báo, không xếp top.
+- Không recommend người có overdue nặng nếu còn người khác phù hợp hơn.
+- Risk phải xét overdue, blocked, progress thấp, deadline gần và workload cao.
+- Nếu input employee rỗng thì trả list rỗng hợp lệ.
+- Reason/risk phải là tiếng Việt nhất quán và giải thích được score.
+- Output phải là JSON đúng schema, không markdown, không thêm field ngoài schema.
 
 Output:
 

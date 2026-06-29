@@ -1,10 +1,52 @@
 import os
-from fastapi import Depends, FastAPI, Header, HTTPException
 
-from app.schemas import DailySummaryRequest, DelayRiskRequest, RecommendAssigneeRequest, WorkloadSummaryRequest
-from app.services import daily_summary, delay_risks, recommend_assignee, workload_summary
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+
+from app.schemas import (
+    ActionSuggestionsRequest,
+    BusinessSummaryRequest,
+    DailyReportInsightsRequest,
+    DailySummaryRequest,
+    DelayRiskRequest,
+    ExtractTasksRequest,
+    MissingReportsRequest,
+    RecommendAssigneeRequest,
+    SplitTaskRequest,
+    TaskAdjustmentRequest,
+    WorkloadSummaryRequest,
+)
+from app.services import (
+    AiProviderError,
+    action_suggestions,
+    business_summary,
+    daily_report_insights,
+    daily_summary,
+    delay_risks,
+    extract_tasks,
+    missing_reports,
+    recommend_assignee,
+    split_task,
+    task_adjustment,
+    workload_summary,
+)
 
 app = FastAPI(title="FOREP EXE AI Service", version="0.1.0")
+
+
+@app.exception_handler(AiProviderError)
+def ai_provider_error_handler(_, exception: AiProviderError):
+    return JSONResponse(
+        status_code=502,
+        content={
+            "code": exception.code,
+            "message": "Gemini and Groq both failed",
+            "details": {
+                "feature": exception.feature,
+                "providersAttempted": ["GEMINI", "GROQ"],
+            },
+        },
+    )
 
 
 def verify_internal_token(x_internal_service_token: str | None = Header(default=None)) -> None:
@@ -38,6 +80,41 @@ def daily_summary_endpoint(payload: DailySummaryRequest):
     return daily_summary(payload).model_dump(by_alias=True)
 
 
+@app.post("/internal/ai/business-summary", dependencies=[Depends(verify_internal_token)])
+def business_summary_endpoint(payload: BusinessSummaryRequest):
+    return business_summary(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/daily-report-insights", dependencies=[Depends(verify_internal_token)])
+def daily_report_insights_endpoint(payload: DailyReportInsightsRequest):
+    return daily_report_insights(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/tasks/extract", dependencies=[Depends(verify_internal_token)])
+def extract_tasks_endpoint(payload: ExtractTasksRequest):
+    return extract_tasks(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/tasks/split", dependencies=[Depends(verify_internal_token)])
+def split_task_endpoint(payload: SplitTaskRequest):
+    return split_task(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/tasks/adjust", dependencies=[Depends(verify_internal_token)])
+def task_adjustment_endpoint(payload: TaskAdjustmentRequest):
+    return task_adjustment(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/missing-reports", dependencies=[Depends(verify_internal_token)])
+def missing_reports_endpoint(payload: MissingReportsRequest):
+    return missing_reports(payload).model_dump(by_alias=True)
+
+
+@app.post("/internal/ai/action-suggestions", dependencies=[Depends(verify_internal_token)])
+def action_suggestions_endpoint(payload: ActionSuggestionsRequest):
+    return action_suggestions(payload).model_dump(by_alias=True)
+
+
 @app.post("/internal/ai/voice/extract-tasks", dependencies=[Depends(verify_internal_token)])
 def future_voice_endpoint():
-    return {"status": "not_implemented", "message": "Voice xử lý ở giai đoạn sau MVP."}
+    return {"status": "not_implemented", "message": "Voice xu ly o giai doan sau MVP."}

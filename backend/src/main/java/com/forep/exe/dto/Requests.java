@@ -109,4 +109,10 @@ public final class Requests {
             BigDecimal estimatedHours
     ) {
     }
+
+    public record ExtractTasksRequest(
+            @NotBlank String text,
+            OffsetDateTime defaultDeadline
+    ) {
+    }
 }

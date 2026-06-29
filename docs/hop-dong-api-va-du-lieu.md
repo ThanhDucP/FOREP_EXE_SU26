@@ -110,6 +110,153 @@ Mô hình MVP: Workspace + OWNER + EMPLOYEE.
 }
 ```
 
+### AIBusinessSummaryResponse
+
+Dung cho `/ai/business-summary/daily`, `/weekly`, `/monthly`.
+
+```json
+{
+  "periodType": "WEEKLY",
+  "periodStart": "2026-06-23",
+  "periodEnd": "2026-06-29",
+  "summary": "Tóm tắt tình hình trong kỳ.",
+  "highlights": [],
+  "risks": [],
+  "actionSuggestions": []
+}
+```
+
+### AIDailyReportInsightsResponse
+
+```json
+{
+  "summary": "Tóm tắt daily reports gần đây.",
+  "blockers": [
+    {
+      "severity": "HIGH",
+      "description": "Thiếu dữ liệu đầu vào."
+    }
+  ],
+  "actionSuggestions": []
+}
+```
+
+### AIExtractTasksRequest
+
+```json
+{
+  "text": "Nội dung mô tả hoặc biên bản",
+  "defaultDeadline": "2026-07-01T17:00:00Z"
+}
+```
+
+### AIExtractTasksResponse
+
+```json
+{
+  "tasks": [
+    {
+      "title": "Chuẩn bị báo giá",
+      "requirements": "Hoàn thành bảng báo giá và gửi owner review.",
+      "description": null,
+      "priority": "MEDIUM",
+      "estimatedHours": 2,
+      "suggestedAssigneeId": null,
+      "deadlineSuggestion": "2026-07-01T17:00:00Z",
+      "confidence": 0.86,
+      "missingInformation": []
+    }
+  ]
+}
+```
+
+### AITaskSplitResponse
+
+```json
+{
+  "parentTaskId": "uuid",
+  "subtasks": [
+    {
+      "title": "Kiểm tra dữ liệu đầu vào",
+      "requirements": "Xác nhận file và số liệu cần xử lý.",
+      "estimatedHours": 1,
+      "suggestedOrder": 1,
+      "dependencyNote": null,
+      "confidence": 0.82
+    }
+  ]
+}
+```
+
+### AITaskAdjustmentResponse
+
+```json
+{
+  "taskId": "uuid",
+  "suggestions": [
+    {
+      "actionType": "CHANGE_PRIORITY",
+      "targetEntityId": "uuid",
+      "suggestedDeadline": null,
+      "suggestedPriority": "HIGH",
+      "reason": "Task đang quá hạn và tiến độ thấp nên cần nâng priority.",
+      "riskIfIgnored": "Rủi ro trễ hạn cao nếu không follow-up ngay.",
+      "confidence": 0.88
+    }
+  ]
+}
+```
+
+### AIMissingReportsResponse
+
+```json
+{
+  "missingReports": [
+    {
+      "employeeId": "uuid",
+      "employeeName": "Trần Thị B",
+      "reportDate": "2026-06-29",
+      "daysMissing": 1,
+      "recommendedAction": "Nhắc nhân viên gửi daily report hôm nay.",
+      "confidence": 1.0
+    }
+  ]
+}
+```
+
+### AIActionSuggestionsResponse
+
+```json
+{
+  "suggestions": [
+    {
+      "actionType": "FOLLOW_UP_TASK",
+      "targetEntityType": "TASK",
+      "targetEntityId": "uuid",
+      "title": "Follow-up task quá hạn",
+      "reason": "Task quá hạn và tiến độ còn thấp.",
+      "confidence": 0.9
+    }
+  ]
+}
+```
+
+### AIProviderError
+
+```json
+{
+  "data": null,
+  "meta": {},
+  "errors": [
+    {
+      "code": "AI_PROVIDER_ERROR",
+      "message": "Không thể tạo phân tích AI ở thời điểm này. Vui lòng thử lại sau.",
+      "field": null
+    }
+  ]
+}
+```
+
 ## Validation
 
 - Task chính thức bắt buộc có assigneeId, title, deadline, requirements.
@@ -118,4 +265,7 @@ Mô hình MVP: Workspace + OWNER + EMPLOYEE.
 - Role chỉ gồm OWNER và EMPLOYEE.
 - EMPLOYEE chỉ cập nhật task được giao.
 - AI không auto-assign.
+- AI không được tự bịa employee/task/report ngoài input.
+- AI recommendation input rỗng phải trả list rỗng hợp lệ.
+- AI output không markdown, không thêm field ngoài schema.
 

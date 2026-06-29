@@ -7,6 +7,7 @@ import com.forep.exe.service.ForepService.TaskView;
 import com.forep.exe.service.ForepService.WorkloadView;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -24,15 +25,7 @@ public class AiServiceClient {
     }
 
     public List<AssigneeRecommendationView> recommendAssignee(AiRecommendAssigneeInput input) {
-        if (!isConfigured()) {
-            throw new IllegalStateException("AI service is not configured.");
-        }
-        AiRecommendAssigneeResponse response = restClient.post()
-                .uri(properties.serviceUrl() + "/internal/ai/recommend-assignee")
-                .header("X-Internal-Service-Token", properties.serviceToken())
-                .body(input)
-                .retrieve()
-                .body(AiRecommendAssigneeResponse.class);
+        AiRecommendAssigneeResponse response = post("/internal/ai/recommend-assignee", input, AiRecommendAssigneeResponse.class);
         if (response == null || response.recommendations() == null) {
             return List.of();
         }
@@ -49,15 +42,7 @@ public class AiServiceClient {
     }
 
     public Map<String, Object> workloadSummary(List<WorkloadView> workload) {
-        if (!isConfigured()) {
-            throw new IllegalStateException("AI service is not configured.");
-        }
-        return restClient.post()
-                .uri(properties.serviceUrl() + "/internal/ai/workload-summary")
-                .header("X-Internal-Service-Token", properties.serviceToken())
-                .body(Map.of("employees", workload.stream().map(AiEmployeeWorkload::from).toList()))
-                .retrieve()
-                .body(Map.class);
+        return post("/internal/ai/workload-summary", Map.of("employees", workload.stream().map(AiEmployeeWorkload::from).toList()), Map.class);
     }
 
     public Map<String, Object> delayRisks(List<TaskView> tasks, Map<UUID, String> employeeNames) {
@@ -74,29 +59,44 @@ public class AiServiceClient {
                         "overdue", task.deadline().isBefore(OffsetDateTime.now()) && task.completedAt() == null
                 ))
                 .toList();
-        return restClient.post()
-                .uri(properties.serviceUrl() + "/internal/ai/delay-risks")
-                .header("X-Internal-Service-Token", properties.serviceToken())
-                .body(Map.of("tasks", payloadTasks))
-                .retrieve()
-                .body(Map.class);
+        return post("/internal/ai/delay-risks", Map.of("tasks", payloadTasks), Map.class);
     }
 
     public Map<String, Object> dailySummary(BusinessSummaryView summary) {
-        if (!isConfigured()) {
-            throw new IllegalStateException("AI service is not configured.");
-        }
-        return restClient.post()
-                .uri(properties.serviceUrl() + "/internal/ai/daily-summary")
-                .header("X-Internal-Service-Token", properties.serviceToken())
-                .body(Map.of(
-                        "completedTasks", summary.completedTasks(),
-                        "overdueTasks", summary.overdueTasks(),
-                        "overloadedEmployees", summary.overloadedEmployees(),
-                        "idleEmployees", summary.idleEmployees()
-                ))
-                .retrieve()
-                .body(Map.class);
+        return post("/internal/ai/daily-summary", Map.of(
+                "completedTasks", summary.completedTasks(),
+                "overdueTasks", summary.overdueTasks(),
+                "overloadedEmployees", summary.overloadedEmployees(),
+                "idleEmployees", summary.idleEmployees()
+        ), Map.class);
+    }
+
+    public Map<String, Object> businessSummary(Map<String, Object> payload) {
+        return post("/internal/ai/business-summary", payload, Map.class);
+    }
+
+    public Map<String, Object> dailyReportInsights(Map<String, Object> payload) {
+        return post("/internal/ai/daily-report-insights", payload, Map.class);
+    }
+
+    public Map<String, Object> extractTasks(Map<String, Object> payload) {
+        return post("/internal/ai/tasks/extract", payload, Map.class);
+    }
+
+    public Map<String, Object> splitTask(Map<String, Object> payload) {
+        return post("/internal/ai/tasks/split", payload, Map.class);
+    }
+
+    public Map<String, Object> taskAdjustment(Map<String, Object> payload) {
+        return post("/internal/ai/tasks/adjust", payload, Map.class);
+    }
+
+    public Map<String, Object> missingReports(Map<String, Object> payload) {
+        return post("/internal/ai/missing-reports", payload, Map.class);
+    }
+
+    public Map<String, Object> actionSuggestions(Map<String, Object> payload) {
+        return post("/internal/ai/action-suggestions", payload, Map.class);
     }
 
     private boolean isConfigured() {
@@ -104,6 +104,22 @@ public class AiServiceClient {
                 && !properties.serviceUrl().isBlank()
                 && properties.serviceToken() != null
                 && !properties.serviceToken().isBlank();
+    }
+
+    private <T> T post(String path, Object payload, Class<T> responseType) {
+        if (!isConfigured()) {
+            throw new AiProviderException("AI service is not configured.");
+        }
+        try {
+            return restClient.post()
+                    .uri(properties.serviceUrl() + path)
+                    .header("X-Internal-Service-Token", properties.serviceToken())
+                    .body(payload)
+                    .retrieve()
+                    .body(responseType);
+        } catch (RestClientException exception) {
+            throw new AiProviderException("Gemini and Groq both failed", exception);
+        }
     }
 
     public record AiRecommendAssigneeInput(
@@ -122,7 +138,10 @@ public class AiServiceClient {
             long overdueTasks,
             long blockedTasks,
             double estimatedWorkload,
-            WorkloadLevel workloadLevel
+            WorkloadLevel workloadLevel,
+            String status,
+            int candidateScore,
+            Map<String, Object> scoreComponents
     ) {
         public static AiEmployeeWorkload from(WorkloadView item) {
             return new AiEmployeeWorkload(
@@ -132,7 +151,10 @@ public class AiServiceClient {
                     item.overdueTasks(),
                     item.blockedTasks(),
                     item.estimatedWorkload().doubleValue(),
-                    item.workloadLevel()
+                    item.workloadLevel(),
+                    "ACTIVE",
+                    0,
+                    Map.of()
             );
         }
     }

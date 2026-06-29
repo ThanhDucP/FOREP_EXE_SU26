@@ -1,10 +1,12 @@
 package com.forep.exe.controller;
 
 import com.forep.exe.dto.ApiResponse;
+import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.dto.Requests.AssignTaskRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
+import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
@@ -17,6 +19,7 @@ import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -166,6 +169,36 @@ public class ForepController {
         return ApiResponse.ok(service.delayRisks());
     }
 
+    @GetMapping("/ai/daily-reports/insights")
+    ApiResponse<?> dailyReportInsights() {
+        return ApiResponse.ok(service.dailyReportInsights());
+    }
+
+    @GetMapping("/ai/daily-reports/missing")
+    ApiResponse<?> missingReports() {
+        return ApiResponse.ok(service.missingReports());
+    }
+
+    @PostMapping("/ai/tasks/extract")
+    ApiResponse<?> extractTasks(@RequestBody @Valid ExtractTasksRequest request) {
+        return ApiResponse.ok(service.extractTasks(request));
+    }
+
+    @PostMapping("/ai/tasks/{id}/split")
+    ApiResponse<?> splitTask(@PathVariable UUID id) {
+        return ApiResponse.ok(service.splitTask(id));
+    }
+
+    @PostMapping("/ai/tasks/{id}/adjust")
+    ApiResponse<?> taskAdjustment(@PathVariable UUID id) {
+        return ApiResponse.ok(service.taskAdjustment(id));
+    }
+
+    @GetMapping("/ai/action-suggestions")
+    ApiResponse<?> actionSuggestions() {
+        return ApiResponse.ok(service.actionSuggestions());
+    }
+
     @GetMapping("/ai/suggestions")
     ApiResponse<?> aiSuggestions() {
         return ApiResponse.ok(service.aiSuggestions());
@@ -183,12 +216,12 @@ public class ForepController {
 
     @GetMapping("/ai/business-summary/weekly")
     ApiResponse<?> weeklyBusinessSummary() {
-        return ApiResponse.ok(service.businessSummary());
+        return ApiResponse.ok(service.businessSummary("weekly"));
     }
 
     @GetMapping("/ai/business-summary/monthly")
     ApiResponse<?> monthlyBusinessSummary() {
-        return ApiResponse.ok(service.businessSummary());
+        return ApiResponse.ok(service.businessSummary("monthly"));
     }
 
     @GetMapping("/daily-reports")
@@ -234,5 +267,11 @@ public class ForepController {
     @ExceptionHandler(IllegalArgumentException.class)
     ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(AiProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleAiProviderError(AiProviderException exception) {
+        return ApiResponse.error("AI_PROVIDER_ERROR", "Không thể tạo phân tích AI ở thời điểm này. Vui lòng thử lại sau.", null);
     }
 }

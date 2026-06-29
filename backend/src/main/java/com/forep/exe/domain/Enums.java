@@ -29,7 +29,15 @@ public final class Enums {
     }
 
     public enum AiSuggestionType {
-        ASSIGNEE_RECOMMENDATION, WORKLOAD_SUMMARY, BUSINESS_SUMMARY, TASK_EXTRACTION
+        ASSIGNEE_RECOMMENDATION,
+        WORKLOAD_SUMMARY,
+        BUSINESS_SUMMARY,
+        TASK_EXTRACTION,
+        DAILY_REPORT_INSIGHTS,
+        TASK_SPLIT,
+        TASK_ADJUSTMENT,
+        MISSING_REPORT,
+        ACTION_SUGGESTION
     }
 
     public enum AiSuggestionStatus {

@@ -22,7 +22,7 @@ Kiến trúc gồm 3 service:
 
 1. Frontend Service: React UI cho OWNER và EMPLOYEE.
 2. Backend API Service: Spring Boot API, auth, database, nghiệp vụ, RBAC, analytics, notification, tích hợp AI.
-3. AI Service: service riêng cho gợi ý người nhận việc, workload summary, delay risk, daily summary và voice sau này.
+3. AI Service: service riêng cho gợi ý người nhận việc, workload summary, delay risk, business summary, daily report insights, task intelligence, missing report detection, action suggestions và voice sau này.
 
 ```mermaid
 flowchart LR
@@ -80,10 +80,16 @@ Trách nhiệm:
 - Assignee Recommendation.
 - Workload Summary.
 - Delay Risk Detection.
-- Daily Summary.
+- Daily/Weekly/Monthly Business Summary.
+- Daily Report Insights.
+- Task Extraction, Task Split, Deadline/Priority Adjustment.
+- Missing Report Detection.
+- Owner Action Suggestions.
 - Future Voice Processing.
 
 AI Service không truy cập database trực tiếp trong MVP. Backend gửi input đã lọc quyền và nhận output có cấu trúc.
+Assignee recommendation ranking/eligibility do Backend tính deterministic trước; AI Service chỉ sinh reason/risk và validate output theo candidate input.
+Owner dashboard đọc AI insight mới nhất từ `ai_suggestions` cache, không gọi LLM mỗi lần refresh.
 
 ## 3. Folder Structure
 
@@ -286,6 +292,12 @@ AI integration through backend:
 - POST `/ai/recommend-assignee`
 - GET `/ai/workload-summary`
 - GET `/ai/delay-risks`
+- GET `/ai/daily-reports/insights`
+- GET `/ai/daily-reports/missing`
+- POST `/ai/tasks/extract`
+- POST `/ai/tasks/{id}/split`
+- POST `/ai/tasks/{id}/adjust`
+- GET `/ai/action-suggestions`
 - GET `/ai/business-summary/daily`
 - GET `/ai/business-summary/weekly`
 - GET `/ai/business-summary/monthly`
@@ -306,6 +318,13 @@ Backend-only endpoints:
 - POST `/internal/ai/workload-summary`
 - POST `/internal/ai/delay-risks`
 - POST `/internal/ai/daily-summary`
+- POST `/internal/ai/business-summary`
+- POST `/internal/ai/daily-report-insights`
+- POST `/internal/ai/tasks/extract`
+- POST `/internal/ai/tasks/split`
+- POST `/internal/ai/tasks/adjust`
+- POST `/internal/ai/missing-reports`
+- POST `/internal/ai/action-suggestions`
 - POST `/internal/ai/voice/extract-tasks` future
 
 Security:
