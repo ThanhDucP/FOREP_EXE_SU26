@@ -2,8 +2,9 @@ import json
 import os
 import re
 from typing import Any
-
-import httpx
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from app.schemas import (
     AssigneeRecommendation,
@@ -100,20 +101,17 @@ def _call_gemini(prompt: str) -> str | None:
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing.")
     model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
-    response = httpx.post(
+    body = _post_json(
         GEMINI_API_URL.format(model=model),
-        params={"key": api_key},
-        json={
+        payload={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
                 "responseMimeType": "application/json",
             },
         },
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        query={"key": api_key},
     )
-    response.raise_for_status()
-    body = response.json()
     return body["candidates"][0]["content"]["parts"][0]["text"]
 
 
@@ -122,10 +120,10 @@ def _call_groq(prompt: str) -> str | None:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is missing.")
     model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
-    response = httpx.post(
+    body = _post_json(
         GROQ_API_URL,
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
+        payload={
             "model": model,
             "messages": [
                 {
@@ -137,11 +135,33 @@ def _call_groq(prompt: str) -> str | None:
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         },
-        timeout=REQUEST_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
-    body = response.json()
     return body["choices"][0]["message"]["content"]
+
+
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if query:
+        url = f"{url}?{urlencode(query)}"
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    request = Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=request_headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exception:
+        error_body = exception.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exception.code}: {error_body}") from exception
+    except URLError as exception:
+        raise RuntimeError(f"Network error: {exception.reason}") from exception
 
 
 def _load_json(raw: str) -> dict[str, Any]:
@@ -179,4 +199,3 @@ def _parse_delay_risks(items: list[Any]) -> list[DelayRisk]:
         except Exception:
             continue
     return parsed
-
