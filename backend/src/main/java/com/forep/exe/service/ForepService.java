@@ -365,7 +365,7 @@ public class ForepService {
         long active = scopedTasks.stream().filter(task -> List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED).contains(task.getStatus())).count();
         long completed = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
         long overdue = scopedTasks.stream().filter(this::isOverdue).count();
-        return new OwnerDashboardView(total, active, completed, overdue, workload(), scopedTasks.stream().limit(5).map(this::toTaskView).toList(), recommendAssignee(null));
+        return new OwnerDashboardView(total, active, completed, overdue, workload(), scopedTasks.stream().limit(5).map(this::toTaskView).toList(), List.of());
     }
 
     public WorkloadView employeeWorkload(UUID employeeId) {
@@ -387,43 +387,22 @@ public class ForepService {
     public List<AssigneeRecommendationView> recommendAssignee(RecommendAssigneeRequest request) {
         requireOwner();
         List<WorkloadView> currentWorkload = workload();
-        List<AssigneeRecommendationView> recommendations;
-        if (request != null) {
-            try {
-                recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
-                        request.title(),
-                        request.requirements(),
-                        request.deadline().toString(),
-                        request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
-                        currentWorkload.stream().map(AiEmployeeWorkload::from).toList()
-                ));
-                saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, recommendations);
-                return recommendations;
-            } catch (RuntimeException ignored) {
-            }
-        }
-        recommendations = currentWorkload.stream()
-                .filter(item -> item.workloadLevel() != WorkloadLevel.OVERLOADED)
-                .sorted(Comparator.comparing(WorkloadView::workloadScore))
-                .limit(3)
-                .map(item -> new AssigneeRecommendationView(item.employeeId(), item.fullName(), score(item), item.workloadLevel(), reason(item), item.overdueTasks() > 0 ? "Có task quá hạn, cần cân nhắc." : "Không có"))
-                .toList();
-        if (request != null) saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, recommendations);
+        if (request == null) return List.of();
+        List<AssigneeRecommendationView> recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
+                request.title(),
+                request.requirements(),
+                request.deadline().toString(),
+                request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
+                currentWorkload.stream().map(AiEmployeeWorkload::from).toList()
+        ));
+        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, recommendations);
         return recommendations;
     }
 
     public Map<String, Object> workloadSummary() {
         requireOwner();
         List<WorkloadView> currentWorkload = workload();
-        Map<String, Object> output;
-        try {
-            output = aiServiceClient.workloadSummary(currentWorkload);
-        } catch (RuntimeException ignored) {
-            long overloaded = currentWorkload.stream().filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED).count();
-            long idle = currentWorkload.stream().filter(item -> item.workloadLevel() == WorkloadLevel.NO_WORK).count();
-            long overdue = currentWorkload.stream().filter(item -> item.overdueTasks() > 0).count();
-            output = Map.of("summary", "Có " + overloaded + " nhân viên quá tải, " + idle + " nhân viên đang rảnh và " + overdue + " nhân viên có task quá hạn.", "source", "fallback");
-        }
+        Map<String, Object> output = aiServiceClient.workloadSummary(currentWorkload);
         saveAiSuggestion(AiSuggestionType.WORKLOAD_SUMMARY, currentWorkload, output);
         return output;
     }
@@ -433,11 +412,7 @@ public class ForepService {
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
         Map<UUID, String> employeeNames = users.findByWorkspaceId(currentUser().workspaceId()).stream().collect(java.util.stream.Collectors.toMap(UserEntity::getId, UserEntity::getFullName));
         List<TaskView> taskViews = scopedTasks.stream().map(this::toTaskView).toList();
-        try {
-            return aiServiceClient.delayRisks(taskViews, employeeNames);
-        } catch (RuntimeException ignored) {
-            return Map.of("risks", scopedTasks.stream().filter(this::isOverdue).map(task -> Map.of("taskId", task.getId(), "title", task.getTitle(), "riskLevel", "HIGH", "reason", "Task đã quá hạn.", "recommendedAction", "Yêu cầu nhân viên cập nhật trạng thái ngay.", "source", "fallback")).toList());
-        }
+        return aiServiceClient.delayRisks(taskViews, employeeNames);
     }
 
     public BusinessSummaryView businessSummary() {
@@ -454,15 +429,9 @@ public class ForepService {
 
     public Map<String, Object> dailyAiSummary() {
         BusinessSummaryView summary = businessSummary();
-        try {
-            Map<String, Object> output = aiServiceClient.dailySummary(summary);
-            saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, summary, output);
-            return output;
-        } catch (RuntimeException ignored) {
-            Map<String, Object> output = Map.of("summary", summary.summary(), "source", "fallback");
-            saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, summary, output);
-            return output;
-        }
+        Map<String, Object> output = aiServiceClient.dailySummary(summary);
+        saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, summary, output);
+        return output;
     }
 
     public List<NotificationView> notifications() {
@@ -524,23 +493,12 @@ public class ForepService {
         return new WorkloadView(employee.getId(), employee.getFullName(), open, inProgress, blocked, completed, overdue, estimated, score, level(open));
     }
 
-    private int score(WorkloadView workload) {
-        int calculated = 100 - (int) workload.openTasks() * 6 - (int) workload.overdueTasks() * 12 - (int) workload.blockedTasks() * 8 - (int) Math.round(workload.estimatedWorkload().doubleValue() / 2);
-        return Math.max(35, Math.min(98, calculated));
-    }
-
     private WorkloadLevel level(long openTasks) {
         if (openTasks == 0) return WorkloadLevel.NO_WORK;
         if (openTasks <= 2) return WorkloadLevel.LOW;
         if (openTasks <= 5) return WorkloadLevel.NORMAL;
         if (openTasks <= 9) return WorkloadLevel.HIGH;
         return WorkloadLevel.OVERLOADED;
-    }
-
-    private String reason(WorkloadView workload) {
-        if (workload.workloadLevel() == WorkloadLevel.NO_WORK) return "Chưa có task đang mở, phù hợp để nhận task tiếp theo.";
-        if (workload.workloadLevel() == WorkloadLevel.LOW) return "Chỉ có " + workload.openTasks() + " task đang mở và không bị quá tải.";
-        return "Workload ở mức bình thường, có thể nhận thêm nếu deadline phù hợp.";
     }
 
     private boolean isOverdue(TaskEntity task) {
