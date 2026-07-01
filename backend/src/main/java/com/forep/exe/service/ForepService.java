@@ -507,9 +507,16 @@ public class ForepService {
 
     public Map<String, Object> dailyReportInsights() {
         requireOwner();
+        List<Map<String, Object>> reportPayloads = dailyReportInsightPayloads(LocalDate.now().minusDays(6));
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("reports", dailyReportInsightPayloads(LocalDate.now().minusDays(6)));
-        Map<String, Object> output = aiServiceClient.dailyReportInsights(payload);
+        payload.put("reports", reportPayloads);
+        Map<String, Object> output;
+        try {
+            output = aiServiceClient.dailyReportInsights(payload);
+        } catch (AiProviderException exception) {
+            log.warn("AI daily report insights failed; using rule-based fallback. message={}", fallbackReason(exception));
+            output = fallbackDailyReportInsights(reportPayloads, exception);
+        }
         saveAiSuggestion(AiSuggestionType.DAILY_REPORT_INSIGHTS, payload, output);
         return output;
     }
@@ -575,7 +582,13 @@ public class ForepService {
                     return item;
                 })
                 .toList());
-        Map<String, Object> output = aiServiceClient.missingReports(payload);
+        Map<String, Object> output;
+        try {
+            output = aiServiceClient.missingReports(payload);
+        } catch (AiProviderException exception) {
+            log.warn("AI missing reports failed; using rule-based fallback. message={}", fallbackReason(exception));
+            output = fallbackMissingReports(payload, exception);
+        }
         saveAiSuggestion(AiSuggestionType.MISSING_REPORT, payload, output);
         return output;
     }
@@ -810,6 +823,117 @@ public class ForepService {
             return "Rui ro trung binh: workload dang cao.";
         }
         return "Rui ro thap: workload hien tai con kha nang nhan viec.";
+    }
+
+    private Map<String, Object> fallbackDailyReportInsights(List<Map<String, Object>> reportPayloads, AiProviderException exception) {
+        List<Map<String, Object>> blockers = new ArrayList<>();
+        List<Map<String, Object>> actionSuggestions = new ArrayList<>();
+        long reviewedReports = reportPayloads.stream().filter(report -> Boolean.TRUE.equals(report.get("reviewed"))).count();
+
+        for (Map<String, Object> report : reportPayloads) {
+            String blockersText = stringValue(report, "blockers");
+            String currentWork = stringValue(report, "currentWork");
+            String todayCompleted = stringValue(report, "todayCompleted");
+            String detectedBlocker = firstText(blockersText, blockerFromText(currentWork), blockerFromText(todayCompleted));
+            if (!hasMeaningfulBlocker(detectedBlocker)) {
+                continue;
+            }
+
+            Map<String, Object> blocker = new LinkedHashMap<>();
+            blocker.put("severity", fallbackBlockerSeverity(detectedBlocker));
+            blocker.put("description", stringValue(report, "employeeName") + " (" + stringValue(report, "reportDate") + "): " + detectedBlocker);
+            blockers.add(blocker);
+
+            if (actionSuggestions.size() < 8) {
+                Map<String, Object> action = new LinkedHashMap<>();
+                action.put("actionType", "REVIEW_BLOCKER");
+                action.put("targetEntityType", "DAILY_REPORT");
+                action.put("targetEntityId", stringValue(report, "reportId"));
+                action.put("title", "Xu ly blocker daily report");
+                action.put("reason", stringValue(report, "employeeName") + " bao blocker trong daily report ngay " + stringValue(report, "reportDate") + ".");
+                action.put("confidence", 0.82);
+                actionSuggestions.add(action);
+            }
+
+            if (blockers.size() >= 8) {
+                break;
+            }
+        }
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summary", "Rule-based fallback: da nhan " + reportPayloads.size()
+                + " daily report trong 7 ngay gan nhat, " + blockers.size()
+                + " report co blocker, " + reviewedReports + " report da review.");
+        output.put("blockers", blockers);
+        output.put("actionSuggestions", actionSuggestions);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackMissingReports(Map<String, Object> payload, AiProviderException exception) {
+        String reportDate = String.valueOf(payload.getOrDefault("reportDate", LocalDate.now().toString()));
+        Object employeesObject = payload.get("employees");
+        List<?> employeePayloads = employeesObject instanceof List<?> list ? list : List.of();
+        List<Map<String, Object>> missingReports = new ArrayList<>();
+
+        for (Object employeePayload : employeePayloads) {
+            if (!(employeePayload instanceof Map<?, ?> employee)) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("employeeId", stringValue(employee, "employeeId"));
+            item.put("employeeName", stringValue(employee, "fullName"));
+            item.put("reportDate", reportDate);
+            item.put("daysMissing", 1);
+            item.put("recommendedAction", "Nhac nhan vien gui daily report hom nay va cap nhat blocker neu co.");
+            item.put("confidence", 1.0);
+            missingReports.add(item);
+        }
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("missingReports", missingReports);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private String firstText(String... values) {
+        for (String value : values) {
+            if (hasMeaningfulBlocker(value)) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String blockerFromText(String value) {
+        if (!hasText(value)) {
+            return "";
+        }
+        String lower = value.toLowerCase(Locale.ROOT);
+        if (lower.contains("block") || lower.contains("stuck") || lower.contains("fail") || lower.contains("loi")
+                || lower.contains("tre") || lower.contains("cham") || lower.contains("thieu")) {
+            return value;
+        }
+        return "";
+    }
+
+    private boolean hasMeaningfulBlocker(String value) {
+        if (!hasText(value)) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return !List.of("none", "no", "na", "n/a", "khong", "khong co", "khong co blocker").contains(normalized);
+    }
+
+    private String fallbackBlockerSeverity(String value) {
+        String lower = value == null ? "" : value.toLowerCase(Locale.ROOT);
+        if (lower.contains("block") || lower.contains("fail") || lower.contains("loi") || lower.contains("tre") || lower.contains("urgent")) {
+            return "HIGH";
+        }
+        return value != null && value.length() > 120 ? "MEDIUM" : "LOW";
+    }
+
+    private String stringValue(Map<?, ?> item, String key) {
+        Object value = item.get(key);
+        return value == null ? "" : String.valueOf(value);
     }
 
     private List<AssigneeRecommendationView> normalizeRecommendations(List<AssigneeRecommendationView> recommendations, List<AiEmployeeWorkload> candidates) {
