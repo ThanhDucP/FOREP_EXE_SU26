@@ -281,7 +281,8 @@ public class ForepService {
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
         task = tasks.save(task);
-        createNotification(workspaceId, task.getAssigneeId(), "TASK_ASSIGNED", "Task mới được giao", "Bạn vừa được giao task: " + task.getTitle(), "TASK", task.getId());
+        createNotification(workspaceId, currentUser().userId(), "TASK_CREATED", "Bạn vừa tạo task mới", "Bạn vừa tạo task mới: " + task.getTitle(), "TASK", task.getId());
+        createNotification(workspaceId, task.getAssigneeId(), "TASK_ASSIGNED", "Task mới được giao", "Bạn vừa được giao task mới: " + task.getTitle(), "TASK", task.getId());
         return toTaskView(task);
     }
 
@@ -314,7 +315,7 @@ public class ForepService {
         task.setStatus(TaskStatus.ASSIGNED);
         task.setUpdatedAt(OffsetDateTime.now());
         task = tasks.save(task);
-        createNotification(task.getWorkspaceId(), request.assigneeId(), "TASK_ASSIGNED", "Task được giao lại", "Bạn vừa được giao task: " + task.getTitle(), "TASK", task.getId());
+        createNotification(task.getWorkspaceId(), request.assigneeId(), "TASK_ASSIGNED", "Task mới được giao", "Bạn vừa được giao task mới: " + task.getTitle(), "TASK", task.getId());
         return toTaskView(task);
     }
 
@@ -359,7 +360,13 @@ public class ForepService {
         update.setCreatedAt(OffsetDateTime.now());
         update = taskUpdates.save(update);
         if (request.updateType() == UpdateType.BLOCKER) {
-            createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_BLOCKED", "Task có vướng mắc", task.getTitle() + " vừa được báo vướng mắc.", "TASK", task.getId());
+            String assigneeName = employeeNames().getOrDefault(task.getAssigneeId(), "Thành viên");
+            createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_BLOCKED_OWNER", "Thành viên có vướng mắc về task", assigneeName + " có vướng mắc về task: " + task.getTitle(), "TASK", task.getId());
+            if (currentUser().userId().equals(task.getAssigneeId())) {
+                createNotification(task.getWorkspaceId(), task.getAssigneeId(), "TASK_BLOCKER_REQUESTED", "Bạn đã yêu cầu hỏi vướng mắc", "Bạn đã yêu cầu hỏi vướng mắc task " + task.getTitle() + ".", "TASK", task.getId());
+            }
+        } else if (request.updateType() == UpdateType.COMPLETION && currentUser().userId().equals(task.getAssigneeId())) {
+            createNotification(task.getWorkspaceId(), task.getAssigneeId(), "TASK_COMPLETED_EMPLOYEE", "Bạn đã hoàn thành task", "Bạn đã hoàn thành task: " + task.getTitle(), "TASK", task.getId());
         }
         return toTaskUpdateView(update);
     }
@@ -496,7 +503,13 @@ public class ForepService {
     public Map<String, Object> businessSummary(String period) {
         requireOwner();
         Map<String, Object> payload = businessSummaryPayload(period);
-        Map<String, Object> output = aiServiceClient.businessSummary(payload);
+        Map<String, Object> output;
+        try {
+            output = aiServiceClient.businessSummary(payload);
+        } catch (AiProviderException exception) {
+            log.warn("AI business summary failed; using rule-based fallback. message={}", fallbackReason(exception));
+            output = fallbackBusinessSummary(payload, exception);
+        }
         saveAiSuggestion(AiSuggestionType.BUSINESS_SUMMARY, payload, output);
         return output;
     }
@@ -614,9 +627,7 @@ public class ForepService {
     public List<NotificationView> notifications() {
         generateOperationalNotifications();
         AuthenticatedUser user = currentUser();
-        List<NotificationEntity> scoped = user.role() == Role.OWNER
-                ? notifications.findByWorkspaceIdOrderByCreatedAtDesc(user.workspaceId())
-                : notifications.findByWorkspaceIdAndUserIdOrderByCreatedAtDesc(user.workspaceId(), user.userId());
+        List<NotificationEntity> scoped = notifications.findByWorkspaceIdAndUserIdOrderByCreatedAtDesc(user.workspaceId(), user.userId());
         return scoped.stream().map(this::toNotificationView).toList();
     }
 
@@ -630,9 +641,7 @@ public class ForepService {
     }
 
     public List<NotificationView> readAllNotifications() {
-        List<NotificationEntity> scoped = currentUser().role() == Role.OWNER
-                ? notifications.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId())
-                : notifications.findByWorkspaceIdAndUserIdOrderByCreatedAtDesc(currentUser().workspaceId(), currentUser().userId());
+        List<NotificationEntity> scoped = notifications.findByWorkspaceIdAndUserIdOrderByCreatedAtDesc(currentUser().workspaceId(), currentUser().userId());
         scoped.forEach(notification -> notification.setRead(true));
         notifications.saveAll(scoped);
         return notifications();
@@ -1196,6 +1205,61 @@ public class ForepService {
         return withFallbackMetadata(output, exception);
     }
 
+    private Map<String, Object> fallbackBusinessSummary(Map<String, Object> payload, AiProviderException exception) {
+        long completedTasks = longValue(payload, "completedTasks");
+        long activeTasks = longValue(payload, "activeTasks");
+        long overdueTasks = longValue(payload, "overdueTasks");
+        long blockedTasks = longValue(payload, "blockedTasks");
+        long missingDailyReports = longValue(payload, "missingDailyReports");
+        long overloadedEmployees = longValue(payload, "overloadedEmployees");
+        long idleEmployees = longValue(payload, "idleEmployees");
+
+        List<String> highlights = new ArrayList<>();
+        if (completedTasks > 0) {
+            highlights.add("Đã hoàn thành " + completedTasks + " task trong kỳ.");
+        }
+        if (activeTasks > 0) {
+            highlights.add("Đang theo dõi " + activeTasks + " task còn hoạt động.");
+        }
+        if (idleEmployees > 0) {
+            highlights.add(idleEmployees + " nhân viên đang có tải công việc thấp.");
+        }
+        if (highlights.isEmpty()) {
+            highlights.add("Chưa có điểm nổi bật mới trong kỳ.");
+        }
+
+        List<String> risks = new ArrayList<>();
+        if (overdueTasks > 0) {
+            risks.add(overdueTasks + " task đã quá hạn deadline.");
+        }
+        if (blockedTasks > 0) {
+            risks.add(blockedTasks + " task đang có vướng mắc.");
+        }
+        if (missingDailyReports > 0) {
+            risks.add(missingDailyReports + " nhân viên chưa gửi daily report hôm nay.");
+        }
+        if (overloadedEmployees > 0) {
+            risks.add(overloadedEmployees + " nhân viên đang quá tải.");
+        }
+        if (risks.isEmpty()) {
+            risks.add("Chưa phát hiện rủi ro vận hành nổi bật.");
+        }
+
+        String summary = "Đã hoàn thành " + completedTasks + " task, còn " + activeTasks + " task đang hoạt động.\n"
+                + "Có " + overdueTasks + " task quá hạn và " + blockedTasks + " task có vướng mắc.\n"
+                + "Daily report còn thiếu: " + missingDailyReports + "; nhân sự quá tải: " + overloadedEmployees + ".";
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("periodType", stringValue(payload, "periodType"));
+        output.put("periodStart", stringValue(payload, "periodStart"));
+        output.put("periodEnd", stringValue(payload, "periodEnd"));
+        output.put("summary", summary);
+        output.put("highlights", highlights);
+        output.put("risks", risks);
+        output.put("actionSuggestions", List.of());
+        return withFallbackMetadata(output, exception);
+    }
+
     private void addFallbackActionSuggestion(List<Map<String, Object>> suggestions,
                                              Set<String> usedTargets,
                                              String targetKey,
@@ -1231,6 +1295,21 @@ public class ForepService {
             return "AI provider unavailable";
         }
         return message.length() > 240 ? message.substring(0, 240) : message;
+    }
+
+    private long longValue(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     private double taskRiskScore(TaskEntity task) {
@@ -1412,14 +1491,16 @@ public class ForepService {
     private void generateOperationalNotifications() {
         AuthenticatedUser user = currentUser();
         OffsetDateTime now = OffsetDateTime.now();
+        Map<UUID, String> names = employeeNames();
         tasks.findByWorkspaceIdOrderByCreatedAtDesc(user.workspaceId()).stream()
                 .filter(task -> !List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus()))
                 .forEach(task -> {
                     if (task.getDeadline().isBefore(now)) {
-                        createNotificationIfAbsent(task.getWorkspaceId(), task.getCreatorId(), "TASK_OVERDUE", "Task quá hạn", task.getTitle() + " đã quá hạn.", "TASK", task.getId());
-                        createNotificationIfAbsent(task.getWorkspaceId(), task.getAssigneeId(), "TASK_OVERDUE", "Task quá hạn", task.getTitle() + " đã quá hạn.", "TASK", task.getId());
+                        String assigneeName = names.getOrDefault(task.getAssigneeId(), "Thành viên");
+                        createNotificationIfAbsent(task.getWorkspaceId(), task.getCreatorId(), "TASK_OVERDUE_OWNER", "Thành viên đã quá hạn deadline", assigneeName + " đã quá hạn deadline task: " + task.getTitle(), "TASK", task.getId());
+                        createNotificationIfAbsent(task.getWorkspaceId(), task.getAssigneeId(), "TASK_OVERDUE_EMPLOYEE", "Bạn đã trễ deadline", "Bạn đã trễ deadline task: " + task.getTitle(), "TASK", task.getId());
                     } else if (task.getDeadline().isBefore(now.plusHours(24))) {
-                        createNotificationIfAbsent(task.getWorkspaceId(), task.getAssigneeId(), "DEADLINE_SOON", "Deadline sắp đến", task.getTitle() + " sắp đến deadline.", "TASK", task.getId());
+                        createNotificationIfAbsent(task.getWorkspaceId(), task.getAssigneeId(), "DEADLINE_SOON", "Deadline sắp đến", "Task " + task.getTitle() + " sắp đến deadline.", "TASK", task.getId());
                     }
                 });
         users.findByWorkspaceIdAndRoleOrderByFullNameAsc(user.workspaceId(), Role.EMPLOYEE).forEach(employee -> {
@@ -1543,10 +1624,11 @@ public class ForepService {
     }
 
     private String normalizeAccountText(String value) {
-        String normalized = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
+        String source = (value == null ? "" : value)
+                .replace('\u0111', 'd')
+                .replace('\u0110', 'D');
+        String normalized = Normalizer.normalize(source, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "")
-                .replace('đ', 'd')
-                .replace('Đ', 'D')
                 .toLowerCase(Locale.ROOT);
         return normalized.replaceAll("[^a-z0-9\\s]", " ").trim();
     }
