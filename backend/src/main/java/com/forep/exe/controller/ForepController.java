@@ -60,7 +60,7 @@ public class ForepController {
     }
 
     @PutMapping("/workspaces/current")
-    ApiResponse<?> updateWorkspace(@RequestBody UpdateWorkspaceRequest request) {
+    ApiResponse<?> updateWorkspace(@RequestBody @Valid UpdateWorkspaceRequest request) {
         return ApiResponse.ok(service.updateWorkspace(request));
     }
 

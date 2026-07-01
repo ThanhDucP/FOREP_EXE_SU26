@@ -15,6 +15,10 @@ public class WorkspaceEntity extends BaseEntity {
     private String logo;
     @Column(columnDefinition = "text")
     private String address;
+    @Column(unique = true)
+    private String shortCode;
+    @Column(nullable = false)
+    private int nextEmployeeNumber = 1;
     private UUID ownerId;
     @Column(nullable = false)
     private OffsetDateTime createdAt;
@@ -41,6 +45,22 @@ public class WorkspaceEntity extends BaseEntity {
 
     public void setAddress(String address) {
         this.address = address;
+    }
+
+    public String getShortCode() {
+        return shortCode;
+    }
+
+    public void setShortCode(String shortCode) {
+        this.shortCode = shortCode;
+    }
+
+    public int getNextEmployeeNumber() {
+        return nextEmployeeNumber;
+    }
+
+    public void setNextEmployeeNumber(int nextEmployeeNumber) {
+        this.nextEmployeeNumber = nextEmployeeNumber;
     }
 
     public UUID getOwnerId() {

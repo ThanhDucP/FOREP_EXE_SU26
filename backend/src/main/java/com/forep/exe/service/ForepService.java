@@ -49,11 +49,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -100,22 +103,30 @@ public class ForepService {
     }
 
     public LoginView login(LoginRequest request) {
-        UserEntity user = users.findFirstByEmailIgnoreCase(request.email())
-                .orElseThrow(() -> new IllegalArgumentException("Email hoặc mật khẩu không đúng."));
+        String identifier = loginIdentifier(request);
+        UserEntity user = identifier.contains("@")
+                ? users.findFirstByEmailIgnoreCase(identifier).orElseThrow(() -> new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng."))
+                : users.findFirstByUsernameIgnoreCase(identifier).orElseThrow(() -> new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng."));
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash()) || user.getStatus() != UserStatus.ACTIVE) {
-            throw new IllegalArgumentException("Email hoặc mật khẩu không đúng.");
+            throw new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng.");
         }
         String token = jwtService.issue(new AuthenticatedUser(user.getId(), user.getWorkspaceId(), user.getRole(), user.getEmail()));
         return new LoginView(token, toUserView(user));
     }
 
     public WorkspaceView registerWorkspace(RegisterWorkspaceRequest request) {
+        String shortCode = normalizeShortCode(request.shortCode());
         if (users.findFirstByEmailIgnoreCase(request.ownerEmail()).isPresent()) {
             throw new IllegalArgumentException("Email owner đã tồn tại.");
+        }
+        if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent()) {
+            throw new IllegalArgumentException("Mã viết tắt tổ chức đã tồn tại.");
         }
         OffsetDateTime now = OffsetDateTime.now();
         WorkspaceEntity workspace = new WorkspaceEntity();
         workspace.setName(request.workspaceName());
+        workspace.setShortCode(shortCode);
+        workspace.setNextEmployeeNumber(1);
         workspace.setAddress(request.address());
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
@@ -148,6 +159,16 @@ public class ForepService {
         requireOwner();
         WorkspaceEntity workspace = requireWorkspace(currentUser().workspaceId());
         if (request.name() != null && !request.name().isBlank()) workspace.setName(request.name());
+        if (request.shortCode() != null && !request.shortCode().isBlank()) {
+            String shortCode = normalizeShortCode(request.shortCode());
+            if (workspace.getShortCode() != null && !workspace.getShortCode().equals(shortCode)) {
+                throw new IllegalArgumentException("Không thể đổi mã tổ chức sau khi đã cấu hình.");
+            }
+            workspaces.findByShortCodeIgnoreCase(shortCode)
+                    .filter(existing -> !existing.getId().equals(workspace.getId()))
+                    .ifPresent(existing -> { throw new IllegalArgumentException("Mã viết tắt tổ chức đã tồn tại."); });
+            workspace.setShortCode(shortCode);
+        }
         if (request.logo() != null) workspace.setLogo(request.logo());
         if (request.address() != null) workspace.setAddress(request.address());
         return toWorkspaceView(workspaces.save(workspace));
@@ -164,23 +185,33 @@ public class ForepService {
         if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
             throw new IllegalArgumentException("Email đã tồn tại trong workspace.");
         }
+        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        String employeeCode = nextEmployeeCode(workspace);
+        String username = buildUsername(request.fullName(), employeeCode);
+        String initialPassword = employeeCode;
         OffsetDateTime now = OffsetDateTime.now();
         UserEntity employee = new UserEntity();
         employee.setWorkspaceId(workspaceId);
         employee.setFullName(request.fullName());
         employee.setEmail(request.email());
         employee.setPhone(request.phone());
+        employee.setUsername(username);
+        employee.setEmployeeCode(employeeCode);
+        employee.setInitialPassword(initialPassword);
         employee.setJobTitle(request.jobTitle());
         employee.setSeniorityLevel(request.seniorityLevel());
         employee.setSkillRating(request.skillRating());
         employee.setYearsOfExperience(request.yearsOfExperience());
         employee.setSkills(request.skills());
-        employee.setPasswordHash(passwordEncoder.encode(UUID.randomUUID().toString()));
+        employee.setPasswordHash(passwordEncoder.encode(initialPassword));
         employee.setRole(Role.EMPLOYEE);
         employee.setStatus(UserStatus.ACTIVE);
         employee.setCreatedAt(now);
         employee.setUpdatedAt(now);
-        return toUserView(users.save(employee));
+        UserView created = toUserView(users.save(employee));
+        workspace.setNextEmployeeNumber(workspace.getNextEmployeeNumber() + 1);
+        workspaces.save(workspace);
+        return created;
     }
 
     public UserView employee(UUID employeeId) {
@@ -979,16 +1010,71 @@ public class ForepService {
         if (currentUser().role() != Role.OWNER && !task.getAssigneeId().equals(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền cập nhật task này.");
     }
 
-    private WorkspaceView toWorkspaceView(WorkspaceEntity item) { return new WorkspaceView(item.getId(), item.getName(), item.getLogo(), item.getAddress(), item.getOwnerId(), item.getCreatedAt()); }
-    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getRole(), item.getAvatar(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private String loginIdentifier(LoginRequest request) {
+        String identifier = request.username();
+        if (identifier == null || identifier.isBlank()) identifier = request.email();
+        if (identifier == null || identifier.isBlank()) {
+            throw new IllegalArgumentException("Vui lòng nhập email hoặc tên đăng nhập.");
+        }
+        return identifier.trim();
+    }
+
+    private String normalizeShortCode(String value) {
+        String shortCode = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        if (!shortCode.matches("^[A-Z0-9]{2}$")) {
+            throw new IllegalArgumentException("Mã viết tắt tổ chức phải gồm đúng 2 ký tự chữ hoặc số.");
+        }
+        return shortCode;
+    }
+
+    private String nextEmployeeCode(WorkspaceEntity workspace) {
+        String shortCode = workspace.getShortCode();
+        if (shortCode == null || shortCode.isBlank()) {
+            throw new IllegalArgumentException("Tổ chức chưa có mã viết tắt để tạo tài khoản nhân viên.");
+        }
+        int employeeNumber = workspace.getNextEmployeeNumber();
+        if (employeeNumber < 1 || employeeNumber > 1000) {
+            throw new IllegalArgumentException("Tổ chức đã đạt giới hạn 1000 nhân viên.");
+        }
+        return shortCode + String.format("%04d", employeeNumber);
+    }
+
+    private String buildUsername(String fullName, String employeeCode) {
+        String[] parts = Arrays.stream(normalizeAccountText(fullName).split("\\s+"))
+                .filter(part -> !part.isBlank())
+                .toArray(String[]::new);
+        String namePart;
+        if (parts.length == 0) {
+            namePart = "user";
+        } else {
+            StringBuilder builder = new StringBuilder(parts[parts.length - 1]);
+            for (int index = 0; index < parts.length - 1; index++) {
+                builder.append(parts[index].charAt(0));
+            }
+            namePart = builder.toString();
+        }
+        return (namePart + employeeCode).toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeAccountText(String value) {
+        String normalized = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replace('đ', 'd')
+                .replace('Đ', 'D')
+                .toLowerCase(Locale.ROOT);
+        return normalized.replaceAll("[^a-z0-9\\s]", " ").trim();
+    }
+
+    private WorkspaceView toWorkspaceView(WorkspaceEntity item) { return new WorkspaceView(item.getId(), item.getName(), item.getShortCode(), item.getLogo(), item.getAddress(), item.getOwnerId(), item.getCreatedAt()); }
+    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), item.getAvatar(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getCreatedAt(), item.getUpdatedAt()); }
     private TaskView toTaskView(TaskEntity item) { return new TaskView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getRequirements(), item.getDescription(), item.getAssigneeId(), item.getCreatorId(), item.getPriority(), item.getDeadline(), item.getEstimatedHours(), item.getProgressPercent(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt(), item.getCompletedAt()); }
     private TaskUpdateView toTaskUpdateView(TaskUpdateEntity item) { return new TaskUpdateView(item.getId(), item.getTaskId(), item.getUserId(), item.getProgressPercent(), item.getContent(), item.getAttachment(), item.getUpdateType(), item.getCreatedAt()); }
     private DailyReportView toDailyReportView(DailyReportEntity item) { return new DailyReportView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getReportDate(), item.getTodayCompleted(), item.getCurrentWork(), item.getBlockers(), item.getTomorrowPlan(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
 
-    public record WorkspaceView(UUID id, String name, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
-    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, Role role, String avatar, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
+    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, String avatar, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, BigDecimal estimatedHours, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskUpdateView(UUID id, UUID taskId, UUID userId, int progressPercent, String content, String attachment, UpdateType updateType, OffsetDateTime createdAt) {}
     public record DailyReportView(UUID id, UUID workspaceId, UUID userId, LocalDate reportDate, String todayCompleted, String currentWork, String blockers, String tomorrowPlan, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

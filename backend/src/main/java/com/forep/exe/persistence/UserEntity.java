@@ -22,6 +22,11 @@ public class UserEntity extends BaseEntity {
     @Column(nullable = false)
     private String email;
     private String phone;
+    @Column(unique = true)
+    private String username;
+    @Column(unique = true)
+    private String employeeCode;
+    private String initialPassword;
     @Column(nullable = false)
     private String passwordHash;
     @Enumerated(EnumType.STRING)
@@ -73,6 +78,30 @@ public class UserEntity extends BaseEntity {
 
     public void setPhone(String phone) {
         this.phone = phone;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getEmployeeCode() {
+        return employeeCode;
+    }
+
+    public void setEmployeeCode(String employeeCode) {
+        this.employeeCode = employeeCode;
+    }
+
+    public String getInitialPassword() {
+        return initialPassword;
+    }
+
+    public void setInitialPassword(String initialPassword) {
+        this.initialPassword = initialPassword;
     }
 
     public String getPasswordHash() {

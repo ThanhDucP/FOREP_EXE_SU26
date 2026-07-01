@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -21,11 +22,12 @@ public final class Requests {
     private Requests() {
     }
 
-    public record LoginRequest(@Email String email, @NotBlank String password) {
+    public record LoginRequest(@Email String email, String username, @NotBlank String password) {
     }
 
     public record RegisterWorkspaceRequest(
             @NotBlank String workspaceName,
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9]{2}$") String shortCode,
             String address,
             @NotBlank String ownerFullName,
             @Email String ownerEmail,
@@ -52,7 +54,7 @@ public final class Requests {
     public record UpdateEmployeeStatusRequest(@NotNull String status) {
     }
 
-    public record UpdateWorkspaceRequest(String name, String logo, String address) {
+    public record UpdateWorkspaceRequest(String name, @Pattern(regexp = "^[A-Za-z0-9]{2}$") String shortCode, String logo, String address) {
     }
 
     public record UpdateEmployeeRequest(
