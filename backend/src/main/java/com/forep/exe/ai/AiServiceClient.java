@@ -27,7 +27,7 @@ public class AiServiceClient {
     public List<AssigneeRecommendationView> recommendAssignee(AiRecommendAssigneeInput input) {
         AiRecommendAssigneeResponse response = post("/internal/ai/recommend-assignee", input, AiRecommendAssigneeResponse.class);
         if (response == null || response.recommendations() == null) {
-            return List.of();
+            throw new AiProviderException("AI service returned an invalid assignee recommendation response.");
         }
         return response.recommendations().stream()
                 .map(item -> new AssigneeRecommendationView(
