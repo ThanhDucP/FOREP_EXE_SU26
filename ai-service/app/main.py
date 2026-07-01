@@ -24,6 +24,7 @@ from app.services import (
     daily_summary,
     delay_risks,
     extract_tasks,
+    log_provider_configuration,
     missing_reports,
     recommend_assignee,
     split_task,
@@ -36,17 +37,25 @@ app = FastAPI(title="FOREP EXE AI Service", version="0.1.0")
 
 @app.exception_handler(AiProviderError)
 def ai_provider_error_handler(_, exception: AiProviderError):
+    details = {
+        "feature": exception.feature,
+        "providerErrors": exception.provider_errors,
+    }
+    if exception.retry_after_seconds is not None:
+        details["retryAfterSeconds"] = exception.retry_after_seconds
     return JSONResponse(
-        status_code=502,
+        status_code=exception.http_status,
         content={
             "code": exception.code,
-            "message": "Gemini and Groq both failed",
-            "details": {
-                "feature": exception.feature,
-                "providersAttempted": ["GEMINI", "GROQ"],
-            },
+            "message": str(exception),
+            "details": details,
         },
     )
+
+
+@app.on_event("startup")
+def startup_log_provider_configuration() -> None:
+    log_provider_configuration()
 
 
 def verify_internal_token(x_internal_service_token: str | None = Header(default=None)) -> None:

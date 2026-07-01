@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import re
+import socket
+import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -44,6 +47,9 @@ from app.schemas import (
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", "10"))
+PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "60"))
+PROVIDER_MAX_RETRIES = int(os.getenv("AI_PROVIDER_MAX_RETRIES", "1"))
+INSIGHT_CACHE_TTL_SECONDS = int(os.getenv("AI_INSIGHT_CACHE_TTL_SECONDS", "600"))
 MAX_LOGGED_RESPONSE_CHARS = 1000
 WORKLOAD_LEVELS = "NO_WORK, LOW, NORMAL, HIGH, OVERLOADED"
 PRIORITIES = "LOW, MEDIUM, HIGH, CRITICAL"
@@ -51,10 +57,148 @@ LOGGER = logging.getLogger("forep.ai")
 
 
 class AiProviderError(RuntimeError):
-    def __init__(self, message: str, code: str = "AI_PROVIDER_ERROR", feature: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        code: str = "AI_PROVIDER_ERROR",
+        feature: str | None = None,
+        http_status: int = 502,
+        provider_errors: list[dict[str, Any]] | None = None,
+        retry_after_seconds: int | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.feature = feature
+        self.http_status = http_status
+        self.provider_errors = provider_errors or []
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ProviderCallError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        provider: str,
+        model: str,
+        status_code: int | None = None,
+        provider_status: str | None = None,
+        provider_error_code: str | None = None,
+        retry_after_seconds: int | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.provider = provider
+        self.model = model
+        self.status_code = status_code
+        self.provider_status = provider_status
+        self.provider_error_code = provider_error_code
+        self.retry_after_seconds = retry_after_seconds
+        self.retryable = retryable
+
+    def to_log_detail(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "code": self.code,
+            "statusCode": self.status_code,
+            "providerStatus": self.provider_status,
+            "providerErrorCode": self.provider_error_code,
+            "retryAfterSeconds": self.retry_after_seconds,
+            "message": _short_message(self),
+        }
+
+
+class ProviderQuotaExceeded(ProviderCallError):
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        message: str,
+        status_code: int | None = None,
+        provider_status: str | None = None,
+        retry_after_seconds: int | None = None,
+    ):
+        super().__init__(
+            message,
+            "AI_QUOTA_EXCEEDED",
+            provider,
+            model,
+            status_code=status_code,
+            provider_status=provider_status,
+            retry_after_seconds=retry_after_seconds,
+            retryable=False,
+        )
+
+
+class ProviderForbidden(ProviderCallError):
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        message: str,
+        status_code: int | None = None,
+        provider_error_code: str | None = None,
+    ):
+        super().__init__(
+            message,
+            "AI_PROVIDER_FORBIDDEN",
+            provider,
+            model,
+            status_code=status_code,
+            provider_error_code=provider_error_code,
+            retryable=False,
+        )
+
+
+class ProviderTimeout(ProviderCallError):
+    def __init__(self, provider: str, model: str, message: str):
+        super().__init__(message, "AI_PROVIDER_TIMEOUT", provider, model, retryable=True)
+
+
+class ProviderInvalidResponse(ProviderCallError):
+    def __init__(self, provider: str, model: str, message: str):
+        super().__init__(message, "AI_INVALID_RESPONSE", provider, model, retryable=False)
+
+
+class ProviderUnavailable(ProviderCallError):
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        message: str,
+        status_code: int | None = None,
+        retry_after_seconds: int | None = None,
+    ):
+        super().__init__(
+            message,
+            "AI_PROVIDER_UNAVAILABLE",
+            provider,
+            model,
+            status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
+            retryable=True,
+        )
+
+
+@dataclass
+class _CacheEntry:
+    expires_at: float
+    value: dict[str, Any]
+
+
+@dataclass
+class _InFlightCall:
+    event: threading.Event = field(default_factory=threading.Event)
+    value: dict[str, Any] | None = None
+    exception: BaseException | None = None
+
+
+_PROVIDER_COOLDOWNS: dict[str, float] = {}
+_DAILY_REPORT_INSIGHT_CACHE: dict[str, _CacheEntry] = {}
+_DAILY_REPORT_INSIGHT_IN_FLIGHT: dict[str, _InFlightCall] = {}
+_STATE_LOCK = threading.Lock()
 
 
 GLOBAL_RULES = (
@@ -178,6 +322,62 @@ def business_summary(payload: BusinessSummaryRequest) -> BusinessSummaryResponse
 
 
 def daily_report_insights(payload: DailyReportInsightsRequest) -> DailyReportInsightsResponse:
+    cache_key = _insight_cache_key("DAILY_REPORT_INSIGHTS", payload.model_dump(by_alias=True))
+    cached = _cache_get(_DAILY_REPORT_INSIGHT_CACHE, cache_key)
+    if cached is not None:
+        LOGGER.info("AI insight cache hit feature=DAILY_REPORT_INSIGHTS")
+        return DailyReportInsightsResponse(**cached)
+    return _single_flight_daily_report_insights(cache_key, payload)
+
+
+def _single_flight_daily_report_insights(
+    cache_key: str,
+    payload: DailyReportInsightsRequest,
+) -> DailyReportInsightsResponse:
+    owner = False
+    with _STATE_LOCK:
+        in_flight = _DAILY_REPORT_INSIGHT_IN_FLIGHT.get(cache_key)
+        if in_flight is None:
+            in_flight = _InFlightCall()
+            _DAILY_REPORT_INSIGHT_IN_FLIGHT[cache_key] = in_flight
+            owner = True
+
+    if not owner:
+        LOGGER.info("AI insight in-flight reuse feature=DAILY_REPORT_INSIGHTS")
+        if not in_flight.event.wait(timeout=max(REQUEST_TIMEOUT_SECONDS + 5, 15)):
+            raise AiProviderError(
+                "Timed out waiting for in-flight daily report insight request.",
+                "AI_PROVIDER_TIMEOUT",
+                "DAILY_REPORT_INSIGHTS",
+                http_status=504,
+            )
+        if in_flight.exception is not None:
+            raise in_flight.exception
+        if in_flight.value is None:
+            raise AiProviderError(
+                "In-flight daily report insight request finished without data.",
+                "AI_PROVIDERS_UNAVAILABLE",
+                "DAILY_REPORT_INSIGHTS",
+                http_status=503,
+            )
+        return DailyReportInsightsResponse(**in_flight.value)
+
+    try:
+        response = _compute_daily_report_insights(payload)
+        value = response.model_dump(by_alias=True)
+        _cache_set(_DAILY_REPORT_INSIGHT_CACHE, cache_key, value, INSIGHT_CACHE_TTL_SECONDS)
+        in_flight.value = value
+        return response
+    except BaseException as exception:
+        in_flight.exception = exception
+        raise
+    finally:
+        in_flight.event.set()
+        with _STATE_LOCK:
+            _DAILY_REPORT_INSIGHT_IN_FLIGHT.pop(cache_key, None)
+
+
+def _compute_daily_report_insights(payload: DailyReportInsightsRequest) -> DailyReportInsightsResponse:
     llm_output = _ask_llm_json(
         task=(
             "Analyze daily reports for an owner. "
@@ -351,48 +551,93 @@ def _ask_llm_json(task: str, data: dict[str, Any], feature: str) -> dict[str, An
         f"{json.dumps(data, ensure_ascii=True)}\n\n"
         "Return valid JSON only. No markdown, no code fence, no explanation."
     )
-    errors: list[str] = []
-    for caller in (_call_gemini, _call_groq):
+    errors: list[ProviderCallError] = []
+    for caller in _provider_callers():
         provider, model = _provider_context(caller)
-        started_at = time.monotonic()
-        try:
-            raw = caller(prompt)
-            if raw:
-                loaded = _load_json(raw, feature=feature, provider=provider)
+        cooldown_error = _cooldown_error(provider, model, feature)
+        if cooldown_error is not None:
+            errors.append(cooldown_error)
+            LOGGER.warning(
+                "AI provider skipped by cooldown feature=%s provider=%s model=%s retryAfterSeconds=%s message=%s",
+                feature,
+                provider,
+                model,
+                cooldown_error.retry_after_seconds,
+                _short_message(cooldown_error),
+            )
+            continue
+
+        attempt = 1
+        max_attempts = max(1, PROVIDER_MAX_RETRIES + 1)
+        while attempt <= max_attempts:
+            started_at = time.monotonic()
+            try:
+                raw = caller(prompt)
+                if not raw:
+                    raise ProviderInvalidResponse(provider, model, "Provider returned an empty response.")
+                loaded = _load_json(raw, feature=feature, provider=provider, model=model)
                 LOGGER.info(
-                    "AI provider call succeeded feature=%s provider=%s model=%s elapsedMs=%d",
+                    "AI provider call succeeded feature=%s provider=%s model=%s elapsedMs=%d attempt=%d",
                     feature,
                     provider,
                     model,
                     _elapsed_ms(started_at),
+                    attempt,
                 )
                 return loaded
-        except Exception as exception:
-            LOGGER.warning(
-                "AI provider call failed feature=%s provider=%s model=%s elapsedMs=%d exception=%s message=%s",
-                feature,
-                provider,
-                model,
-                _elapsed_ms(started_at),
-                exception.__class__.__name__,
-                _short_message(exception),
-            )
-            errors.append(f"{getattr(caller, '__name__', caller.__class__.__name__)}: {exception}")
-            continue
-    raise AiProviderError(
-        "Gemini and Groq both failed. " + " | ".join(errors),
-        "AI_PROVIDER_ERROR",
-        feature,
-    )
+            except ProviderCallError as exception:
+                LOGGER.warning(
+                    "AI provider call failed feature=%s provider=%s model=%s statusCode=%s providerCode=%s retryAfterSeconds=%s elapsedMs=%d attempt=%d exception=%s message=%s",
+                    feature,
+                    exception.provider,
+                    exception.model,
+                    exception.status_code,
+                    exception.provider_error_code or exception.provider_status,
+                    exception.retry_after_seconds,
+                    _elapsed_ms(started_at),
+                    attempt,
+                    exception.__class__.__name__,
+                    _short_message(exception),
+                )
+                if isinstance(exception, (ProviderQuotaExceeded, ProviderForbidden)):
+                    _record_cooldown(feature, exception)
+                if not exception.retryable or attempt >= max_attempts:
+                    errors.append(exception)
+                    break
+                time.sleep(min(0.25 * (2 ** (attempt - 1)), 1.0))
+                attempt += 1
+            except Exception as exception:
+                wrapped = ProviderUnavailable(provider, model, f"Unexpected provider error: {_short_message(exception)}")
+                LOGGER.warning(
+                    "AI provider call failed feature=%s provider=%s model=%s statusCode=%s providerCode=%s retryAfterSeconds=%s elapsedMs=%d attempt=%d exception=%s message=%s",
+                    feature,
+                    provider,
+                    model,
+                    wrapped.status_code,
+                    wrapped.provider_error_code,
+                    wrapped.retry_after_seconds,
+                    _elapsed_ms(started_at),
+                    attempt,
+                    exception.__class__.__name__,
+                    _short_message(exception),
+                )
+                if attempt >= max_attempts:
+                    errors.append(wrapped)
+                    break
+                time.sleep(min(0.25 * (2 ** (attempt - 1)), 1.0))
+                attempt += 1
+    raise _aggregate_provider_errors(feature, errors)
 
 
 def _call_gemini(prompt: str) -> str | None:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is missing.")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        raise ProviderForbidden("GEMINI", _gemini_model(), "GEMINI_API_KEY is missing.")
+    model = _gemini_model()
     body = _post_json(
         GEMINI_API_URL.format(model=model),
+        provider="GEMINI",
+        model=model,
         payload={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -402,16 +647,21 @@ def _call_gemini(prompt: str) -> str | None:
         },
         query={"key": api_key},
     )
-    return body["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        return body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as exception:
+        raise ProviderInvalidResponse("GEMINI", model, f"Gemini response missing content text: {exception}") from exception
 
 
 def _call_groq(prompt: str) -> str | None:
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is missing.")
-    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+        raise ProviderForbidden("GROQ", _groq_model(), "GROQ_API_KEY is missing.")
+    model = _groq_model()
     body = _post_json(
         GROQ_API_URL,
+        provider="GROQ",
+        model=model,
         headers={"Authorization": f"Bearer {api_key}"},
         payload={
             "model": model,
@@ -423,11 +673,16 @@ def _call_groq(prompt: str) -> str | None:
             "response_format": {"type": "json_object"},
         },
     )
-    return body["choices"][0]["message"]["content"]
+    try:
+        return body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exception:
+        raise ProviderInvalidResponse("GROQ", model, f"Groq response missing choices message content: {exception}") from exception
 
 
 def _post_json(
     url: str,
+    provider: str,
+    model: str,
     payload: dict[str, Any],
     headers: dict[str, str] | None = None,
     query: dict[str, str] | None = None,
@@ -446,12 +701,131 @@ def _post_json(
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exception:
         error_body = exception.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exception.code}: {error_body}") from exception
+        raise _classify_http_error(provider, model, exception.code, error_body, exception.headers) from exception
+    except (TimeoutError, socket.timeout) as exception:
+        raise ProviderTimeout(provider, model, f"Provider request timed out after {REQUEST_TIMEOUT_SECONDS}s.") from exception
     except URLError as exception:
-        raise RuntimeError(f"Network error: {exception.reason}") from exception
+        reason = exception.reason
+        if isinstance(reason, socket.timeout) or "timed out" in str(reason).lower():
+            raise ProviderTimeout(provider, model, f"Provider request timed out after {REQUEST_TIMEOUT_SECONDS}s.") from exception
+        raise ProviderUnavailable(provider, model, f"Network error: {reason}") from exception
+    except json.JSONDecodeError as exception:
+        raise ProviderInvalidResponse(provider, model, "Provider HTTP response is not valid JSON.") from exception
 
 
-def _load_json(raw: str, feature: str | None = None, provider: str | None = None) -> dict[str, Any]:
+def _classify_http_error(
+    provider: str,
+    model: str,
+    status_code: int,
+    error_body: str,
+    headers: Any,
+) -> ProviderCallError:
+    parsed = _parse_json_object(error_body)
+    provider_status = _extract_provider_status(parsed, error_body)
+    provider_error_code = _extract_provider_error_code(parsed, error_body)
+    retry_after_seconds = _parse_retry_after(headers, parsed, error_body)
+    lower_body = error_body.lower()
+
+    if status_code == 429 or provider_status == "RESOURCE_EXHAUSTED" or "quota" in lower_body:
+        return ProviderQuotaExceeded(
+            provider,
+            model,
+            f"{provider} quota exceeded.",
+            status_code=status_code,
+            provider_status=provider_status,
+            retry_after_seconds=retry_after_seconds,
+        )
+    if status_code == 403:
+        code_note = f" providerCode={provider_error_code}" if provider_error_code else ""
+        return ProviderForbidden(
+            provider,
+            model,
+            f"{provider} rejected the request with HTTP 403.{code_note}",
+            status_code=status_code,
+            provider_error_code=provider_error_code,
+        )
+    if status_code in {408, 504}:
+        return ProviderTimeout(provider, model, f"{provider} timed out with HTTP {status_code}.")
+    if status_code >= 500:
+        return ProviderUnavailable(provider, model, f"{provider} unavailable with HTTP {status_code}.", status_code=status_code)
+    return ProviderUnavailable(provider, model, f"{provider} request failed with HTTP {status_code}.", status_code=status_code)
+
+
+def _parse_json_object(value: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _extract_provider_status(parsed: dict[str, Any], error_body: str) -> str | None:
+    error = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+    status = error.get("status") or parsed.get("status")
+    if status:
+        return str(status)
+    if "RESOURCE_EXHAUSTED" in error_body:
+        return "RESOURCE_EXHAUSTED"
+    return None
+
+
+def _extract_provider_error_code(parsed: dict[str, Any], error_body: str) -> str | None:
+    error = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+    code = error.get("code") or parsed.get("code")
+    if code is not None:
+        return str(code)
+    match = re.search(r'"code"\s*:\s*"?([A-Za-z0-9_-]+)"?', error_body)
+    if match:
+        return match.group(1)
+    if "1010" in error_body:
+        return "1010"
+    return None
+
+
+def _parse_retry_after(headers: Any, parsed: dict[str, Any], error_body: str) -> int | None:
+    header_value = None
+    if headers is not None:
+        try:
+            header_value = headers.get("Retry-After")
+        except AttributeError:
+            header_value = None
+    seconds = _parse_seconds(header_value)
+    if seconds is not None:
+        return seconds
+
+    error = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), list) else []
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        seconds = _parse_seconds(detail.get("retryDelay") or detail.get("retry_after"))
+        if seconds is not None:
+            return seconds
+
+    for pattern in (r'"retryDelay"\s*:\s*"([^"]+)"', r"retryAfter[^0-9]{0,20}(\d+)", r"retry after[^0-9]{0,20}(\d+)"):
+        match = re.search(pattern, error_body, re.IGNORECASE)
+        if match:
+            seconds = _parse_seconds(match.group(1))
+            if seconds is not None:
+                return seconds
+    return None
+
+
+def _parse_seconds(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return max(1, int(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    return max(1, int(float(match.group(1))))
+
+
+def _load_json(raw: str, feature: str | None = None, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError:
@@ -463,8 +837,11 @@ def _load_json(raw: str, feature: str | None = None, provider: str | None = None
                 provider,
                 raw[:MAX_LOGGED_RESPONSE_CHARS],
             )
-            raise AiProviderError("LLM output is not JSON.", "AI_INVALID_RESPONSE", feature)
-        loaded = json.loads(match.group(0))
+            raise ProviderInvalidResponse(provider or "UNKNOWN", model or "unknown", "LLM output is not JSON.")
+        try:
+            loaded = json.loads(match.group(0))
+        except json.JSONDecodeError as exception:
+            raise ProviderInvalidResponse(provider or "UNKNOWN", model or "unknown", "LLM output JSON fragment is invalid.") from exception
     if not isinstance(loaded, dict):
         LOGGER.warning(
             "AI JSON parse produced non-object feature=%s provider=%s rawPrefix=%s",
@@ -472,16 +849,170 @@ def _load_json(raw: str, feature: str | None = None, provider: str | None = None
             provider,
             raw[:MAX_LOGGED_RESPONSE_CHARS],
         )
-        raise AiProviderError("LLM output must be a JSON object.", "AI_INVALID_RESPONSE", feature)
+        raise ProviderInvalidResponse(provider or "UNKNOWN", model or "unknown", "LLM output must be a JSON object.")
     return loaded
+
+
+def _provider_callers():
+    configured = os.getenv("AI_PROVIDER_ORDER", "GEMINI,GROQ")
+    callers = []
+    for name in [item.strip().upper() for item in configured.split(",") if item.strip()]:
+        if name == "GEMINI":
+            callers.append(_call_gemini)
+        elif name == "GROQ":
+            callers.append(_call_groq)
+        else:
+            LOGGER.warning("Unknown AI provider in AI_PROVIDER_ORDER provider=%s", name)
+    return callers or [_call_gemini, _call_groq]
 
 
 def _provider_context(caller) -> tuple[str, str]:
     if caller is _call_gemini:
-        return "GEMINI", os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        return "GEMINI", _gemini_model()
     if caller is _call_groq:
-        return "GROQ", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+        return "GROQ", _groq_model()
     return getattr(caller, "__name__", caller.__class__.__name__), "unknown"
+
+
+def _gemini_model() -> str:
+    return (
+        os.getenv("AI_GEMINI_MODEL")
+        or os.getenv("GEMINI_MODEL")
+        or "gemini-2.5-flash"
+    ).strip() or "gemini-2.5-flash"
+
+
+def _groq_model() -> str:
+    return (
+        os.getenv("AI_GROQ_MODEL")
+        or os.getenv("GROQ_MODEL")
+        or "llama-3.3-70b-versatile"
+    ).strip() or "llama-3.3-70b-versatile"
+
+
+def _cooldown_key(provider: str, model: str, feature: str) -> str:
+    return f"{provider}:{model}:{feature}"
+
+
+def _cooldown_error(provider: str, model: str, feature: str) -> ProviderCallError | None:
+    key = _cooldown_key(provider, model, feature)
+    now = time.monotonic()
+    with _STATE_LOCK:
+        until = _PROVIDER_COOLDOWNS.get(key)
+        if until is None:
+            return None
+        remaining = int(max(0, until - now))
+        if remaining <= 0:
+            _PROVIDER_COOLDOWNS.pop(key, None)
+            return None
+    return ProviderUnavailable(
+        provider,
+        model,
+        f"Provider is in cooldown for feature {feature}.",
+        status_code=503,
+        retry_after_seconds=remaining,
+    )
+
+
+def _record_cooldown(feature: str, error: ProviderCallError) -> None:
+    seconds = error.retry_after_seconds if isinstance(error, ProviderQuotaExceeded) else None
+    cooldown_seconds = max(seconds or 0, PROVIDER_COOLDOWN_SECONDS)
+    with _STATE_LOCK:
+        _PROVIDER_COOLDOWNS[_cooldown_key(error.provider, error.model, feature)] = time.monotonic() + cooldown_seconds
+    LOGGER.warning(
+        "AI provider cooldown set feature=%s provider=%s model=%s cooldownSeconds=%s reason=%s",
+        feature,
+        error.provider,
+        error.model,
+        cooldown_seconds,
+        error.code,
+    )
+
+
+def _aggregate_provider_errors(feature: str, errors: list[ProviderCallError]) -> AiProviderError:
+    provider_errors = [error.to_log_detail() for error in errors]
+    retry_after = min(
+        [error.retry_after_seconds for error in errors if error.retry_after_seconds],
+        default=None,
+    )
+    if errors and all(isinstance(error, ProviderQuotaExceeded) for error in errors):
+        return AiProviderError(
+            "AI provider quota exceeded. Please retry later.",
+            "AI_QUOTA_EXCEEDED",
+            feature,
+            http_status=429,
+            provider_errors=provider_errors,
+            retry_after_seconds=retry_after,
+        )
+    if errors and all(isinstance(error, ProviderForbidden) for error in errors):
+        return AiProviderError(
+            "AI provider rejected the request. Check provider configuration.",
+            "AI_PROVIDER_FORBIDDEN",
+            feature,
+            http_status=503,
+            provider_errors=provider_errors,
+        )
+    if errors and all(isinstance(error, ProviderTimeout) for error in errors):
+        return AiProviderError(
+            "AI providers timed out.",
+            "AI_PROVIDER_TIMEOUT",
+            feature,
+            http_status=504,
+            provider_errors=provider_errors,
+        )
+    if errors and all(isinstance(error, ProviderInvalidResponse) for error in errors):
+        return AiProviderError(
+            "AI providers returned invalid responses.",
+            "AI_INVALID_RESPONSE",
+            feature,
+            http_status=502,
+            provider_errors=provider_errors,
+        )
+    code = "AI_PROVIDERS_UNAVAILABLE"
+    message = "All AI providers are currently unavailable."
+    status = 503
+    if any(isinstance(error, ProviderQuotaExceeded) for error in errors):
+        message = "All AI providers are currently unavailable; at least one provider is quota limited."
+    return AiProviderError(
+        message,
+        code,
+        feature,
+        http_status=status,
+        provider_errors=provider_errors,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _insight_cache_key(feature: str, payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return f"{feature}:{serialized}"
+
+
+def _cache_get(cache: dict[str, _CacheEntry], key: str) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _STATE_LOCK:
+        entry = cache.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= now:
+            cache.pop(key, None)
+            return None
+        return dict(entry.value)
+
+
+def _cache_set(cache: dict[str, _CacheEntry], key: str, value: dict[str, Any], ttl_seconds: int) -> None:
+    if ttl_seconds <= 0:
+        return
+    with _STATE_LOCK:
+        cache[key] = _CacheEntry(time.monotonic() + ttl_seconds, dict(value))
+
+
+def log_provider_configuration() -> None:
+    for provider in [item.strip().upper() for item in os.getenv("AI_PROVIDER_ORDER", "GEMINI,GROQ").split(",") if item.strip()]:
+        if provider == "GEMINI" and not os.getenv("GEMINI_API_KEY", "").strip():
+            LOGGER.warning("AI provider config missing provider=GEMINI env=GEMINI_API_KEY")
+        if provider == "GROQ" and not os.getenv("GROQ_API_KEY", "").strip():
+            LOGGER.warning("AI provider config missing provider=GROQ env=GROQ_API_KEY")
 
 
 def _elapsed_ms(started_at: float) -> int:

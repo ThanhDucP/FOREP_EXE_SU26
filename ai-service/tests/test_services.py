@@ -12,6 +12,7 @@ from app.schemas import (
     ActionSuggestionsRequest,
     BusinessSummaryReport,
     BusinessSummaryTask,
+    DailyReportInsightsRequest,
     EmployeeWorkload,
     MissingReportEmployee,
     MissingReportsRequest,
@@ -97,19 +98,62 @@ class AiServiceTests(unittest.TestCase):
         self.assertEqual(result[0].workload_level, "LOW")
 
     def test_provider_fallback_gemini_fail_groq_success(self):
+        services._PROVIDER_COOLDOWNS.clear()
         with patch("app.services._call_gemini", side_effect=RuntimeError("gemini down")), \
                 patch("app.services._call_groq", return_value='{"summary":"ok"}'):
             output = services._ask_llm_json("Return schema {\"summary\":\"string\"}", {}, "TEST")
 
         self.assertEqual(output, {"summary": "ok"})
 
-    def test_provider_failure_returns_ai_provider_error(self):
+    def test_provider_failure_returns_structured_provider_error(self):
+        services._PROVIDER_COOLDOWNS.clear()
         with patch("app.services._call_gemini", side_effect=RuntimeError("gemini down")), \
                 patch("app.services._call_groq", side_effect=RuntimeError("groq down")):
             with self.assertRaises(services.AiProviderError) as raised:
                 services._ask_llm_json("Return JSON", {}, "TEST")
 
-        self.assertEqual(raised.exception.code, "AI_PROVIDER_ERROR")
+        self.assertEqual(raised.exception.code, "AI_PROVIDERS_UNAVAILABLE")
+        self.assertEqual(raised.exception.http_status, 503)
+        self.assertEqual(len(raised.exception.provider_errors), 2)
+
+    def test_provider_failure_gemini_quota_groq_forbidden_is_structured(self):
+        services._PROVIDER_COOLDOWNS.clear()
+        with patch("app.services._call_gemini", side_effect=services.ProviderQuotaExceeded(
+            "GEMINI",
+            "gemini-2.5-flash",
+            "quota",
+            status_code=429,
+            provider_status="RESOURCE_EXHAUSTED",
+            retry_after_seconds=7,
+        )), patch("app.services._call_groq", side_effect=services.ProviderForbidden(
+            "GROQ",
+            "llama-3.3-70b-versatile",
+            "forbidden",
+            status_code=403,
+            provider_error_code="1010",
+        )):
+            with self.assertRaises(services.AiProviderError) as raised:
+                services._ask_llm_json("Return JSON", {}, "TEST")
+
+        self.assertEqual(raised.exception.code, "AI_PROVIDERS_UNAVAILABLE")
+        self.assertEqual(raised.exception.http_status, 503)
+        self.assertEqual(raised.exception.retry_after_seconds, 7)
+
+    def test_daily_report_insights_reuses_cache(self):
+        services._DAILY_REPORT_INSIGHT_CACHE.clear()
+        services._DAILY_REPORT_INSIGHT_IN_FLIGHT.clear()
+        payload = DailyReportInsightsRequest(reports=[])
+        with patch("app.services._ask_llm_json", return_value={
+            "summary": "ok",
+            "blockers": [],
+            "actionSuggestions": [],
+        }) as ask:
+            first = services.daily_report_insights(payload)
+            second = services.daily_report_insights(payload)
+
+        self.assertEqual(first.summary, "ok")
+        self.assertEqual(second.summary, "ok")
+        self.assertEqual(ask.call_count, 1)
 
     def test_action_suggestion_rejects_unknown_target_and_clamps_confidence(self):
         payload = ActionSuggestionsRequest(

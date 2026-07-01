@@ -53,11 +53,19 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: GEMINI_MODEL
+      - key: AI_PROVIDER_ORDER
+        value: GEMINI,GROQ
+      - key: AI_GEMINI_MODEL
         value: gemini-2.5-flash
       - key: AI_PROVIDER_TIMEOUT_SECONDS
         value: 10
+      - key: AI_PROVIDER_MAX_RETRIES
+        value: 1
+      - key: AI_PROVIDER_COOLDOWN_SECONDS
+        value: 60
+      - key: AI_INSIGHT_CACHE_TTL_SECONDS
+        value: 600
       - key: GROQ_API_KEY
         sync: false
-      - key: GROQ_MODEL
+      - key: AI_GROQ_MODEL
         value: llama-3.3-70b-versatile

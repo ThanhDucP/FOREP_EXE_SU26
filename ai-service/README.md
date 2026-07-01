@@ -48,18 +48,48 @@ X-Internal-Service-Token: <AI_SERVICE_TOKEN>
 
 ## AI Behavior
 
-Service goi Gemini truoc, neu fail thi fallback sang Groq. Neu ca hai provider deu fail, service tra:
+Provider order duoc cau hinh bang `AI_PROVIDER_ORDER`, mac dinh `GEMINI,GROQ`. Service co phan loai loi provider:
+
+- Gemini/Groq 429 hoac Gemini `RESOURCE_EXHAUSTED`: `AI_QUOTA_EXCEEDED`, co cooldown theo `Retry-After` neu parse duoc.
+- Groq/Gemini 403, gom Groq code `1010`: `AI_PROVIDER_FORBIDDEN`, khong retry loop.
+- Timeout that: `AI_PROVIDER_TIMEOUT`.
+- JSON/provider response sai schema: `AI_INVALID_RESPONSE`.
+- Network/service unavailable: `AI_PROVIDER_UNAVAILABLE`.
+
+Neu provider bi quota/forbidden, service dat cooldown theo `provider + model + feature` de request sau khong spam provider trong thoi gian cooldown. `daily-report-insights` co cache/in-flight reuse theo payload voi TTL `AI_INSIGHT_CACHE_TTL_SECONDS`.
+
+Neu ca hai provider deu fail, service tra loi co cau truc:
 
 ```json
 {
-  "code": "AI_PROVIDER_ERROR",
-  "message": "Gemini and Groq both failed",
+  "code": "AI_PROVIDERS_UNAVAILABLE",
+  "message": "All AI providers are currently unavailable.",
   "details": {
     "feature": "WEEKLY_SUMMARY",
-    "providersAttempted": ["GEMINI", "GROQ"]
+    "providerErrors": [
+      {
+        "provider": "GEMINI",
+        "model": "gemini-2.5-flash",
+        "code": "AI_QUOTA_EXCEEDED",
+        "statusCode": 429,
+        "providerStatus": "RESOURCE_EXHAUSTED",
+        "retryAfterSeconds": 15
+      }
+    ],
+    "retryAfterSeconds": 15
   }
 }
 ```
+
+Config lien quan:
+
+- `AI_PROVIDER_ORDER=GEMINI,GROQ`
+- `AI_GEMINI_MODEL=gemini-2.5-flash`
+- `AI_GROQ_MODEL=llama-3.3-70b-versatile`
+- `AI_PROVIDER_TIMEOUT_SECONDS=10`
+- `AI_PROVIDER_MAX_RETRIES=1`
+- `AI_PROVIDER_COOLDOWN_SECONDS=60`
+- `AI_INSIGHT_CACHE_TTL_SECONDS=600`
 
 Global prompt rules:
 
