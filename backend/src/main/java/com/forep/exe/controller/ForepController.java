@@ -2,6 +2,7 @@ package com.forep.exe.controller;
 
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.ai.AiProviderException;
+import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.dto.Requests.AssignTaskRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
@@ -267,6 +268,12 @@ public class ForepController {
     @ExceptionHandler(IllegalArgumentException.class)
     ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(AiRateLimitException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    ApiResponse<?> handleAiRateLimitError(AiRateLimitException exception) {
+        return ApiResponse.error("AI_RATE_LIMITED", "AI dang xu ly qua nhieu yeu cau. Vui long thu lai sau " + exception.retryAfterSeconds() + " giay.", null);
     }
 
     @ExceptionHandler(AiProviderException.class)

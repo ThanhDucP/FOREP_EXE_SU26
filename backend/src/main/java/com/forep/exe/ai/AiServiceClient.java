@@ -1,5 +1,7 @@
 package com.forep.exe.ai;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.WorkloadLevel;
 import com.forep.exe.service.ForepService.AssigneeRecommendationView;
@@ -18,6 +20,15 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 public class AiServiceClient {
@@ -25,9 +36,16 @@ public class AiServiceClient {
 
     private final RestClient restClient;
     private final AiServiceProperties properties;
+    private final ObjectMapper objectMapper;
+    private final Semaphore concurrencyLimiter;
+    private final ConcurrentMap<String, CompletableFuture<Object>> inFlightRequests = new ConcurrentHashMap<>();
+    private final AtomicInteger consecutiveProviderFailures = new AtomicInteger();
+    private final AtomicLong circuitOpenUntilMillis = new AtomicLong();
 
-    public AiServiceClient(RestClient.Builder builder, AiServiceProperties properties) {
+    public AiServiceClient(RestClient.Builder builder, AiServiceProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
+        this.objectMapper = objectMapper;
+        this.concurrencyLimiter = new Semaphore(properties.effectiveMaxConcurrentRequests(), true);
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofMillis(properties.effectiveConnectTimeoutMillis()));
         requestFactory.setReadTimeout(Duration.ofMillis(properties.effectiveReadTimeoutMillis()));
@@ -120,6 +138,27 @@ public class AiServiceClient {
         if (!isConfigured()) {
             throw new AiProviderException("AI service is not configured.");
         }
+        String requestKey = requestKey(path, payload);
+        CompletableFuture<Object> ownFuture = new CompletableFuture<>();
+        CompletableFuture<Object> existingFuture = inFlightRequests.putIfAbsent(requestKey, ownFuture);
+        if (existingFuture != null) {
+            return waitForInFlight(path, existingFuture, responseType);
+        }
+        try {
+            T response = executePost(path, payload, responseType);
+            ownFuture.complete(response);
+            return response;
+        } catch (RuntimeException exception) {
+            ownFuture.completeExceptionally(exception);
+            throw exception;
+        } finally {
+            inFlightRequests.remove(requestKey, ownFuture);
+        }
+    }
+
+    private <T> T executePost(String path, Object payload, Class<T> responseType) {
+        assertCircuitClosed(path);
+        acquireAiSlot(path);
         long startedAt = System.nanoTime();
         try {
             T response = restClient.post()
@@ -128,18 +167,106 @@ public class AiServiceClient {
                     .body(payload)
                     .retrieve()
                     .body(responseType);
-            log.info("AI service call succeeded path={} elapsedMs={}", path, elapsedMillis(startedAt));
+            consecutiveProviderFailures.set(0);
+            log.info("AI service call succeeded path={} elapsedMs={} activeRequests={}", path, elapsedMillis(startedAt), activeRequests());
             return response;
         } catch (RestClientException exception) {
+            recordProviderFailure(path);
             log.warn(
-                    "AI service call failed path={} elapsedMs={} exception={} message={}",
+                    "AI service call failed path={} elapsedMs={} exception={} message={} activeRequests={}",
                     path,
                     elapsedMillis(startedAt),
                     exception.getClass().getSimpleName(),
-                    shortMessage(exception)
+                    shortMessage(exception),
+                    activeRequests()
             );
             throw new AiProviderException("Gemini and Groq both failed", exception);
+        } finally {
+            concurrencyLimiter.release();
         }
+    }
+
+    private <T> T waitForInFlight(String path, CompletableFuture<Object> existingFuture, Class<T> responseType) {
+        long startedAt = System.nanoTime();
+        try {
+            Object response = existingFuture.get(properties.effectiveDedupeWaitMillis(), TimeUnit.MILLISECONDS);
+            log.info("AI duplicate request reused path={} waitMs={}", path, elapsedMillis(startedAt));
+            return responseType.cast(response);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AiRateLimitException("Interrupted while waiting for in-flight AI request.", properties.effectiveRetryAfterSeconds(), exception);
+        } catch (TimeoutException exception) {
+            throw new AiRateLimitException("Timed out waiting for in-flight AI request.", properties.effectiveRetryAfterSeconds(), exception);
+        } catch (ExecutionException exception) {
+            throw propagateAiException(exception.getCause());
+        }
+    }
+
+    private void acquireAiSlot(String path) {
+        try {
+            boolean acquired = concurrencyLimiter.tryAcquire(properties.effectiveAcquireTimeoutMillis(), TimeUnit.MILLISECONDS);
+            if (!acquired) {
+                log.warn(
+                        "AI concurrency limit reached path={} maxConcurrent={} activeRequests={}",
+                        path,
+                        properties.effectiveMaxConcurrentRequests(),
+                        activeRequests()
+                );
+                throw new AiRateLimitException("Too many AI requests are already running.", properties.effectiveRetryAfterSeconds());
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AiRateLimitException("Interrupted while waiting for AI capacity.", properties.effectiveRetryAfterSeconds(), exception);
+        }
+    }
+
+    private void assertCircuitClosed(String path) {
+        long openUntil = circuitOpenUntilMillis.get();
+        long remainingMillis = openUntil - System.currentTimeMillis();
+        if (remainingMillis > 0) {
+            log.warn("AI circuit breaker open path={} retryAfterMs={}", path, remainingMillis);
+            throw new AiProviderException("AI circuit breaker is open. Retry later.");
+        }
+        if (openUntil > 0) {
+            circuitOpenUntilMillis.compareAndSet(openUntil, 0);
+        }
+    }
+
+    private void recordProviderFailure(String path) {
+        int threshold = properties.effectiveCircuitBreakerFailureThreshold();
+        int openMillis = properties.effectiveCircuitBreakerOpenMillis();
+        if (threshold <= 0 || openMillis <= 0) {
+            return;
+        }
+        int failures = consecutiveProviderFailures.incrementAndGet();
+        if (failures >= threshold) {
+            long openUntil = System.currentTimeMillis() + openMillis;
+            circuitOpenUntilMillis.set(openUntil);
+            consecutiveProviderFailures.set(0);
+            log.warn("AI circuit breaker opened path={} openMillis={} failureThreshold={}", path, openMillis, threshold);
+        }
+    }
+
+    private RuntimeException propagateAiException(Throwable cause) {
+        if (cause instanceof AiProviderException exception) {
+            return exception;
+        }
+        if (cause instanceof RuntimeException exception) {
+            return exception;
+        }
+        return new AiProviderException("AI service call failed.", cause);
+    }
+
+    private String requestKey(String path, Object payload) {
+        try {
+            return path + ":" + objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException exception) {
+            return path + ":" + String.valueOf(payload);
+        }
+    }
+
+    private int activeRequests() {
+        return properties.effectiveMaxConcurrentRequests() - concurrencyLimiter.availablePermits();
     }
 
     private long elapsedMillis(long startedAt) {
