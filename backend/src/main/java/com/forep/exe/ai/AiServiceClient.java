@@ -6,10 +6,14 @@ import com.forep.exe.service.ForepService.AssigneeRecommendationView;
 import com.forep.exe.service.ForepService.BusinessSummaryView;
 import com.forep.exe.service.ForepService.TaskView;
 import com.forep.exe.service.ForepService.WorkloadView;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -17,12 +21,17 @@ import java.util.UUID;
 
 @Component
 public class AiServiceClient {
+    private static final Logger log = LoggerFactory.getLogger(AiServiceClient.class);
+
     private final RestClient restClient;
     private final AiServiceProperties properties;
 
     public AiServiceClient(RestClient.Builder builder, AiServiceProperties properties) {
         this.properties = properties;
-        this.restClient = builder.build();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(properties.effectiveConnectTimeoutMillis()));
+        requestFactory.setReadTimeout(Duration.ofMillis(properties.effectiveReadTimeoutMillis()));
+        this.restClient = builder.requestFactory(requestFactory).build();
     }
 
     public List<AssigneeRecommendationView> recommendAssignee(AiRecommendAssigneeInput input) {
@@ -48,7 +57,7 @@ public class AiServiceClient {
 
     public Map<String, Object> delayRisks(List<TaskView> tasks, Map<UUID, String> employeeNames) {
         if (!isConfigured()) {
-            throw new IllegalStateException("AI service is not configured.");
+            throw new AiProviderException("AI service is not configured.");
         }
         List<Map<String, Object>> payloadTasks = tasks.stream()
                 .map(task -> Map.<String, Object>of(
@@ -111,16 +120,36 @@ public class AiServiceClient {
         if (!isConfigured()) {
             throw new AiProviderException("AI service is not configured.");
         }
+        long startedAt = System.nanoTime();
         try {
-            return restClient.post()
+            T response = restClient.post()
                     .uri(properties.serviceUrl() + path)
                     .header("X-Internal-Service-Token", properties.serviceToken())
                     .body(payload)
                     .retrieve()
                     .body(responseType);
+            log.info("AI service call succeeded path={} elapsedMs={}", path, elapsedMillis(startedAt));
+            return response;
         } catch (RestClientException exception) {
+            log.warn(
+                    "AI service call failed path={} elapsedMs={} exception={} message={}",
+                    path,
+                    elapsedMillis(startedAt),
+                    exception.getClass().getSimpleName(),
+                    shortMessage(exception)
+            );
             throw new AiProviderException("Gemini and Groq both failed", exception);
         }
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+    }
+
+    private String shortMessage(Exception exception) {
+        String message = exception.getMessage();
+        if (message == null) return "";
+        return message.length() > 500 ? message.substring(0, 500) : message;
     }
 
     public record AiRecommendAssigneeInput(

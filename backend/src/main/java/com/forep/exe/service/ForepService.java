@@ -44,25 +44,34 @@ import com.forep.exe.persistence.WorkspaceRepository;
 import com.forep.exe.security.AuthenticatedUser;
 import com.forep.exe.security.JwtService;
 import com.forep.exe.security.SecurityContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 @Transactional
 public class ForepService {
+    private static final Logger log = LoggerFactory.getLogger(ForepService.class);
+    private static final String RULE_BASED_FALLBACK_SOURCE = "RULE_BASED_FALLBACK";
+
     private final WorkspaceRepository workspaces;
     private final UserRepository users;
     private final TaskRepository tasks;
@@ -450,7 +459,13 @@ public class ForepService {
     public Map<String, Object> workloadSummary() {
         requireOwner();
         List<WorkloadView> currentWorkload = workload();
-        Map<String, Object> output = aiServiceClient.workloadSummary(currentWorkload);
+        Map<String, Object> output;
+        try {
+            output = aiServiceClient.workloadSummary(currentWorkload);
+        } catch (AiProviderException exception) {
+            log.warn("AI workload summary failed; using rule-based fallback. message={}", fallbackReason(exception));
+            output = fallbackWorkloadSummary(currentWorkload, exception);
+        }
         saveAiSuggestion(AiSuggestionType.WORKLOAD_SUMMARY, currentWorkload, output);
         return output;
     }
@@ -460,7 +475,12 @@ public class ForepService {
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
         Map<UUID, String> employeeNames = users.findByWorkspaceId(currentUser().workspaceId()).stream().collect(java.util.stream.Collectors.toMap(UserEntity::getId, UserEntity::getFullName));
         List<TaskView> taskViews = scopedTasks.stream().map(this::toTaskView).toList();
-        return aiServiceClient.delayRisks(taskViews, employeeNames);
+        try {
+            return aiServiceClient.delayRisks(taskViews, employeeNames);
+        } catch (AiProviderException exception) {
+            log.warn("AI delay risks failed; using rule-based fallback. message={}", fallbackReason(exception));
+            return fallbackDelayRisks(scopedTasks, employeeNames, exception);
+        }
     }
 
     public Map<String, Object> businessSummary(String period) {
@@ -552,11 +572,18 @@ public class ForepService {
 
     public Map<String, Object> actionSuggestions() {
         requireOwner();
+        List<WorkloadView> currentWorkload = workload();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tasks", taskPayloads(LocalDate.now().minusDays(30)));
         payload.put("reports", reportPayloads(LocalDate.now().minusDays(6)));
-        payload.put("workload", workload().stream().map(AiEmployeeWorkload::from).toList());
-        Map<String, Object> output = aiServiceClient.actionSuggestions(payload);
+        payload.put("workload", currentWorkload.stream().map(AiEmployeeWorkload::from).toList());
+        Map<String, Object> output;
+        try {
+            output = aiServiceClient.actionSuggestions(payload);
+        } catch (AiProviderException exception) {
+            log.warn("AI action suggestions failed; using rule-based fallback. message={}", fallbackReason(exception));
+            output = fallbackActionSuggestions(currentWorkload, exception);
+        }
         saveAiSuggestion(AiSuggestionType.ACTION_SUGGESTION, payload, output);
         return output;
     }
@@ -755,6 +782,282 @@ public class ForepService {
                 .toList();
     }
 
+    private Map<String, Object> fallbackWorkloadSummary(List<WorkloadView> currentWorkload, AiProviderException exception) {
+        List<String> overloadedEmployees = currentWorkload.stream()
+                .filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED)
+                .map(WorkloadView::fullName)
+                .toList();
+        List<String> idleEmployees = currentWorkload.stream()
+                .filter(item -> item.workloadLevel() == WorkloadLevel.NO_WORK)
+                .map(WorkloadView::fullName)
+                .toList();
+        List<String> overdueEmployees = currentWorkload.stream()
+                .filter(item -> item.overdueTasks() > 0)
+                .map(WorkloadView::fullName)
+                .toList();
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summary", "Rule-based fallback: " + currentWorkload.size()
+                + " nhan vien, " + overloadedEmployees.size()
+                + " qua tai, " + idleEmployees.size()
+                + " chua co task, " + overdueEmployees.size()
+                + " co task qua han.");
+        output.put("overloadedEmployees", overloadedEmployees);
+        output.put("idleEmployees", idleEmployees);
+        output.put("overdueEmployees", overdueEmployees);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackDelayRisks(List<TaskEntity> scopedTasks, Map<UUID, String> employeeNames, AiProviderException exception) {
+        List<Map<String, Object>> risks = new ArrayList<>();
+        for (TaskEntity task : scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .toList()) {
+            Map<String, Object> risk = fallbackDelayRisk(task, employeeNames);
+            if (risk != null) {
+                risks.add(risk);
+            }
+            if (risks.size() >= 8) {
+                break;
+            }
+        }
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("risks", risks);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackDelayRisk(TaskEntity task, Map<UUID, String> employeeNames) {
+        String riskLevel = fallbackDelayRiskLevel(task);
+        if (riskLevel == null) {
+            return null;
+        }
+
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("taskId", task.getId().toString());
+        item.put("title", task.getTitle());
+        item.put("riskLevel", riskLevel);
+        item.put("reason", fallbackDelayReason(task));
+        item.put("recommendedAction", fallbackDelayAction(task, employeeNames));
+        return item;
+    }
+
+    private String fallbackDelayRiskLevel(TaskEntity task) {
+        long hoursUntilDeadline = Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours();
+        if (isOverdue(task) || task.getStatus() == TaskStatus.BLOCKED || (hoursUntilDeadline <= 48 && task.getProgressPercent() < 30)) {
+            return "HIGH";
+        }
+        if (hoursUntilDeadline <= 48 || task.getProgressPercent() < 50 || task.getPriority() == TaskPriority.CRITICAL) {
+            return "MEDIUM";
+        }
+        if (hoursUntilDeadline <= 120 || task.getProgressPercent() < 75 || task.getPriority() == TaskPriority.HIGH) {
+            return "LOW";
+        }
+        return null;
+    }
+
+    private String fallbackDelayReason(TaskEntity task) {
+        long hoursUntilDeadline = Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours();
+        if (isOverdue(task)) {
+            return "Task da qua deadline va chua hoan thanh.";
+        }
+        if (task.getStatus() == TaskStatus.BLOCKED) {
+            return "Task dang bi blocker.";
+        }
+        if (hoursUntilDeadline <= 48 && task.getProgressPercent() < 30) {
+            return "Tien do duoi 30% trong khi deadline con duoi 48 gio.";
+        }
+        if (hoursUntilDeadline <= 48) {
+            return "Deadline sap den trong vong 48 gio.";
+        }
+        if (task.getProgressPercent() < 50) {
+            return "Tien do task duoi 50%.";
+        }
+        if (task.getPriority() == TaskPriority.CRITICAL || task.getPriority() == TaskPriority.HIGH) {
+            return "Task uu tien cao can duoc theo doi.";
+        }
+        return "Task co dau hieu can theo doi them.";
+    }
+
+    private String fallbackDelayAction(TaskEntity task, Map<UUID, String> employeeNames) {
+        String assigneeName = employeeNames.getOrDefault(task.getAssigneeId(), "nhan vien phu trach");
+        if (task.getStatus() == TaskStatus.BLOCKED) {
+            return "Lam viec voi " + assigneeName + " de go blocker va chot nguoi ho tro.";
+        }
+        if (isOverdue(task)) {
+            return "Lien he " + assigneeName + " de cap nhat ETA, dieu chinh deadline hoac bo sung nguon luc.";
+        }
+        if (Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours() <= 48) {
+            return "Kiem tra tien do voi " + assigneeName + " trong hom nay.";
+        }
+        return "Yeu cau " + assigneeName + " cap nhat tien do va rui ro hien tai.";
+    }
+
+    private Map<String, Object> fallbackActionSuggestions(List<WorkloadView> currentWorkload, AiProviderException exception) {
+        UUID workspaceId = currentUser().workspaceId();
+        Map<UUID, String> names = employeeNames();
+        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
+        LocalDate reportStart = LocalDate.now().minusDays(6);
+        List<DailyReportEntity> recentReports = reports.findByWorkspaceIdOrderByReportDateDesc(workspaceId).stream()
+                .filter(report -> !report.getReportDate().isBefore(reportStart))
+                .toList();
+
+        List<Map<String, Object>> suggestions = new ArrayList<>();
+        Set<String> usedTargets = new HashSet<>();
+
+        for (TaskEntity task : scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .filter(task -> task.getStatus() == TaskStatus.BLOCKED)
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "TASK:" + task.getId(),
+                    "REVIEW_BLOCKER",
+                    "TASK",
+                    task.getId().toString(),
+                    "Xu ly blocker",
+                    "Task \"" + task.getTitle() + "\" dang bi blocker; assignee: " + names.getOrDefault(task.getAssigneeId(), "Unknown") + ".",
+                    0.95
+            );
+        }
+
+        for (TaskEntity task : scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .filter(this::isOverdue)
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "TASK:" + task.getId(),
+                    "FOLLOW_UP_TASK",
+                    "TASK",
+                    task.getId().toString(),
+                    "Theo doi task qua han",
+                    "Task \"" + task.getTitle() + "\" da qua deadline; can cap nhat ETA voi " + names.getOrDefault(task.getAssigneeId(), "Unknown") + ".",
+                    0.92
+            );
+        }
+
+        for (TaskEntity task : scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .filter(task -> !isOverdue(task))
+                .filter(task -> Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours() <= 48)
+                .filter(task -> task.getProgressPercent() < 50)
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "TASK:" + task.getId(),
+                    "FOLLOW_UP_TASK",
+                    "TASK",
+                    task.getId().toString(),
+                    "Kiem tra task sap den deadline",
+                    "Task \"" + task.getTitle() + "\" con duoi 48 gio nhung tien do moi " + task.getProgressPercent() + "%.",
+                    0.86
+            );
+        }
+
+        for (WorkloadView workload : currentWorkload.stream()
+                .filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED)
+                .sorted(Comparator.comparingDouble(WorkloadView::workloadScore).reversed())
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "EMPLOYEE:" + workload.employeeId(),
+                    "REASSIGN_TASK",
+                    "EMPLOYEE",
+                    workload.employeeId().toString(),
+                    "Can bang workload",
+                    workload.fullName() + " dang qua tai voi " + workload.openTasks() + " task mo va " + workload.overdueTasks() + " task qua han.",
+                    0.82
+            );
+        }
+
+        for (DailyReportEntity report : recentReports.stream()
+                .filter(report -> hasText(report.getBlockers()))
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "DAILY_REPORT:" + report.getId(),
+                    "REVIEW_BLOCKER",
+                    "DAILY_REPORT",
+                    report.getId().toString(),
+                    "Xu ly blocker tu daily report",
+                    names.getOrDefault(report.getUserId(), "Unknown") + " co blocker trong report ngay " + report.getReportDate() + ".",
+                    0.78
+            );
+        }
+
+        Set<UUID> submittedToday = reports.findByWorkspaceIdOrderByReportDateDesc(workspaceId).stream()
+                .filter(report -> report.getReportDate().equals(LocalDate.now()))
+                .map(DailyReportEntity::getUserId)
+                .collect(java.util.stream.Collectors.toSet());
+        for (UserEntity employee : users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).stream()
+                .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
+                .filter(employee -> !submittedToday.contains(employee.getId()))
+                .toList()) {
+            addFallbackActionSuggestion(
+                    suggestions,
+                    usedTargets,
+                    "EMPLOYEE:" + employee.getId(),
+                    "REQUEST_REPORT",
+                    "EMPLOYEE",
+                    employee.getId().toString(),
+                    "Yeu cau daily report",
+                    employee.getFullName() + " chua gui daily report hom nay.",
+                    0.68
+            );
+        }
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("suggestions", suggestions);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private void addFallbackActionSuggestion(List<Map<String, Object>> suggestions,
+                                             Set<String> usedTargets,
+                                             String targetKey,
+                                             String actionType,
+                                             String targetEntityType,
+                                             String targetEntityId,
+                                             String title,
+                                             String reason,
+                                             double confidence) {
+        if (suggestions.size() >= 8 || !usedTargets.add(targetKey)) {
+            return;
+        }
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("actionType", actionType);
+        item.put("targetEntityType", targetEntityType);
+        item.put("targetEntityId", targetEntityId);
+        item.put("title", title);
+        item.put("reason", reason);
+        item.put("confidence", confidence);
+        suggestions.add(item);
+    }
+
+    private Map<String, Object> withFallbackMetadata(Map<String, Object> output, AiProviderException exception) {
+        output.put("source", RULE_BASED_FALLBACK_SOURCE);
+        output.put("aiProviderFailed", true);
+        output.put("fallbackReason", fallbackReason(exception));
+        return output;
+    }
+
+    private String fallbackReason(AiProviderException exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            return "AI provider unavailable";
+        }
+        return message.length() > 240 ? message.substring(0, 240) : message;
+    }
+
     private double taskRiskScore(TaskEntity task) {
         double score = 0;
         if (isOverdue(task)) score += 100;
@@ -921,6 +1224,14 @@ public class ForepService {
 
     private boolean isOverdue(TaskEntity task) {
         return task.getDeadline().isBefore(OffsetDateTime.now()) && !List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus());
+    }
+
+    private boolean isOpenTask(TaskEntity task) {
+        return !List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus());
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private void generateOperationalNotifications() {

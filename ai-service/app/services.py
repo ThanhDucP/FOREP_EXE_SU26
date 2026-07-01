@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -41,9 +43,11 @@ from app.schemas import (
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-REQUEST_TIMEOUT_SECONDS = 20
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", "120"))
+MAX_LOGGED_RESPONSE_CHARS = 1000
 WORKLOAD_LEVELS = "NO_WORK, LOW, NORMAL, HIGH, OVERLOADED"
 PRIORITIES = "LOW, MEDIUM, HIGH, CRITICAL"
+LOGGER = logging.getLogger("forep.ai")
 
 
 class AiProviderError(RuntimeError):
@@ -349,11 +353,30 @@ def _ask_llm_json(task: str, data: dict[str, Any], feature: str) -> dict[str, An
     )
     errors: list[str] = []
     for caller in (_call_gemini, _call_groq):
+        provider, model = _provider_context(caller)
+        started_at = time.monotonic()
         try:
             raw = caller(prompt)
             if raw:
-                return _load_json(raw)
+                loaded = _load_json(raw, feature=feature, provider=provider)
+                LOGGER.info(
+                    "AI provider call succeeded feature=%s provider=%s model=%s elapsedMs=%d",
+                    feature,
+                    provider,
+                    model,
+                    _elapsed_ms(started_at),
+                )
+                return loaded
         except Exception as exception:
+            LOGGER.warning(
+                "AI provider call failed feature=%s provider=%s model=%s elapsedMs=%d exception=%s message=%s",
+                feature,
+                provider,
+                model,
+                _elapsed_ms(started_at),
+                exception.__class__.__name__,
+                _short_message(exception),
+            )
             errors.append(f"{getattr(caller, '__name__', caller.__class__.__name__)}: {exception}")
             continue
     raise AiProviderError(
@@ -367,7 +390,7 @@ def _call_gemini(prompt: str) -> str | None:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing.")
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
     body = _post_json(
         GEMINI_API_URL.format(model=model),
         payload={
@@ -428,17 +451,46 @@ def _post_json(
         raise RuntimeError(f"Network error: {exception.reason}") from exception
 
 
-def _load_json(raw: str) -> dict[str, Any]:
+def _load_json(raw: str, feature: str | None = None, provider: str | None = None) -> dict[str, Any]:
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
-            raise AiProviderError("LLM output is not JSON.", "AI_INVALID_RESPONSE")
+            LOGGER.warning(
+                "AI JSON parse failed feature=%s provider=%s rawPrefix=%s",
+                feature,
+                provider,
+                raw[:MAX_LOGGED_RESPONSE_CHARS],
+            )
+            raise AiProviderError("LLM output is not JSON.", "AI_INVALID_RESPONSE", feature)
         loaded = json.loads(match.group(0))
     if not isinstance(loaded, dict):
-        raise AiProviderError("LLM output must be a JSON object.", "AI_INVALID_RESPONSE")
+        LOGGER.warning(
+            "AI JSON parse produced non-object feature=%s provider=%s rawPrefix=%s",
+            feature,
+            provider,
+            raw[:MAX_LOGGED_RESPONSE_CHARS],
+        )
+        raise AiProviderError("LLM output must be a JSON object.", "AI_INVALID_RESPONSE", feature)
     return loaded
+
+
+def _provider_context(caller) -> tuple[str, str]:
+    if caller is _call_gemini:
+        return "GEMINI", os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    if caller is _call_groq:
+        return "GROQ", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+    return getattr(caller, "__name__", caller.__class__.__name__), "unknown"
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def _short_message(exception: Exception) -> str:
+    message = str(exception)
+    return message[:500]
 
 
 def _parse_recommendations(items: list[Any], payload: RecommendAssigneeRequest) -> list[AssigneeRecommendation]:

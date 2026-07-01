@@ -17,6 +17,10 @@ services:
         value: https://forep-exe-ai.onrender.com
       - key: AI_SERVICE_TOKEN
         sync: false
+      - key: AI_SERVICE_CONNECT_TIMEOUT_MILLIS
+        value: 10000
+      - key: AI_SERVICE_READ_TIMEOUT_MILLIS
+        value: 120000
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -38,7 +42,9 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-3.5-flash
+        value: gemini-2.5-flash
+      - key: AI_PROVIDER_TIMEOUT_SECONDS
+        value: 120
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL

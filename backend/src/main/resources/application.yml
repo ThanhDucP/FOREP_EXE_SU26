@@ -23,3 +23,5 @@ forep:
   ai:
     service-url: ${AI_SERVICE_URL:}
     service-token: ${AI_SERVICE_TOKEN:}
+    connect-timeout-millis: ${AI_SERVICE_CONNECT_TIMEOUT_MILLIS:10000}
+    read-timeout-millis: ${AI_SERVICE_READ_TIMEOUT_MILLIS:120000}
