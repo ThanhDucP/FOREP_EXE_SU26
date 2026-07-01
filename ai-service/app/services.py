@@ -82,7 +82,10 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
             "employeeId and fullName must exactly match one ACTIVE input employee. "
             "Never invent or modify employeeId, fullName, or workloadLevel. "
             "Use candidateScore from input as score; do not recalculate score. "
-            "Explain score using scoreComponents, workloadLevel, openTasks, overdueTasks, blockedTasks, estimatedWorkload, deadline, and estimatedHours. "
+            "Use jobTitle, seniorityLevel, skillRating, yearsOfExperience, and skills to judge professional fit only when those fields are present. "
+            "Never infer missing skills, seniority, job role, or experience from employee name. "
+            "If professional profile fields are missing, say the recommendation is based on workload and risk data only. "
+            "Explain score using scoreComponents, workloadLevel, openTasks, overdueTasks, blockedTasks, estimatedWorkload, profile fields, deadline, and estimatedHours. "
             "Prefer lower workload levels in this order: NO_WORK, LOW, NORMAL, HIGH, OVERLOADED. "
             "Avoid OVERLOADED unless every candidate is OVERLOADED. "
             "Do not rank severe overdue candidates above cleaner suitable candidates. "
@@ -485,7 +488,12 @@ def _candidate_score(employee) -> int:
         return max(0, min(100, int(employee.candidate_score)))
     penalty = employee.open_tasks * 6 + employee.overdue_tasks * 18 + employee.blocked_tasks * 12 + employee.estimated_workload / 2
     level_penalty = {"NO_WORK": 0, "LOW": 4, "NORMAL": 12, "HIGH": 28, "OVERLOADED": 50}.get(employee.workload_level, 25)
-    return max(0, min(100, int(round(100 - penalty - level_penalty))))
+    seniority_penalty = {"LEAD": 0, "SENIOR": 0, "MIDDLE": 4, "JUNIOR": 8, "INTERN": 12}.get(employee.seniority_level, 4)
+    skill_rating = employee.skill_rating if employee.skill_rating is not None else 0
+    skill_penalty = {5: 0, 4: 2, 3: 6, 2: 12, 1: 20}.get(max(1, min(5, int(skill_rating))) if skill_rating else 0, 4)
+    years = employee.years_of_experience
+    experience_penalty = 4 if years is None else (0 if years >= 5 else 2 if years >= 3 else 6 if years >= 1 else 10)
+    return max(0, min(100, int(round(100 - penalty - level_penalty - seniority_penalty - skill_penalty - experience_penalty))))
 
 
 def _allowed_action_ids(tasks, reports, workload, include_workspace: bool = False) -> set[str]:

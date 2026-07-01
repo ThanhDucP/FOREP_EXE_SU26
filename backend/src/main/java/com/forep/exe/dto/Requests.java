@@ -1,6 +1,7 @@
 package com.forep.exe.dto;
 
 import com.forep.exe.domain.Enums.Role;
+import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.TaskPriority;
 import com.forep.exe.domain.Enums.TaskStatus;
 import com.forep.exe.domain.Enums.UpdateType;
@@ -36,7 +37,12 @@ public final class Requests {
     public record CreateEmployeeRequest(
             @NotBlank String fullName,
             @Email String email,
-            String phone
+            String phone,
+            String jobTitle,
+            SeniorityLevel seniorityLevel,
+            @Min(1) @Max(5) Integer skillRating,
+            @Min(0) Integer yearsOfExperience,
+            String skills
     ) {
         public Role role() {
             return Role.EMPLOYEE;
@@ -53,7 +59,12 @@ public final class Requests {
             @NotBlank String fullName,
             @Email String email,
             String phone,
-            UserStatus status
+            UserStatus status,
+            String jobTitle,
+            SeniorityLevel seniorityLevel,
+            @Min(1) @Max(5) Integer skillRating,
+            @Min(0) Integer yearsOfExperience,
+            String skills
     ) {
     }
 

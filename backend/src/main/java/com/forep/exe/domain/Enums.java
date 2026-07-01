@@ -12,6 +12,10 @@ public final class Enums {
         ACTIVE, INACTIVE, INVITED
     }
 
+    public enum SeniorityLevel {
+        INTERN, JUNIOR, MIDDLE, SENIOR, LEAD
+    }
+
     public enum TaskPriority {
         LOW, MEDIUM, HIGH, CRITICAL
     }

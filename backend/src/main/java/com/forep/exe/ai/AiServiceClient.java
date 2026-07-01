@@ -1,5 +1,6 @@
 package com.forep.exe.ai;
 
+import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.WorkloadLevel;
 import com.forep.exe.service.ForepService.AssigneeRecommendationView;
 import com.forep.exe.service.ForepService.BusinessSummaryView;
@@ -140,6 +141,11 @@ public class AiServiceClient {
             double estimatedWorkload,
             WorkloadLevel workloadLevel,
             String status,
+            String jobTitle,
+            SeniorityLevel seniorityLevel,
+            Integer skillRating,
+            Integer yearsOfExperience,
+            String skills,
             int candidateScore,
             Map<String, Object> scoreComponents
     ) {
@@ -153,6 +159,11 @@ public class AiServiceClient {
                     item.estimatedWorkload().doubleValue(),
                     item.workloadLevel(),
                     "ACTIVE",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     0,
                     Map.of()
             );

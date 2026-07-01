@@ -18,6 +18,11 @@ class EmployeeWorkload(StrictModel):
     estimated_workload: float = Field(alias="estimatedWorkload")
     workload_level: str = Field(alias="workloadLevel")
     status: str = "ACTIVE"
+    job_title: Optional[str] = Field(default=None, alias="jobTitle")
+    seniority_level: Optional[str] = Field(default=None, alias="seniorityLevel")
+    skill_rating: Optional[int] = Field(default=None, alias="skillRating", ge=1, le=5)
+    years_of_experience: Optional[int] = Field(default=None, alias="yearsOfExperience", ge=0)
+    skills: Optional[str] = None
     candidate_score: Optional[int] = Field(default=None, alias="candidateScore")
     score_components: dict[str, Any] = Field(default_factory=dict, alias="scoreComponents")
 
