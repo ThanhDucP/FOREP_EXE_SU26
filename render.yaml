@@ -18,15 +18,15 @@ services:
       - key: AI_SERVICE_TOKEN
         sync: false
       - key: AI_SERVICE_CONNECT_TIMEOUT_MILLIS
-        value: 10000
+        value: 3000
       - key: AI_SERVICE_READ_TIMEOUT_MILLIS
-        value: 120000
+        value: 10000
       - key: AI_SERVICE_MAX_CONCURRENT_REQUESTS
         value: 3
       - key: AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS
         value: 1000
       - key: AI_SERVICE_DEDUPE_WAIT_MILLIS
-        value: 135000
+        value: 14000
       - key: AI_SERVICE_RETRY_AFTER_SECONDS
         value: 15
       - key: AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD
@@ -56,7 +56,7 @@ services:
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: AI_PROVIDER_TIMEOUT_SECONDS
-        value: 120
+        value: 10
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL

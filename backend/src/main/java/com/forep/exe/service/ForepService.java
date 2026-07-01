@@ -444,14 +444,24 @@ public class ForepService {
         if (request == null) return List.of();
         List<AiEmployeeWorkload> candidates = assigneeCandidates(request);
         if (candidates.isEmpty()) return List.of();
-        List<AssigneeRecommendationView> recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
-                request.title(),
-                request.requirements(),
-                request.deadline().toString(),
-                request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
-                candidates
-        ));
-        List<AssigneeRecommendationView> normalized = normalizeRecommendations(recommendations, candidates);
+        List<AssigneeRecommendationView> normalized;
+        try {
+            List<AssigneeRecommendationView> recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
+                    request.title(),
+                    request.requirements(),
+                    request.deadline().toString(),
+                    request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
+                    candidates
+            ));
+            normalized = normalizeRecommendations(recommendations, candidates);
+            if (normalized.isEmpty()) {
+                log.warn("AI recommend assignee returned no valid candidates; using rule-based fallback.");
+                normalized = fallbackAssigneeRecommendations(candidates, "AI returned no valid recommendations.");
+            }
+        } catch (AiProviderException exception) {
+            log.warn("AI recommend assignee failed; using rule-based fallback. message={}", fallbackReason(exception));
+            normalized = fallbackAssigneeRecommendations(candidates, fallbackReason(exception));
+        }
         saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, normalized);
         return normalized;
     }
@@ -759,6 +769,47 @@ public class ForepService {
                 .limit(3)
                 .count();
         return (int) matches * 4;
+    }
+
+    private List<AssigneeRecommendationView> fallbackAssigneeRecommendations(List<AiEmployeeWorkload> candidates, String fallbackReason) {
+        return candidates.stream()
+                .sorted(Comparator.comparing(AiEmployeeWorkload::candidateScore).reversed())
+                .limit(3)
+                .map(candidate -> new AssigneeRecommendationView(
+                        UUID.fromString(candidate.employeeId()),
+                        candidate.fullName(),
+                        candidate.candidateScore(),
+                        candidate.workloadLevel(),
+                        fallbackAssigneeReason(candidate, fallbackReason),
+                        fallbackAssigneeRisk(candidate)
+                ))
+                .toList();
+    }
+
+    private String fallbackAssigneeReason(AiEmployeeWorkload candidate, String fallbackReason) {
+        Object taskProfileMatchScore = candidate.scoreComponents().getOrDefault("taskProfileMatchScore", 0);
+        return "Rule-based fallback vi LLM chua phan hoi kip (" + fallbackReason + "). "
+                + candidate.fullName() + " dat " + candidate.candidateScore()
+                + " diem: " + candidate.openTasks() + " task mo, "
+                + candidate.overdueTasks() + " qua han, "
+                + candidate.blockedTasks() + " bi blocker, workload "
+                + candidate.workloadLevel() + ", profile match +" + taskProfileMatchScore + ".";
+    }
+
+    private String fallbackAssigneeRisk(AiEmployeeWorkload candidate) {
+        if (candidate.workloadLevel() == WorkloadLevel.OVERLOADED) {
+            return "Rui ro cao: nhan vien dang qua tai.";
+        }
+        if (candidate.overdueTasks() > 0) {
+            return "Rui ro trung binh: nhan vien co task qua han.";
+        }
+        if (candidate.blockedTasks() > 0) {
+            return "Rui ro trung binh: nhan vien dang co task bi blocker.";
+        }
+        if (candidate.workloadLevel() == WorkloadLevel.HIGH) {
+            return "Rui ro trung binh: workload dang cao.";
+        }
+        return "Rui ro thap: workload hien tai con kha nang nhan viec.";
     }
 
     private List<AssigneeRecommendationView> normalizeRecommendations(List<AssigneeRecommendationView> recommendations, List<AiEmployeeWorkload> candidates) {

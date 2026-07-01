@@ -43,7 +43,7 @@ from app.schemas import (
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", "120"))
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", "10"))
 MAX_LOGGED_RESPONSE_CHARS = 1000
 WORKLOAD_LEVELS = "NO_WORK, LOW, NORMAL, HIGH, OVERLOADED"
 PRIORITIES = "LOW, MEDIUM, HIGH, CRITICAL"

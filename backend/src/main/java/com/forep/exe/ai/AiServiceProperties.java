@@ -16,11 +16,11 @@ public record AiServiceProperties(
         Integer circuitBreakerOpenMillis
 ) {
     public int effectiveConnectTimeoutMillis() {
-        return connectTimeoutMillis == null ? 10_000 : connectTimeoutMillis;
+        return connectTimeoutMillis == null ? 3_000 : connectTimeoutMillis;
     }
 
     public int effectiveReadTimeoutMillis() {
-        return readTimeoutMillis == null ? 120_000 : readTimeoutMillis;
+        return readTimeoutMillis == null ? 10_000 : readTimeoutMillis;
     }
 
     public int effectiveMaxConcurrentRequests() {
@@ -35,7 +35,7 @@ public record AiServiceProperties(
         if (dedupeWaitMillis != null && dedupeWaitMillis > 0) {
             return dedupeWaitMillis;
         }
-        return effectiveConnectTimeoutMillis() + effectiveReadTimeoutMillis() + 5_000;
+        return effectiveConnectTimeoutMillis() + effectiveReadTimeoutMillis() + 1_000;
     }
 
     public int effectiveRetryAfterSeconds() {

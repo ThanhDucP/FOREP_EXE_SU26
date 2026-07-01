@@ -23,11 +23,11 @@ forep:
   ai:
     service-url: ${AI_SERVICE_URL:}
     service-token: ${AI_SERVICE_TOKEN:}
-    connect-timeout-millis: ${AI_SERVICE_CONNECT_TIMEOUT_MILLIS:10000}
-    read-timeout-millis: ${AI_SERVICE_READ_TIMEOUT_MILLIS:120000}
+    connect-timeout-millis: ${AI_SERVICE_CONNECT_TIMEOUT_MILLIS:3000}
+    read-timeout-millis: ${AI_SERVICE_READ_TIMEOUT_MILLIS:10000}
     max-concurrent-requests: ${AI_SERVICE_MAX_CONCURRENT_REQUESTS:4}
     acquire-timeout-millis: ${AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS:1000}
-    dedupe-wait-millis: ${AI_SERVICE_DEDUPE_WAIT_MILLIS:135000}
+    dedupe-wait-millis: ${AI_SERVICE_DEDUPE_WAIT_MILLIS:14000}
     retry-after-seconds: ${AI_SERVICE_RETRY_AFTER_SECONDS:15}
     circuit-breaker-failure-threshold: ${AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD:5}
     circuit-breaker-open-millis: ${AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS:60000}
