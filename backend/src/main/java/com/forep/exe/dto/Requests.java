@@ -2,16 +2,19 @@ package com.forep.exe.dto;
 
 import com.forep.exe.domain.Enums.Role;
 import com.forep.exe.domain.Enums.SeniorityLevel;
+import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
 import com.forep.exe.domain.Enums.TaskPriority;
 import com.forep.exe.domain.Enums.TaskStatus;
 import com.forep.exe.domain.Enums.UpdateType;
 import com.forep.exe.domain.Enums.UserStatus;
+import com.forep.exe.domain.Enums.WorkspaceStatus;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -23,6 +26,12 @@ public final class Requests {
     }
 
     public record LoginRequest(@Email String email, String username, @NotBlank String password) {
+    }
+
+    public record ChangePasswordRequest(
+            @NotBlank String currentPassword,
+            @NotBlank @Size(min = 8, max = 72) String newPassword
+    ) {
     }
 
     public record RegisterWorkspaceRequest(
@@ -127,5 +136,104 @@ public final class Requests {
             @NotBlank String text,
             OffsetDateTime defaultDeadline
     ) {
+    }
+
+    public record CreateSubscriptionPlanRequest(
+            @NotBlank String name,
+            @NotNull BigDecimal price,
+            @Min(1) int durationDays,
+            @Min(1) int maxUsers,
+            Integer maxWorkspaces,
+            Integer aiUsageLimit,
+            String features,
+            SubscriptionPlanStatus status
+    ) {
+    }
+
+    public record UpdateSubscriptionPlanRequest(
+            String name,
+            BigDecimal price,
+            Integer durationDays,
+            Integer maxUsers,
+            Integer maxWorkspaces,
+            Integer aiUsageLimit,
+            String features,
+            SubscriptionPlanStatus status
+    ) {
+    }
+
+    public record AdminCreateWorkspaceRequest(
+            @NotBlank String businessName,
+            @NotBlank String workspaceName,
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9]{2}$") String workspaceIdentifier,
+            @Email @NotBlank String contactEmail,
+            @NotBlank String contactPhone,
+            String businessAddress,
+            @NotNull UUID subscriptionPlanId,
+            @Min(1) int maxUsers,
+            OffsetDateTime activationDate,
+            OffsetDateTime expirationDate,
+            WorkspaceStatus status
+    ) {
+    }
+
+    public record AdminUpdateWorkspaceRequest(
+            String businessName,
+            String workspaceName,
+            @Email String contactEmail,
+            String contactPhone,
+            String businessAddress,
+            UUID subscriptionPlanId,
+            Integer maxUsers,
+            OffsetDateTime activationDate,
+            OffsetDateTime expirationDate,
+            WorkspaceStatus status
+    ) {
+    }
+
+    public record CreateBusinessOwnerRequest(
+            @NotBlank String fullName,
+            @Email @NotBlank String email,
+            String username,
+            String temporaryPassword,
+            String phone,
+            UserStatus status
+    ) {
+    }
+
+    public record WorkspaceRegistrationRequest(
+            @NotBlank String businessName,
+            @NotBlank String workspaceName,
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9]{2}$") String workspaceIdentifier,
+            @Email @NotBlank String contactEmail,
+            @NotBlank String contactPhone,
+            String businessAddress,
+            @NotNull UUID subscriptionPlanId,
+            @Min(1) Integer maxUsers,
+            @NotBlank String ownerFullName,
+            @Email @NotBlank String ownerEmail,
+            String ownerPhone,
+            @NotBlank String ownerPassword,
+            String paymentProofUrl,
+            String paymentNote
+    ) {
+    }
+
+    public record ReviewRegistrationRequest(String note) {
+    }
+
+    public record SubmitPaymentRequest(
+            @NotBlank String paymentProofUrl,
+            String paymentNote
+    ) {
+    }
+
+    public record BusinessFeedbackRequest(
+            @Min(1) @Max(5) int rating,
+            @NotBlank String content
+    ) {
+    }
+
+    public record ReviewBusinessFeedbackRequest(String supportNote) {
     }
 }

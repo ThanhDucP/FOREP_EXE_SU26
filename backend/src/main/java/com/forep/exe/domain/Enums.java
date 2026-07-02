@@ -5,7 +5,7 @@ public final class Enums {
     }
 
     public enum Role {
-        OWNER, EMPLOYEE
+        SYSTEM_ADMIN, OWNER, EMPLOYEE
     }
 
     public enum UserStatus {
@@ -40,11 +40,32 @@ public final class Enums {
         DAILY_REPORT_INSIGHTS,
         TASK_SPLIT,
         TASK_ADJUSTMENT,
+        DELAY_RISK,
         MISSING_REPORT,
         ACTION_SUGGESTION
     }
 
     public enum AiSuggestionStatus {
         GENERATED, ACCEPTED, REJECTED
+    }
+
+    public enum WorkspaceStatus {
+        PENDING_PAYMENT, ACTIVE, INACTIVE, SUSPENDED, EXPIRED
+    }
+
+    public enum SubscriptionPlanStatus {
+        ACTIVE, INACTIVE
+    }
+
+    public enum PaymentStatus {
+        PENDING, CONFIRMED, REJECTED, CORRECTION_REQUESTED
+    }
+
+    public enum RegistrationStatus {
+        SUBMITTED, PAYMENT_PENDING, PAYMENT_SUBMITTED, APPROVED, REJECTED
+    }
+
+    public enum FeedbackStatus {
+        NEW, REVIEWED
     }
 }

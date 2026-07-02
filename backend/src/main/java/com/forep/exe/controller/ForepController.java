@@ -4,20 +4,32 @@ import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.dto.Requests.AssignTaskRequest;
+import com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest;
+import com.forep.exe.dto.Requests.AdminUpdateWorkspaceRequest;
+import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
+import com.forep.exe.dto.Requests.ChangePasswordRequest;
+import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
+import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
+import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
+import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
+import com.forep.exe.dto.Requests.SubmitPaymentRequest;
+import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
 import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
+import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.UserStatus;
+import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -50,9 +62,134 @@ public class ForepController {
         return ApiResponse.ok(service.me());
     }
 
+    @PatchMapping("/auth/change-password")
+    ApiResponse<?> changePassword(@RequestBody @Valid ChangePasswordRequest request) {
+        return ApiResponse.ok(service.changePassword(request));
+    }
+
     @PostMapping("/workspaces/register")
     ApiResponse<?> registerWorkspace(@RequestBody @Valid RegisterWorkspaceRequest request) {
         return ApiResponse.ok(service.registerWorkspace(request));
+    }
+
+    @PostMapping("/workspace-registrations")
+    ApiResponse<?> submitWorkspaceRegistration(@RequestBody @Valid WorkspaceRegistrationRequest request) {
+        return ApiResponse.ok(service.submitWorkspaceRegistration(request));
+    }
+
+    @GetMapping("/subscription-plans")
+    ApiResponse<?> publicSubscriptionPlans() {
+        return ApiResponse.ok(service.publicSubscriptionPlans());
+    }
+
+    @PatchMapping("/workspace-registrations/{id}/payment")
+    ApiResponse<?> submitRegistrationPayment(@PathVariable UUID id, @RequestBody @Valid SubmitPaymentRequest request) {
+        return ApiResponse.ok(service.submitRegistrationPayment(id, request));
+    }
+
+    @GetMapping("/admin/workspaces")
+    ApiResponse<?> adminWorkspaces() {
+        return ApiResponse.ok(service.adminWorkspaces());
+    }
+
+    @PostMapping("/admin/workspaces")
+    ApiResponse<?> adminCreateWorkspace(@RequestBody @Valid AdminCreateWorkspaceRequest request) {
+        return ApiResponse.ok(service.adminCreateWorkspace(request));
+    }
+
+    @GetMapping("/admin/workspaces/{id}")
+    ApiResponse<?> adminWorkspace(@PathVariable UUID id) {
+        return ApiResponse.ok(service.adminWorkspace(id));
+    }
+
+    @PutMapping("/admin/workspaces/{id}")
+    ApiResponse<?> adminUpdateWorkspace(@PathVariable UUID id, @RequestBody @Valid AdminUpdateWorkspaceRequest request) {
+        return ApiResponse.ok(service.adminUpdateWorkspace(id, request));
+    }
+
+    @PatchMapping("/admin/workspaces/{id}/status")
+    ApiResponse<?> adminUpdateWorkspaceStatus(@PathVariable UUID id, @RequestParam WorkspaceStatus status) {
+        return ApiResponse.ok(service.adminUpdateWorkspaceStatus(id, status));
+    }
+
+    @GetMapping("/admin/workspaces/{id}/business-owners")
+    ApiResponse<?> adminBusinessOwners(@PathVariable UUID id) {
+        return ApiResponse.ok(service.adminBusinessOwners(id));
+    }
+
+    @PostMapping("/admin/workspaces/{id}/business-owners")
+    ApiResponse<?> adminCreateBusinessOwner(@PathVariable UUID id, @RequestBody @Valid CreateBusinessOwnerRequest request) {
+        return ApiResponse.ok(service.adminCreateBusinessOwner(id, request));
+    }
+
+    @PatchMapping("/admin/business-owners/{id}/reset-password")
+    ApiResponse<?> adminResetOwnerPassword(@PathVariable UUID id) {
+        return ApiResponse.ok(service.adminResetOwnerPassword(id));
+    }
+
+    @PatchMapping("/admin/business-owners/{id}/status")
+    ApiResponse<?> adminUpdateOwnerStatus(@PathVariable UUID id, @RequestParam UserStatus status) {
+        return ApiResponse.ok(service.adminUpdateOwnerStatus(id, status));
+    }
+
+    @GetMapping("/admin/subscription-plans")
+    ApiResponse<?> subscriptionPlans() {
+        return ApiResponse.ok(service.subscriptionPlans());
+    }
+
+    @PostMapping("/admin/subscription-plans")
+    ApiResponse<?> createSubscriptionPlan(@RequestBody @Valid CreateSubscriptionPlanRequest request) {
+        return ApiResponse.ok(service.createSubscriptionPlan(request));
+    }
+
+    @PutMapping("/admin/subscription-plans/{id}")
+    ApiResponse<?> updateSubscriptionPlan(@PathVariable UUID id, @RequestBody @Valid UpdateSubscriptionPlanRequest request) {
+        return ApiResponse.ok(service.updateSubscriptionPlan(id, request));
+    }
+
+    @GetMapping("/admin/workspace-registrations")
+    ApiResponse<?> adminWorkspaceRegistrations() {
+        return ApiResponse.ok(service.adminWorkspaceRegistrations());
+    }
+
+    @PatchMapping("/admin/workspace-registrations/{id}/approve")
+    ApiResponse<?> approveWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
+    }
+
+    @PatchMapping("/admin/workspace-registrations/{id}/confirm-payment")
+    ApiResponse<?> confirmRegistrationPayment(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.confirmRegistrationPayment(id, request));
+    }
+
+    @PatchMapping("/admin/workspace-registrations/{id}/request-payment-correction")
+    ApiResponse<?> requestRegistrationPaymentCorrection(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.requestRegistrationPaymentCorrection(id, request));
+    }
+
+    @PatchMapping("/admin/workspace-registrations/{id}/reject")
+    ApiResponse<?> rejectWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.rejectWorkspaceRegistration(id, request));
+    }
+
+    @GetMapping("/admin/monitoring")
+    ApiResponse<?> adminMonitoring() {
+        return ApiResponse.ok(service.adminMonitoring());
+    }
+
+    @GetMapping("/admin/business-feedback")
+    ApiResponse<?> adminBusinessFeedback() {
+        return ApiResponse.ok(service.adminBusinessFeedback());
+    }
+
+    @PatchMapping("/admin/business-feedback/{id}/review")
+    ApiResponse<?> reviewBusinessFeedback(@PathVariable UUID id, @RequestBody(required = false) ReviewBusinessFeedbackRequest request) {
+        return ApiResponse.ok(service.reviewBusinessFeedback(id, request));
+    }
+
+    @PostMapping("/business-feedback")
+    ApiResponse<?> submitBusinessFeedback(@RequestBody @Valid BusinessFeedbackRequest request) {
+        return ApiResponse.ok(service.submitBusinessFeedback(request));
     }
 
     @GetMapping("/workspaces/current")
@@ -88,6 +225,11 @@ public class ForepController {
     @PatchMapping("/employees/{id}/status")
     ApiResponse<?> updateEmployeeStatus(@PathVariable UUID id, @RequestParam UserStatus status) {
         return ApiResponse.ok(service.updateEmployeeStatus(id, status));
+    }
+
+    @PatchMapping("/employees/{id}/reset-password")
+    ApiResponse<?> resetEmployeePassword(@PathVariable UUID id) {
+        return ApiResponse.ok(service.resetEmployeePassword(id));
     }
 
     @GetMapping("/tasks")

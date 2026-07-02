@@ -246,7 +246,9 @@ Auth:
 
 Workspace:
 
-- POST `/workspaces/register`
+- GET `/subscription-plans`
+- POST `/workspace-registrations`
+- PATCH `/workspace-registrations/{id}/payment`
 - GET `/workspaces/current`
 - PUT `/workspaces/current`
 

@@ -1,7 +1,11 @@
 package com.forep.exe.persistence;
 
+import com.forep.exe.domain.Enums.PaymentStatus;
+import com.forep.exe.domain.Enums.WorkspaceStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 
 import java.time.OffsetDateTime;
@@ -20,6 +24,21 @@ public class WorkspaceEntity extends BaseEntity {
     @Column(nullable = false)
     private int nextEmployeeNumber = 1;
     private UUID ownerId;
+    private UUID subscriptionPlanId;
+    private String businessName;
+    private String contactEmail;
+    private String contactPhone;
+    @Column(nullable = false)
+    private int maxUsers = 50;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private WorkspaceStatus status = WorkspaceStatus.ACTIVE;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private PaymentStatus paymentStatus = PaymentStatus.CONFIRMED;
+    private OffsetDateTime activatedAt;
+    private OffsetDateTime expiresAt;
+    private OffsetDateTime lastActivityAt;
     @Column(nullable = false)
     private OffsetDateTime createdAt;
 
@@ -70,6 +89,46 @@ public class WorkspaceEntity extends BaseEntity {
     public void setOwnerId(UUID ownerId) {
         this.ownerId = ownerId;
     }
+
+    public UUID getSubscriptionPlanId() { return subscriptionPlanId; }
+
+    public void setSubscriptionPlanId(UUID subscriptionPlanId) { this.subscriptionPlanId = subscriptionPlanId; }
+
+    public String getBusinessName() { return businessName; }
+
+    public void setBusinessName(String businessName) { this.businessName = businessName; }
+
+    public String getContactEmail() { return contactEmail; }
+
+    public void setContactEmail(String contactEmail) { this.contactEmail = contactEmail; }
+
+    public String getContactPhone() { return contactPhone; }
+
+    public void setContactPhone(String contactPhone) { this.contactPhone = contactPhone; }
+
+    public int getMaxUsers() { return maxUsers; }
+
+    public void setMaxUsers(int maxUsers) { this.maxUsers = maxUsers; }
+
+    public WorkspaceStatus getStatus() { return status; }
+
+    public void setStatus(WorkspaceStatus status) { this.status = status; }
+
+    public PaymentStatus getPaymentStatus() { return paymentStatus; }
+
+    public void setPaymentStatus(PaymentStatus paymentStatus) { this.paymentStatus = paymentStatus; }
+
+    public OffsetDateTime getActivatedAt() { return activatedAt; }
+
+    public void setActivatedAt(OffsetDateTime activatedAt) { this.activatedAt = activatedAt; }
+
+    public OffsetDateTime getExpiresAt() { return expiresAt; }
+
+    public void setExpiresAt(OffsetDateTime expiresAt) { this.expiresAt = expiresAt; }
+
+    public OffsetDateTime getLastActivityAt() { return lastActivityAt; }
+
+    public void setLastActivityAt(OffsetDateTime lastActivityAt) { this.lastActivityAt = lastActivityAt; }
 
     public OffsetDateTime getCreatedAt() {
         return createdAt;

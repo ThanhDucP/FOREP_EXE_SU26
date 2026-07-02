@@ -5,7 +5,7 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 ## 1. Nguyen tac tich hop API
 
 - Front-end chi goi Backend API, khong goi truc tiep AI Service.
-- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, `POST /workspaces/register`, can header `Authorization: Bearer <token>`.
+- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, `GET /subscription-plans`, `POST /workspace-registrations`, `PATCH /workspace-registrations/{id}/payment`, can header `Authorization: Bearer <token>`.
 - Moi response chuan co dang:
 
 ```json
@@ -20,14 +20,38 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 - Luu token sau login. Khuyen nghi dung memory state + `localStorage` neu can giu dang nhap sau reload.
 - Date-time gui len backend dung ISO 8601 offset, vi du `2026-06-29T17:00:00+07:00`.
 - Date cho daily report dung `YYYY-MM-DD`.
-- Backend phan quyen theo role `OWNER` va `EMPLOYEE`; UI phai an hanh dong khong dung role.
+- Backend phan quyen theo role `SYSTEM_ADMIN`, `OWNER` va `EMPLOYEE`; UI phai an hanh dong khong dung role.
 
 ## 2. Enum dung trong UI
 
 ### Role
 
+- `SYSTEM_ADMIN`: quan tri nen tang, goi subscription, thanh toan, workspace va business owner account khoi tao.
 - `OWNER`: chu workspace, quan ly nhan vien, task, analytics, AI.
 - `EMPLOYEE`: nhan vien, xem task duoc giao, cap nhat tien do, gui daily report.
+
+### WorkspaceStatus
+
+- `PENDING_PAYMENT`: cho thanh toan.
+- `ACTIVE`: dang hoat dong.
+- `INACTIVE`: chua kich hoat.
+- `SUSPENDED`: bi tam dung.
+- `EXPIRED`: het han.
+
+### PaymentStatus
+
+- `PENDING`: cho admin kiem tra.
+- `CONFIRMED`: da xac nhan thanh toan.
+- `REJECTED`: thanh toan bi tu choi.
+- `CORRECTION_REQUESTED`: can bo sung/sua thong tin thanh toan.
+
+### RegistrationStatus
+
+- `SUBMITTED`: da gui thong tin.
+- `PAYMENT_PENDING`: cho thanh toan.
+- `PAYMENT_SUBMITTED`: da gui minh chung thanh toan.
+- `APPROVED`: da duyet va tao workspace.
+- `REJECTED`: bi tu choi.
 
 ### UserStatus
 
@@ -82,6 +106,7 @@ type ApiResponse<T> = {
 type Workspace = {
   id: string;
   name: string;
+  shortCode: string | null;
   logo: string | null;
   address: string | null;
   ownerId: string;
@@ -94,9 +119,17 @@ type User = {
   fullName: string;
   email: string;
   phone: string | null;
+  username: string | null;
+  employeeCode: string | null;
+  initialPassword: string | null;
   role: 'OWNER' | 'EMPLOYEE';
   avatar: string | null;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
+  jobTitle: string | null;
+  seniorityLevel: 'INTERN' | 'JUNIOR' | 'MIDDLE' | 'SENIOR' | 'LEAD' | null;
+  skillRating: 1 | 2 | 3 | 4 | 5 | null;
+  yearsOfExperience: number | null;
+  skills: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -175,8 +208,69 @@ type AssigneeRecommendation = {
   fullName: string;
   score: number;
   workloadLevel: Workload['workloadLevel'];
+  requiredRole: string | null;
+  roleFit: 'STRONG' | 'PARTIAL' | 'UNCERTAIN' | null;
+  roleFitReason: string | null;
   reason: string;
   risk: string;
+};
+
+type SubscriptionPlan = {
+  id: string;
+  name: string;
+  price: number;
+  durationDays: number;
+  maxUsers: number;
+  maxWorkspaces: number | null;
+  aiUsageLimit: number | null;
+  features: string | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  createdAt: string;
+  updatedAt: string;
+};
+
+type WorkspaceRegistration = {
+  id: string;
+  businessName: string;
+  workspaceName: string;
+  workspaceIdentifier: string;
+  contactEmail: string;
+  contactPhone: string;
+  businessAddress: string | null;
+  subscriptionPlanId: string;
+  maxUsers: number;
+  ownerFullName: string;
+  ownerEmail: string;
+  ownerPhone: string | null;
+  paymentProofUrl: string | null;
+  paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
+  registrationStatus: 'SUBMITTED' | 'PAYMENT_PENDING' | 'PAYMENT_SUBMITTED' | 'APPROVED' | 'REJECTED';
+  workspaceId: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PlatformWorkspace = {
+  id: string;
+  businessName: string | null;
+  workspaceName: string;
+  workspaceIdentifier: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  businessAddress: string | null;
+  subscriptionPlanId: string | null;
+  maxUsers: number;
+  currentUsers: number;
+  status: 'PENDING_PAYMENT' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'EXPIRED';
+  paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
+  ownerId: string | null;
+  activatedAt: string | null;
+  expiresAt: string | null;
+  lastActivityAt: string | null;
+  createdAt: string;
 };
 ```
 
@@ -195,21 +289,68 @@ type AssigneeRecommendation = {
 
 | Man hinh | Method | Path | Body | Data tra ve |
 |---|---|---|---|---|
-| Login | POST | `/auth/login` | `{ email, password }` | `{ token, user }` |
+| Login | POST | `/auth/login` | `{ email, password }` hoac `{ username, password }` | `{ token, user }` |
 | Logout | POST | `/auth/logout` | none | `{ message }` |
 | Current user | GET | `/auth/me` | none | `User` |
+| Doi mat khau | PATCH | `/auth/change-password` | `{ currentPassword, newPassword }` | `User` |
 
 `POST /auth/logout` hien chi tra message, khong revoke token o server. Front-end phai tu xoa token local.
+`PATCH /auth/change-password` can token dang nhap, dung cho employee tu doi mat khau trong trang tai khoan/bao mat. Sau khi thanh cong, UI nen xoa password tam dang hien thi trong local state neu co va thong bao "Doi mat khau thanh cong".
 
 ### Workspace
 
 | Chuc nang | Method | Path | Body | Quyen |
 |---|---|---|---|---|
-| Dang ky workspace | POST | `/workspaces/register` | `{ workspaceName, address, ownerFullName, ownerEmail, ownerPhone, ownerPassword }` | public |
+| Danh sach goi dang ky | GET | `/subscription-plans` | none | public |
+| Gui ho so dang ky workspace | POST | `/workspace-registrations` | `{ businessName, workspaceName, workspaceIdentifier, contactEmail, contactPhone, businessAddress, subscriptionPlanId, ownerFullName, ownerEmail, ownerPhone, ownerPassword, paymentProofUrl, paymentNote }` | public |
+| Bo sung minh chung thanh toan | PATCH | `/workspace-registrations/{id}/payment` | `{ paymentProofUrl, paymentNote }` | public |
 | Xem workspace | GET | `/workspaces/current` | none | OWNER |
-| Sua workspace | PUT | `/workspaces/current` | `{ name, logo, address }` | OWNER |
+| Sua workspace | PUT | `/workspaces/current` | `{ name, shortCode, logo, address }` | OWNER |
 
-Sau khi register thanh cong, chuyen sang `/login`. Backend khong tra token o API register.
+Khong dung `/workspaces/register` cho user public nua. Endpoint nay da bi chan de tranh tao workspace/account khi chua thanh toan.
+
+Flow dang ky workspace public:
+
+1. Hien thi trang pricing tu `GET /subscription-plans`, moi goi can co ten, gia, thoi han, gioi han user, gioi han AI va danh sach tinh nang theo cach trinh bay card/plan nhu cac san pham subscription.
+2. User chon goi va nhap thong tin doanh nghiep, workspace, owner account dau tien.
+   UI khong cho user tu nhap `maxUsers`; backend lay gioi han user tu goi subscription da chon.
+3. UI hien thi huong dan chuyen khoan/payment instructions cua nen tang.
+4. User upload/nhap `paymentProofUrl` va `paymentNote`.
+5. UI goi `POST /workspace-registrations`; neu user bo sung sau thi goi `PATCH /workspace-registrations/{id}/payment`.
+6. Trang ket qua hien thi trang thai `PAYMENT_PENDING` hoac `PAYMENT_SUBMITTED`, khong cho login owner.
+7. Chi khi System Admin confirm payment va approve, backend moi tao workspace + tai khoan OWNER.
+8. Sau khi duoc approve, Business Owner moi nhan thong tin va dang nhap.
+
+Neu khong thanh toan, user public khong tao duoc workspace/account. Chi System Admin moi duoc tao workspace truc tiep bang API admin.
+
+### System Admin
+
+Tat ca endpoint duoi day chi danh cho `SYSTEM_ADMIN`.
+
+| Chuc nang | Method | Path | Body hoac query |
+|---|---|---|---|
+| Monitoring platform | GET | `/admin/monitoring` | none |
+| Danh sach workspace | GET | `/admin/workspaces` | none |
+| Tao workspace truc tiep | POST | `/admin/workspaces` | `{ businessName, workspaceName, workspaceIdentifier, contactEmail, contactPhone, businessAddress, subscriptionPlanId, maxUsers, activationDate, expirationDate, status }` |
+| Chi tiet workspace | GET | `/admin/workspaces/{id}` | none |
+| Sua workspace | PUT | `/admin/workspaces/{id}` | `{ businessName, workspaceName, contactEmail, contactPhone, businessAddress, subscriptionPlanId, maxUsers, activationDate, expirationDate, status }` |
+| Doi trang thai workspace | PATCH | `/admin/workspaces/{id}/status?status=ACTIVE` | query `status` |
+| Danh sach Business Owner | GET | `/admin/workspaces/{id}/business-owners` | none |
+| Tao Business Owner | POST | `/admin/workspaces/{id}/business-owners` | `{ fullName, email, username, temporaryPassword, phone, status }` |
+| Reset password owner | PATCH | `/admin/business-owners/{id}/reset-password` | none |
+| Doi status owner | PATCH | `/admin/business-owners/{id}/status?status=ACTIVE` | query `status` |
+| Danh sach goi | GET | `/admin/subscription-plans` | none |
+| Tao goi | POST | `/admin/subscription-plans` | `{ name, price, durationDays, maxUsers, maxWorkspaces, aiUsageLimit, features, status }` |
+| Sua goi | PUT | `/admin/subscription-plans/{id}` | `{ name, price, durationDays, maxUsers, maxWorkspaces, aiUsageLimit, features, status }` |
+| Danh sach ho so dang ky | GET | `/admin/workspace-registrations` | none |
+| Xac nhan thanh toan | PATCH | `/admin/workspace-registrations/{id}/confirm-payment` | `{ note }` |
+| Yeu cau sua thanh toan | PATCH | `/admin/workspace-registrations/{id}/request-payment-correction` | `{ note }` |
+| Duyet dang ky, tao workspace + owner | PATCH | `/admin/workspace-registrations/{id}/approve` | `{ note }` |
+| Tu choi dang ky | PATCH | `/admin/workspace-registrations/{id}/reject` | `{ note }` |
+| Danh sach feedback | GET | `/admin/business-feedback` | none |
+| Review feedback | PATCH | `/admin/business-feedback/{id}/review` | `{ supportNote }` |
+
+UI System Admin khong duoc hien task detail, task assignment, employee workload noi bo, daily report chi tiet hay thao tac nghiep vu trong workspace.
 
 ### Employees
 
@@ -218,12 +359,14 @@ Tat ca endpoint employees chi danh cho OWNER.
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
 | Danh sach nhan vien | GET | `/employees` | none |
-| Tao nhan vien | POST | `/employees` | `{ fullName, email, phone }` |
+| Tao nhan vien | POST | `/employees` | `{ fullName, email, phone, jobTitle, seniorityLevel, skillRating, yearsOfExperience, skills }` |
 | Chi tiet nhan vien | GET | `/employees/{id}` | none |
-| Sua nhan vien | PUT | `/employees/{id}` | `{ fullName, email, phone, status }` |
+| Sua nhan vien | PUT | `/employees/{id}` | `{ fullName, email, phone, status, jobTitle, seniorityLevel, skillRating, yearsOfExperience, skills }` |
 | Doi trang thai | PATCH | `/employees/{id}/status?status=ACTIVE` | query `status` |
+| Reset mat khau | PATCH | `/employees/{id}/reset-password` | none |
 
-Backend tao nhan vien voi password random, hien chua co API moi/doi password cho employee. UI can ghi chu van hanh hoac cho backend bo sung flow invite/reset password.
+Backend tu sinh `employeeCode` dang `SExxxx`, `username`, va `initialPassword` bang chinh `employeeCode`. UI can hien thi/lap danh sach credential nay cho OWNER sau khi tao nhan vien.
+Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; UI chi hien thi gia tri nay cho OWNER trong modal ket qua reset.
 
 ### Tasks
 
@@ -354,7 +497,7 @@ Sau login, redirect theo role:
 
 - App shell co sidebar desktop, drawer hoac bottom navigation tren mobile.
 - Header co ten workspace, nut notifications, avatar/user menu.
-- User menu gom `Thong tin ca nhan` va `Dang xuat`.
+- User menu gom `Thong tin ca nhan`, `Doi mat khau` va `Dang xuat`.
 - Khi token het han, hien toast `Phien dang nhap da het han` roi chuyen ve `/login`.
 
 Navigation OWNER:
@@ -381,7 +524,7 @@ Navigation EMPLOYEE:
 
 Fields:
 
-- Email: required, email.
+- Email hoac username: required.
 - Password: required.
 
 Buttons:
@@ -392,7 +535,7 @@ Buttons:
 States:
 
 - Loading khi submit.
-- Inline error neu sai email/password.
+- Inline error neu sai tai khoan/password.
 - Disable button khi form invalid hoac dang submit.
 
 ### Workspace registration
@@ -400,6 +543,7 @@ States:
 Fields:
 
 - Ten workspace: required.
+- Ma viet tat to chuc: required, dung 2 ky tu chu/so, vi du `SE`.
 - Dia chi: optional.
 - Ho ten owner: required.
 - Email owner: required, email.
@@ -408,7 +552,7 @@ Fields:
 
 Buttons:
 
-- `Tao workspace`: submit `POST /workspaces/register`.
+- `Tao workspace`: submit `POST /workspace-registrations`.
 - `Da co tai khoan`: chuyen login.
 
 ### Owner dashboard
@@ -441,6 +585,9 @@ Table columns:
 - Ho ten
 - Email
 - Phone
+- Username
+- Ma nhan vien
+- Mat khau ban dau
 - Status
 - CreatedAt
 - Actions
@@ -458,15 +605,25 @@ Create form:
 - fullName required.
 - email required.
 - phone optional.
+- jobTitle optional.
+- seniorityLevel optional.
+- skillRating optional, 1-5.
+- yearsOfExperience optional, >= 0.
+- skills optional.
 
 Edit form:
 
 - fullName required.
 - email required.
 - phone optional.
+- jobTitle optional.
+- seniorityLevel optional.
+- skillRating optional, 1-5.
+- yearsOfExperience optional, >= 0.
+- skills optional.
 - status select.
 
-Sau create/update/status, refetch `GET /employees`.
+Sau create thanh cong, hien `username`, `employeeCode`, `initialPassword` de OWNER gui cho nhan vien. Sau create/update/status, refetch `GET /employees`.
 
 ### Task list
 
@@ -521,6 +678,7 @@ Buttons:
 AI recommendation panel:
 
 - Hien thi score, workloadLevel, reason, risk.
+- Neu response co `requiredRole`, `roleFit`, `roleFitReason`, hien thi de owner thay AI da doi chieu vai tro chuyen mon voi task.
 - Nut `Chon nguoi nay` set `assigneeId`.
 - Khong auto-submit task khi chon goi y.
 
@@ -637,6 +795,10 @@ UI sections:
 - Owner action suggestions with `actionType`, target entity, reason, confidence trong khoang `0..1`.
 - AI suggestion history.
 
+Fallback note: `recommend-assignee` can return top-3 rule-based recommendations when LLM/provider times out; the list shape is unchanged and each item marks fallback in `reason`/`risk`. `workload-summary`, `delay-risks`, `action-suggestions`, `daily-reports/insights`, and `daily-reports/missing` can also return rule-based data when LLM/provider fails. These card responses keep their normal keys and include `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`; show this as fallback/source metadata, not as confirmed LLM output.
+
+Overload note: AI endpoints without fallback can return HTTP 429 with `AI_RATE_LIMITED` when too many AI calls are running. UI should show a retry-later message, keep the button disabled briefly, and avoid immediate auto-retry loops.
+
 Buttons:
 
 - `Tai lai`: refetch tung section.
@@ -648,12 +810,14 @@ Buttons:
 | Button | Man hinh | Role | API | Disabled khi |
 |---|---|---|---|---|
 | Dang nhap | Login | Public | `POST /auth/login` | form invalid/loading |
-| Tao workspace | Register | Public | `POST /workspaces/register` | form invalid/loading |
+| Tao workspace | Register | Public | `POST /workspace-registrations` | form invalid/loading |
 | Dang xuat | User menu | Authenticated | `POST /auth/logout` | loading |
+| Doi mat khau | Profile/User menu | Authenticated | `PATCH /auth/change-password` | form invalid/loading |
 | Them nhan vien | Employees | OWNER | none, mo modal | none |
 | Luu nhan vien | Employee modal | OWNER | `POST /employees` hoac `PUT /employees/{id}` | form invalid/loading |
 | Kich hoat | Employees | OWNER | `PATCH /employees/{id}/status?status=ACTIVE` | user already ACTIVE/loading |
 | Tam ngung | Employees | OWNER | `PATCH /employees/{id}/status?status=INACTIVE` | user already INACTIVE/loading |
+| Reset mat khau nhan vien | Employees | OWNER | `PATCH /employees/{id}/reset-password` | loading |
 | Tao task | Tasks/Dashboard | OWNER | none, route create | no active employee |
 | Luu task | Task form | OWNER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
 | Goi y nguoi nhan | Task form | OWNER | `POST /ai/recommend-assignee` | thieu title/requirements/deadline/loading |

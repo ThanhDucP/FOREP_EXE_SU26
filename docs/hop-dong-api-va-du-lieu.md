@@ -21,6 +21,7 @@ Mô hình MVP: Workspace + OWNER + EMPLOYEE.
 {
   "id": "uuid",
   "name": "Shop ABC",
+  "shortCode": "SE",
   "logo": "/files/logo.png",
   "address": "Quận 1, TP. Hồ Chí Minh",
   "ownerId": "uuid",
@@ -37,9 +38,17 @@ Mô hình MVP: Workspace + OWNER + EMPLOYEE.
   "fullName": "Nguyễn Văn A",
   "email": "a@example.com",
   "phone": "0900000000",
+  "username": "anvnse0001",
+  "employeeCode": "SE0001",
+  "initialPassword": "SE0001",
   "role": "EMPLOYEE",
   "avatar": null,
   "status": "ACTIVE",
+  "jobTitle": "Frontend Developer",
+  "seniorityLevel": "MIDDLE",
+  "skillRating": 4,
+  "yearsOfExperience": 3,
+  "skills": "React, TypeScript, UI",
   "createdAt": "2026-06-24T09:00:00Z",
   "updatedAt": "2026-06-24T09:00:00Z"
 }
@@ -236,6 +245,36 @@ Dung cho `/ai/business-summary/daily`, `/weekly`, `/monthly`.
       "title": "Follow-up task quá hạn",
       "reason": "Task quá hạn và tiến độ còn thấp.",
       "confidence": 0.9
+    }
+  ]
+}
+```
+
+### AIFallbackMetadata
+
+Ap dung cho `/ai/workload-summary`, `/ai/delay-risks`, `/ai/action-suggestions`, `/ai/daily-reports/insights`, `/ai/daily-reports/missing` khi LLM/provider fail nhung backend tao du lieu rule-based de dashboard khong chet card.
+
+```json
+{
+  "source": "RULE_BASED_FALLBACK",
+  "aiProviderFailed": true,
+  "fallbackReason": "Gemini and Groq both failed"
+}
+```
+
+### AIRateLimitError
+
+Dung khi backend dang co qua nhieu AI call dang chay. Rieng `/ai/recommend-assignee`, `/ai/workload-summary`, `/ai/delay-risks`, `/ai/action-suggestions`, `/ai/daily-reports/insights`, `/ai/daily-reports/missing` se uu tien fallback rule-based thay vi tra loi nay.
+
+```json
+{
+  "data": null,
+  "meta": {},
+  "errors": [
+    {
+      "code": "AI_RATE_LIMITED",
+      "message": "AI dang xu ly qua nhieu yeu cau. Vui long thu lai sau 15 giay.",
+      "field": null
     }
   ]
 }

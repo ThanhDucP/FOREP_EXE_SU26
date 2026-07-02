@@ -10,11 +10,16 @@ Backend expose API MVP theo mo hinh Workspace + OWNER + EMPLOYEE. Du lieu duoc l
 - POST `/auth/logout`
 - GET `/auth/me`
 
+Login chap nhan email hoac username. Employee username duoc tao tu ten nhan vien + chu cai dau ho/ten dem + employeeCode; password ban dau bang employeeCode.
+
 ## Workspace
 
-- POST `/workspaces/register`
+- POST `/workspace-registrations`
+- PATCH `/workspace-registrations/{id}/payment`
 - GET `/workspaces/current`
 - PUT `/workspaces/current`
+
+Workspace register bat buoc co `shortCode` gom 2 ky tu chu/so, vi day la tien to tao ma nhan vien.
 
 ## Employees
 
@@ -23,6 +28,8 @@ Backend expose API MVP theo mo hinh Workspace + OWNER + EMPLOYEE. Du lieu duoc l
 - GET `/employees/{id}`
 - PUT `/employees/{id}`
 - PATCH `/employees/{id}/status?status=ACTIVE|INACTIVE|INVITED`
+
+Khi tao employee, backend tu sinh `employeeCode` dang `{shortCode}{0001..1000}`, `username`, `initialPassword`; moi workspace gioi han 1000 employee.
 
 ## Tasks
 
@@ -75,8 +82,28 @@ Current behavior:
 
 - If `AI_SERVICE_URL` and `AI_SERVICE_TOKEN` are configured and AI service is reachable, backend calls AI service.
 - Weekly/monthly business summary call LLM through `/internal/ai/business-summary`; they are not internal rule summaries.
-- Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, co `candidateScore` va `scoreComponents`; AI chi sinh reason/risk va output bi validate lai.
-- AI endpoints do not return mock/rule-based fallback. If AI providers fail, backend returns JSON error with HTTP 502:
+- Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, co `candidateScore` va `scoreComponents`; AI tu nhan dien `requiredRole`, `roleFit`, `roleFitReason` tu title/requirements va profile ung vien, sau do backend validate lai employeeId/fullName/workload/score theo candidate input.
+- Backend enforce `aiUsageLimit` theo goi subscription hien tai bang so luong record `ai_suggestions` trong ky kich hoat workspace. Khi het quota, backend chan truoc khi goi AI.
+- Backend protects AI providers with in-flight request dedupe, a global concurrency limiter, and a circuit breaker. Tunable env vars: `AI_SERVICE_MAX_CONCURRENT_REQUESTS`, `AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS`, `AI_SERVICE_DEDUPE_WAIT_MILLIS`, `AI_SERVICE_RETRY_AFTER_SECONDS`, `AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS`.
+- `POST /ai/recommend-assignee` returns deterministic top-3 fallback from backend `candidateScore` if AI providers timeout/fail. Response shape stays the same; fallback is marked in each item's `reason`/`risk`.
+- The AI cards `GET /ai/workload-summary`, `GET /ai/delay-risks`, `GET /ai/action-suggestions`, `GET /ai/daily-reports/insights`, and `GET /ai/daily-reports/missing` return deterministic rule-based fallback when AI providers fail. Fallback payload keeps the normal response shape and adds `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`.
+- Other AI endpoints do not return mock/rule-based fallback. If AI capacity is exhausted, backend returns HTTP 429:
+
+```json
+{
+  "data": null,
+  "meta": {},
+  "errors": [
+    {
+      "code": "AI_RATE_LIMITED",
+      "message": "AI dang xu ly qua nhieu yeu cau. Vui long thu lai sau 15 giay.",
+      "field": null
+    }
+  ]
+}
+```
+
+- If AI providers fail, backend returns JSON error with HTTP 502:
 
 ```json
 {

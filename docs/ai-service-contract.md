@@ -50,9 +50,65 @@ Request employee item co them:
   "estimatedWorkload": 6,
   "workloadLevel": "LOW",
   "status": "ACTIVE",
+  "jobTitle": "Frontend Developer",
+  "seniorityLevel": "MIDDLE",
+  "skillRating": 4,
+  "yearsOfExperience": 3,
+  "skills": "React, TypeScript, UI",
   "candidateScore": 85,
   "scoreComponents": {
-    "candidateScore": 85
+    "candidateScore": 85,
+    "profilePenalty": 6,
+    "taskProfileMatchScore": 8
+  }
+}
+```
+
+Timeout/provider config:
+
+- Backend -> AI Service connect timeout: `AI_SERVICE_CONNECT_TIMEOUT_MILLIS`, mac dinh `3000`.
+- Backend -> AI Service read timeout: `AI_SERVICE_READ_TIMEOUT_MILLIS`, mac dinh `10000`.
+- AI Service -> provider timeout: `AI_PROVIDER_TIMEOUT_SECONDS`, mac dinh `10`.
+- Cac timeout nay phai nho hon frontend axios timeout 15000ms de backend tra duoc fallback/error chuan truoc khi browser tu cat request.
+- Provider order: `AI_PROVIDER_ORDER`, mac dinh `GEMINI,GROQ`.
+- Gemini model nen cau hinh bang `AI_GEMINI_MODEL`; fallback tuong thich `GEMINI_MODEL`; deploy mac dinh `gemini-2.5-flash`.
+- Groq model nen cau hinh bang `AI_GROQ_MODEL`; fallback tuong thich `GROQ_MODEL`; deploy mac dinh `llama-3.3-70b-versatile`.
+- Provider retry/cooldown/cache: `AI_PROVIDER_MAX_RETRIES`, `AI_PROVIDER_COOLDOWN_SECONDS`, `AI_INSIGHT_CACHE_TTL_SECONDS`.
+
+Provider error mapping:
+
+- Gemini/Groq quota `429` hoac Gemini `RESOURCE_EXHAUSTED`: HTTP `429`, code `AI_QUOTA_EXCEEDED`.
+- Groq/Gemini `403`, gom Groq code `1010`: HTTP `503`, code `AI_PROVIDER_FORBIDDEN`.
+- Tat ca provider khong kha dung: HTTP `503`, code `AI_PROVIDERS_UNAVAILABLE`.
+- Timeout provider: HTTP `504`, code `AI_PROVIDER_TIMEOUT`.
+- Response provider khong parse duoc JSON: HTTP `502`, code `AI_INVALID_RESPONSE`.
+
+Error response example:
+
+```json
+{
+  "code": "AI_PROVIDERS_UNAVAILABLE",
+  "message": "All AI providers are currently unavailable.",
+  "details": {
+    "feature": "DAILY_REPORT_INSIGHTS",
+    "providerErrors": [
+      {
+        "provider": "GEMINI",
+        "model": "gemini-2.5-flash",
+        "code": "AI_QUOTA_EXCEEDED",
+        "statusCode": 429,
+        "providerStatus": "RESOURCE_EXHAUSTED",
+        "retryAfterSeconds": 15
+      },
+      {
+        "provider": "GROQ",
+        "model": "llama-3.3-70b-versatile",
+        "code": "AI_PROVIDER_FORBIDDEN",
+        "statusCode": 403,
+        "providerErrorCode": "1010"
+      }
+    ],
+    "retryAfterSeconds": 15
   }
 }
 ```

@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,6 +40,9 @@ class AssigneeRecommendation(StrictModel):
     full_name: str = Field(alias="fullName")
     score: int
     workload_level: str = Field(alias="workloadLevel")
+    required_role: Optional[str] = Field(default=None, alias="requiredRole")
+    role_fit: Optional[Literal["STRONG", "PARTIAL", "UNCERTAIN"]] = Field(default=None, alias="roleFit")
+    role_fit_reason: Optional[str] = Field(default=None, alias="roleFitReason")
     reason: str
     risk: str
 

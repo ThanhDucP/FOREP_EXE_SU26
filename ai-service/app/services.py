@@ -224,13 +224,20 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
         task=(
             "Recommend up to 3 best assignees for a new task. "
             "Output schema: {\"recommendations\":[{\"employeeId\":\"string\",\"fullName\":\"string\","
-            "\"score\":0,\"workloadLevel\":\"string\",\"reason\":\"string\",\"risk\":\"string\"}]}. "
+            "\"score\":0,\"workloadLevel\":\"string\",\"requiredRole\":\"string|null\",\"roleFit\":\"STRONG|PARTIAL|UNCERTAIN\","
+            "\"roleFitReason\":\"string\",\"reason\":\"string\",\"risk\":\"string\"}]}. "
             "Do not add fields outside this schema at any nesting level. "
             "If employees is empty, return {\"recommendations\":[]}. "
             f"workloadLevel must be one of: {WORKLOAD_LEVELS}. "
             "employeeId and fullName must exactly match one ACTIVE input employee. "
             "Never invent or modify employeeId, fullName, or workloadLevel. "
             "Use candidateScore from input as score; do not recalculate score. "
+            "First infer requiredRole: the professional role and expertise required by the task from title and requirements, using natural language reasoning instead of a hardcoded role list. "
+            "Then compare requiredRole with each employee's jobTitle and skills before considering workload. "
+            "Set roleFit to STRONG only when jobTitle/skills clearly fit requiredRole, PARTIAL when related but incomplete, and UNCERTAIN when profile data is missing or ambiguous. "
+            "roleFitReason must briefly explain the comparison between requiredRole and the employee profile. "
+            "Do not recommend employees whose professional role clearly does not fit the task, even if their workload is low or candidateScore is high. "
+            "If no employee has a clearly suitable role, return the closest candidates and explain that role fit is uncertain. "
             "Use jobTitle, seniorityLevel, skillRating, yearsOfExperience, and skills to judge professional fit only when those fields are present. "
             "Never infer missing skills, seniority, job role, or experience from employee name. "
             "If professional profile fields are missing, say the recommendation is based on workload and risk data only. "
@@ -1051,7 +1058,7 @@ def _parse_recommendations(items: list[Any], payload: RecommendAssigneeRequest) 
     )
     if has_clean_alternative:
         parsed = [item for item in parsed if employees[item.employee_id].overdue_tasks < 3]
-    return sorted(parsed, key=lambda item: item.score, reverse=True)
+    return parsed
 
 
 def _parse_delay_risks(items: list[Any], payload: DelayRiskRequest) -> list[DelayRisk]:

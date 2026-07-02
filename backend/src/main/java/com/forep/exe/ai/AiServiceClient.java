@@ -63,6 +63,9 @@ public class AiServiceClient {
                         item.fullName(),
                         item.score(),
                         item.workloadLevel(),
+                        item.requiredRole(),
+                        item.roleFit(),
+                        item.roleFitReason(),
                         item.reason(),
                         item.risk()
                 ))
@@ -329,6 +332,6 @@ public class AiServiceClient {
     record AiRecommendAssigneeResponse(List<AiRecommendation> recommendations) {
     }
 
-    record AiRecommendation(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String reason, String risk) {
+    record AiRecommendation(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk) {
     }
 }
