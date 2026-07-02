@@ -463,11 +463,11 @@ public class ForepService {
             normalized = normalizeRecommendations(recommendations, candidates);
             if (normalized.isEmpty()) {
                 log.warn("AI recommend assignee returned no valid candidates; using rule-based fallback.");
-                normalized = fallbackAssigneeRecommendations(candidates, "AI returned no valid recommendations.");
+                normalized = fallbackAssigneeRecommendations(candidates);
             }
         } catch (AiProviderException exception) {
             log.warn("AI recommend assignee failed; using rule-based fallback. message={}", fallbackReason(exception));
-            normalized = fallbackAssigneeRecommendations(candidates, fallbackReason(exception));
+            normalized = fallbackAssigneeRecommendations(candidates);
         }
         saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, normalized);
         return normalized;
@@ -793,45 +793,45 @@ public class ForepService {
         return (int) matches * 4;
     }
 
-    private List<AssigneeRecommendationView> fallbackAssigneeRecommendations(List<AiEmployeeWorkload> candidates, String fallbackReason) {
+    private List<AssigneeRecommendationView> fallbackAssigneeRecommendations(List<AiEmployeeWorkload> candidates) {
         return candidates.stream()
                 .sorted(Comparator.comparing(AiEmployeeWorkload::candidateScore).reversed())
                 .limit(3)
                 .map(candidate -> new AssigneeRecommendationView(
                         UUID.fromString(candidate.employeeId()),
-                        candidate.fullName(),
+                        displayText(candidate.fullName()),
                         candidate.candidateScore(),
                         candidate.workloadLevel(),
-                        fallbackAssigneeReason(candidate, fallbackReason),
+                        fallbackAssigneeReason(candidate),
                         fallbackAssigneeRisk(candidate)
                 ))
                 .toList();
     }
 
-    private String fallbackAssigneeReason(AiEmployeeWorkload candidate, String fallbackReason) {
+    private String fallbackAssigneeReason(AiEmployeeWorkload candidate) {
         Object taskProfileMatchScore = candidate.scoreComponents().getOrDefault("taskProfileMatchScore", 0);
-        return "Rule-based fallback vi LLM chua phan hoi kip (" + fallbackReason + "). "
-                + candidate.fullName() + " dat " + candidate.candidateScore()
-                + " diem: " + candidate.openTasks() + " task mo, "
-                + candidate.overdueTasks() + " qua han, "
-                + candidate.blockedTasks() + " bi blocker, workload "
-                + candidate.workloadLevel() + ", profile match +" + taskProfileMatchScore + ".";
+        return "Hệ thống đang dùng dữ liệu hiện có để gợi ý tạm thời. "
+                + displayText(candidate.fullName()) + " đạt " + candidate.candidateScore()
+                + " điểm: " + candidate.openTasks() + " task đang mở, "
+                + candidate.overdueTasks() + " task quá hạn, "
+                + candidate.blockedTasks() + " task có vướng mắc, mức tải "
+                + vietnameseWorkloadLevel(candidate.workloadLevel()) + ", độ khớp hồ sơ +" + taskProfileMatchScore + ".";
     }
 
     private String fallbackAssigneeRisk(AiEmployeeWorkload candidate) {
         if (candidate.workloadLevel() == WorkloadLevel.OVERLOADED) {
-            return "Rui ro cao: nhan vien dang qua tai.";
+            return "Rủi ro cao: nhân viên đang quá tải.";
         }
         if (candidate.overdueTasks() > 0) {
-            return "Rui ro trung binh: nhan vien co task qua han.";
+            return "Rủi ro trung bình: nhân viên có task quá hạn.";
         }
         if (candidate.blockedTasks() > 0) {
-            return "Rui ro trung binh: nhan vien dang co task bi blocker.";
+            return "Rủi ro trung bình: nhân viên đang có task bị vướng mắc.";
         }
         if (candidate.workloadLevel() == WorkloadLevel.HIGH) {
-            return "Rui ro trung binh: workload dang cao.";
+            return "Rủi ro trung bình: tải công việc đang cao.";
         }
-        return "Rui ro thap: workload hien tai con kha nang nhan viec.";
+        return "Rủi ro thấp: tải công việc hiện tại còn khả năng nhận việc.";
     }
 
     private Map<String, Object> fallbackDailyReportInsights(List<Map<String, Object>> reportPayloads, AiProviderException exception) {
@@ -858,8 +858,8 @@ public class ForepService {
                 action.put("actionType", "REVIEW_BLOCKER");
                 action.put("targetEntityType", "DAILY_REPORT");
                 action.put("targetEntityId", stringValue(report, "reportId"));
-                action.put("title", "Xu ly blocker daily report");
-                action.put("reason", stringValue(report, "employeeName") + " bao blocker trong daily report ngay " + stringValue(report, "reportDate") + ".");
+                action.put("title", "Xử lý vướng mắc trong daily report");
+                action.put("reason", displayText(stringValue(report, "employeeName")) + " báo vướng mắc trong daily report ngày " + stringValue(report, "reportDate") + ".");
                 action.put("confidence", 0.82);
                 actionSuggestions.add(action);
             }
@@ -870,9 +870,9 @@ public class ForepService {
         }
 
         Map<String, Object> output = new LinkedHashMap<>();
-        output.put("summary", "Rule-based fallback: da nhan " + reportPayloads.size()
-                + " daily report trong 7 ngay gan nhat, " + blockers.size()
-                + " report co blocker, " + reviewedReports + " report da review.");
+        output.put("summary", "Đã nhận " + reportPayloads.size()
+                + " daily report trong 7 ngày gần nhất, " + blockers.size()
+                + " report có vướng mắc, " + reviewedReports + " report đã được review.");
         output.put("blockers", blockers);
         output.put("actionSuggestions", actionSuggestions);
         return withFallbackMetadata(output, exception);
@@ -893,7 +893,7 @@ public class ForepService {
             item.put("employeeName", stringValue(employee, "fullName"));
             item.put("reportDate", reportDate);
             item.put("daysMissing", 1);
-            item.put("recommendedAction", "Nhac nhan vien gui daily report hom nay va cap nhat blocker neu co.");
+            item.put("recommendedAction", "Nhắc nhân viên gửi daily report hôm nay và cập nhật vướng mắc nếu có.");
             item.put("confidence", 1.0);
             missingReports.add(item);
         }
@@ -918,7 +918,8 @@ public class ForepService {
         }
         String lower = value.toLowerCase(Locale.ROOT);
         if (lower.contains("block") || lower.contains("stuck") || lower.contains("fail") || lower.contains("loi")
-                || lower.contains("tre") || lower.contains("cham") || lower.contains("thieu")) {
+                || lower.contains("lỗi") || lower.contains("tre") || lower.contains("trễ") || lower.contains("cham")
+                || lower.contains("chậm") || lower.contains("thieu") || lower.contains("thiếu") || lower.contains("vướng")) {
             return value;
         }
         return "";
@@ -929,12 +930,12 @@ public class ForepService {
             return false;
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
-        return !List.of("none", "no", "na", "n/a", "khong", "khong co", "khong co blocker").contains(normalized);
+        return !List.of("none", "no", "na", "n/a", "khong", "không", "khong co", "không có", "khong co blocker", "không có blocker", "không có vướng mắc").contains(normalized);
     }
 
     private String fallbackBlockerSeverity(String value) {
         String lower = value == null ? "" : value.toLowerCase(Locale.ROOT);
-        if (lower.contains("block") || lower.contains("fail") || lower.contains("loi") || lower.contains("tre") || lower.contains("urgent")) {
+        if (lower.contains("block") || lower.contains("fail") || lower.contains("loi") || lower.contains("lỗi") || lower.contains("tre") || lower.contains("trễ") || lower.contains("urgent") || lower.contains("khẩn")) {
             return "HIGH";
         }
         return value != null && value.length() > 120 ? "MEDIUM" : "LOW";
@@ -969,23 +970,23 @@ public class ForepService {
     private Map<String, Object> fallbackWorkloadSummary(List<WorkloadView> currentWorkload, AiProviderException exception) {
         List<String> overloadedEmployees = currentWorkload.stream()
                 .filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED)
-                .map(WorkloadView::fullName)
+                .map(item -> displayText(item.fullName()))
                 .toList();
         List<String> idleEmployees = currentWorkload.stream()
                 .filter(item -> item.workloadLevel() == WorkloadLevel.NO_WORK)
-                .map(WorkloadView::fullName)
+                .map(item -> displayText(item.fullName()))
                 .toList();
         List<String> overdueEmployees = currentWorkload.stream()
                 .filter(item -> item.overdueTasks() > 0)
-                .map(WorkloadView::fullName)
+                .map(item -> displayText(item.fullName()))
                 .toList();
 
         Map<String, Object> output = new LinkedHashMap<>();
-        output.put("summary", "Rule-based fallback: " + currentWorkload.size()
-                + " nhan vien, " + overloadedEmployees.size()
-                + " qua tai, " + idleEmployees.size()
-                + " chua co task, " + overdueEmployees.size()
-                + " co task qua han.");
+        output.put("summary", "Đang theo dõi " + currentWorkload.size()
+                + " nhân viên, " + overloadedEmployees.size()
+                + " người quá tải, " + idleEmployees.size()
+                + " người chưa có task, " + overdueEmployees.size()
+                + " người có task quá hạn.");
         output.put("overloadedEmployees", overloadedEmployees);
         output.put("idleEmployees", idleEmployees);
         output.put("overdueEmployees", overdueEmployees);
@@ -1044,38 +1045,38 @@ public class ForepService {
     private String fallbackDelayReason(TaskEntity task) {
         long hoursUntilDeadline = Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours();
         if (isOverdue(task)) {
-            return "Task da qua deadline va chua hoan thanh.";
+            return "Task đã quá deadline và chưa hoàn thành.";
         }
         if (task.getStatus() == TaskStatus.BLOCKED) {
-            return "Task dang bi blocker.";
+            return "Task đang có vướng mắc.";
         }
         if (hoursUntilDeadline <= 48 && task.getProgressPercent() < 30) {
-            return "Tien do duoi 30% trong khi deadline con duoi 48 gio.";
+            return "Tiến độ dưới 30% trong khi deadline còn dưới 48 giờ.";
         }
         if (hoursUntilDeadline <= 48) {
-            return "Deadline sap den trong vong 48 gio.";
+            return "Deadline sắp đến trong vòng 48 giờ.";
         }
         if (task.getProgressPercent() < 50) {
-            return "Tien do task duoi 50%.";
+            return "Tiến độ task dưới 50%.";
         }
         if (task.getPriority() == TaskPriority.CRITICAL || task.getPriority() == TaskPriority.HIGH) {
-            return "Task uu tien cao can duoc theo doi.";
+            return "Task ưu tiên cao cần được theo dõi.";
         }
-        return "Task co dau hieu can theo doi them.";
+        return "Task có dấu hiệu cần theo dõi thêm.";
     }
 
     private String fallbackDelayAction(TaskEntity task, Map<UUID, String> employeeNames) {
-        String assigneeName = employeeNames.getOrDefault(task.getAssigneeId(), "nhan vien phu trach");
+        String assigneeName = displayText(employeeNames.getOrDefault(task.getAssigneeId(), "nhân viên phụ trách"));
         if (task.getStatus() == TaskStatus.BLOCKED) {
-            return "Lam viec voi " + assigneeName + " de go blocker va chot nguoi ho tro.";
+            return "Làm việc với " + assigneeName + " để gỡ vướng mắc và chốt người hỗ trợ.";
         }
         if (isOverdue(task)) {
-            return "Lien he " + assigneeName + " de cap nhat ETA, dieu chinh deadline hoac bo sung nguon luc.";
+            return "Liên hệ " + assigneeName + " để cập nhật ETA, điều chỉnh deadline hoặc bổ sung nguồn lực.";
         }
         if (Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours() <= 48) {
-            return "Kiem tra tien do voi " + assigneeName + " trong hom nay.";
+            return "Kiểm tra tiến độ với " + assigneeName + " trong hôm nay.";
         }
-        return "Yeu cau " + assigneeName + " cap nhat tien do va rui ro hien tai.";
+        return "Yêu cầu " + assigneeName + " cập nhật tiến độ và rủi ro hiện tại.";
     }
 
     private Map<String, Object> fallbackActionSuggestions(List<WorkloadView> currentWorkload, AiProviderException exception) {
@@ -1102,8 +1103,8 @@ public class ForepService {
                     "REVIEW_BLOCKER",
                     "TASK",
                     task.getId().toString(),
-                    "Xu ly blocker",
-                    "Task \"" + task.getTitle() + "\" dang bi blocker; assignee: " + names.getOrDefault(task.getAssigneeId(), "Unknown") + ".",
+                    "Xử lý vướng mắc",
+                    "Task \"" + task.getTitle() + "\" đang có vướng mắc; người phụ trách: " + displayText(names.getOrDefault(task.getAssigneeId(), "Chưa rõ")) + ".",
                     0.95
             );
         }
@@ -1120,8 +1121,8 @@ public class ForepService {
                     "FOLLOW_UP_TASK",
                     "TASK",
                     task.getId().toString(),
-                    "Theo doi task qua han",
-                    "Task \"" + task.getTitle() + "\" da qua deadline; can cap nhat ETA voi " + names.getOrDefault(task.getAssigneeId(), "Unknown") + ".",
+                    "Theo dõi task quá hạn",
+                    "Task \"" + task.getTitle() + "\" đã quá deadline; cần cập nhật ETA với " + displayText(names.getOrDefault(task.getAssigneeId(), "Chưa rõ")) + ".",
                     0.92
             );
         }
@@ -1140,8 +1141,8 @@ public class ForepService {
                     "FOLLOW_UP_TASK",
                     "TASK",
                     task.getId().toString(),
-                    "Kiem tra task sap den deadline",
-                    "Task \"" + task.getTitle() + "\" con duoi 48 gio nhung tien do moi " + task.getProgressPercent() + "%.",
+                    "Kiểm tra task sắp đến deadline",
+                    "Task \"" + task.getTitle() + "\" còn dưới 48 giờ nhưng tiến độ mới " + task.getProgressPercent() + "%.",
                     0.86
             );
         }
@@ -1157,8 +1158,8 @@ public class ForepService {
                     "REASSIGN_TASK",
                     "EMPLOYEE",
                     workload.employeeId().toString(),
-                    "Can bang workload",
-                    workload.fullName() + " dang qua tai voi " + workload.openTasks() + " task mo va " + workload.overdueTasks() + " task qua han.",
+                    "Cân bằng tải công việc",
+                    displayText(workload.fullName()) + " đang quá tải với " + workload.openTasks() + " task đang mở và " + workload.overdueTasks() + " task quá hạn.",
                     0.82
             );
         }
@@ -1173,8 +1174,8 @@ public class ForepService {
                     "REVIEW_BLOCKER",
                     "DAILY_REPORT",
                     report.getId().toString(),
-                    "Xu ly blocker tu daily report",
-                    names.getOrDefault(report.getUserId(), "Unknown") + " co blocker trong report ngay " + report.getReportDate() + ".",
+                    "Xử lý vướng mắc từ daily report",
+                    displayText(names.getOrDefault(report.getUserId(), "Chưa rõ")) + " có vướng mắc trong report ngày " + report.getReportDate() + ".",
                     0.78
             );
         }
@@ -1194,8 +1195,8 @@ public class ForepService {
                     "REQUEST_REPORT",
                     "EMPLOYEE",
                     employee.getId().toString(),
-                    "Yeu cau daily report",
-                    employee.getFullName() + " chua gui daily report hom nay.",
+                    "Yêu cầu daily report",
+                    displayText(employee.getFullName()) + " chưa gửi daily report hôm nay.",
                     0.68
             );
         }
@@ -1290,11 +1291,23 @@ public class ForepService {
     }
 
     private String fallbackReason(AiProviderException exception) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank()) {
-            return "AI provider unavailable";
-        }
-        return message.length() > 240 ? message.substring(0, 240) : message;
+        return "AI chưa phản hồi kịp, hệ thống đang dùng dữ liệu hiện có để tạo kết quả tạm thời.";
+    }
+
+    private String displayText(String value) {
+        return value == null ? "" : value
+                .replace('\u00D0', '\u0110')
+                .replace('\u00F0', '\u0111');
+    }
+
+    private String vietnameseWorkloadLevel(WorkloadLevel workloadLevel) {
+        return switch (workloadLevel) {
+            case NO_WORK -> "chưa có việc";
+            case LOW -> "tải thấp";
+            case NORMAL -> "bình thường";
+            case HIGH -> "tải cao";
+            case OVERLOADED -> "quá tải";
+        };
     }
 
     private long longValue(Map<String, Object> payload, String key) {
@@ -1626,7 +1639,9 @@ public class ForepService {
     private String normalizeAccountText(String value) {
         String source = (value == null ? "" : value)
                 .replace('\u0111', 'd')
-                .replace('\u0110', 'D');
+                .replace('\u0110', 'D')
+                .replace('\u00F0', 'd')
+                .replace('\u00D0', 'D');
         String normalized = Normalizer.normalize(source, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "")
                 .toLowerCase(Locale.ROOT);

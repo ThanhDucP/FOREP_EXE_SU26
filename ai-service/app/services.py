@@ -238,8 +238,8 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
             "Prefer lower workload levels in this order: NO_WORK, LOW, NORMAL, HIGH, OVERLOADED. "
             "Avoid OVERLOADED unless every candidate is OVERLOADED. "
             "Do not rank severe overdue candidates above cleaner suitable candidates. "
-            "risk must mention overdue, blocker, workload, deadline risk, or 'Khong co rui ro lon'. "
-            "reason and risk must be Vietnamese. Do not assign the task."
+            "risk must mention overdue, blocker, workload, deadline risk, or 'Không có rủi ro lớn'. "
+            "reason and risk must be Vietnamese with full accents. Do not assign the task."
         ),
         data=payload.model_dump(by_alias=True),
         feature="RECOMMEND_ASSIGNEE",

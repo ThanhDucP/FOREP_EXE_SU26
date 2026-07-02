@@ -180,7 +180,7 @@ public class AiServiceClient {
                     shortMessage(exception),
                     activeRequests()
             );
-            throw new AiProviderException("Gemini and Groq both failed", exception);
+            throw new AiProviderException("AI service did not return a successful response.", exception);
         } finally {
             concurrencyLimiter.release();
         }

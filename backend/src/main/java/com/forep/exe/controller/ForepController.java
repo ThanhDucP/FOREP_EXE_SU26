@@ -273,7 +273,7 @@ public class ForepController {
     @ExceptionHandler(AiRateLimitException.class)
     @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
     ApiResponse<?> handleAiRateLimitError(AiRateLimitException exception) {
-        return ApiResponse.error("AI_RATE_LIMITED", "AI dang xu ly qua nhieu yeu cau. Vui long thu lai sau " + exception.retryAfterSeconds() + " giay.", null);
+        return ApiResponse.error("AI_RATE_LIMITED", "AI đang xử lý quá nhiều yêu cầu. Vui lòng thử lại sau " + exception.retryAfterSeconds() + " giây.", null);
     }
 
     @ExceptionHandler(AiProviderException.class)
