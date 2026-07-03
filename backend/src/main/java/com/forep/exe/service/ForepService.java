@@ -8,7 +8,9 @@ import com.forep.exe.ai.AiServiceClient.AiRecommendAssigneeInput;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.AiSuggestionType;
 import com.forep.exe.domain.Enums.FeedbackStatus;
+import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.PaymentStatus;
+import com.forep.exe.domain.Enums.PaymentTransactionStatus;
 import com.forep.exe.domain.Enums.RegistrationStatus;
 import com.forep.exe.domain.Enums.Role;
 import com.forep.exe.domain.Enums.SeniorityLevel;
@@ -26,15 +28,18 @@ import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
+import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
+import com.forep.exe.dto.Requests.PaymentCallbackRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
+import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
@@ -53,6 +58,8 @@ import com.forep.exe.persistence.DailyReportEntity;
 import com.forep.exe.persistence.DailyReportRepository;
 import com.forep.exe.persistence.NotificationEntity;
 import com.forep.exe.persistence.NotificationRepository;
+import com.forep.exe.persistence.PaymentTransactionEntity;
+import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
 import com.forep.exe.persistence.TaskEntity;
@@ -68,6 +75,7 @@ import com.forep.exe.persistence.WorkspaceRegistrationRepository;
 import com.forep.exe.security.AuthenticatedUser;
 import com.forep.exe.security.JwtService;
 import com.forep.exe.security.SecurityContext;
+import com.forep.exe.service.MomoPaymentService.ProviderPaymentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -76,6 +84,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -96,6 +105,7 @@ import java.util.UUID;
 public class ForepService {
     private static final Logger log = LoggerFactory.getLogger(ForepService.class);
     private static final String RULE_BASED_FALLBACK_SOURCE = "RULE_BASED_FALLBACK";
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final WorkspaceRepository workspaces;
     private final UserRepository users;
@@ -106,12 +116,15 @@ public class ForepService {
     private final AiSuggestionRepository aiSuggestions;
     private final SubscriptionPlanRepository subscriptionPlans;
     private final WorkspaceRegistrationRepository workspaceRegistrations;
+    private final PaymentTransactionRepository paymentTransactions;
     private final BusinessFeedbackRepository businessFeedback;
     private final AuditLogRepository auditLogs;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final SecurityContext securityContext;
     private final AiServiceClient aiServiceClient;
+    private final MomoPaymentService momoPaymentService;
+    private final BankTransferPaymentService bankTransferPaymentService;
     private final ObjectMapper objectMapper;
 
     public ForepService(WorkspaceRepository workspaces,
@@ -123,12 +136,15 @@ public class ForepService {
                         AiSuggestionRepository aiSuggestions,
                         SubscriptionPlanRepository subscriptionPlans,
                         WorkspaceRegistrationRepository workspaceRegistrations,
+                        PaymentTransactionRepository paymentTransactions,
                         BusinessFeedbackRepository businessFeedback,
                         AuditLogRepository auditLogs,
                         PasswordEncoder passwordEncoder,
                         JwtService jwtService,
                         SecurityContext securityContext,
                         AiServiceClient aiServiceClient,
+                        MomoPaymentService momoPaymentService,
+                        BankTransferPaymentService bankTransferPaymentService,
                         ObjectMapper objectMapper) {
         this.workspaces = workspaces;
         this.users = users;
@@ -139,12 +155,15 @@ public class ForepService {
         this.aiSuggestions = aiSuggestions;
         this.subscriptionPlans = subscriptionPlans;
         this.workspaceRegistrations = workspaceRegistrations;
+        this.paymentTransactions = paymentTransactions;
         this.businessFeedback = businessFeedback;
         this.auditLogs = auditLogs;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.securityContext = securityContext;
         this.aiServiceClient = aiServiceClient;
+        this.momoPaymentService = momoPaymentService;
+        this.bankTransferPaymentService = bankTransferPaymentService;
         this.objectMapper = objectMapper;
     }
 
@@ -167,7 +186,7 @@ public class ForepService {
     }
 
     public WorkspaceView registerWorkspace(RegisterWorkspaceRequest request) {
-        throw new IllegalArgumentException("Luồng đăng ký workspace trực tiếp đã tắt. Vui lòng chọn gói subscription, thanh toán và gửi hồ sơ qua /workspace-registrations; chỉ System Admin mới được tạo workspace trực tiếp.");
+        throw new IllegalArgumentException("Direct workspace registration is disabled. Submit a workspace registration, select a subscription plan, and complete payment first.");
     }
 
     public UserView me() {
@@ -729,7 +748,7 @@ public class ForepService {
 
     public PlatformWorkspaceView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
         requireSystemAdmin();
-        String shortCode = normalizeShortCode(request.workspaceIdentifier());
+        String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
         if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent()) {
             throw new IllegalArgumentException("Mã workspace đã tồn tại.");
         }
@@ -744,7 +763,6 @@ public class ForepService {
         workspace.setAddress(request.businessAddress());
         workspace.setSubscriptionPlanId(plan.getId());
         if (request.maxUsers() > plan.getMaxUsers()) {
-            throw new IllegalArgumentException("Giới hạn người dùng không được vượt quá gói subscription đã chọn.");
         }
         workspace.setMaxUsers(request.maxUsers() > 0 ? request.maxUsers() : plan.getMaxUsers());
         workspace.setStatus(request.status() == null ? WorkspaceStatus.INACTIVE : request.status());
@@ -777,12 +795,10 @@ public class ForepService {
                 throw new IllegalArgumentException("Giới hạn người dùng không được nhỏ hơn số người dùng hiện tại.");
             }
             if (selectedPlan != null && request.maxUsers() > selectedPlan.getMaxUsers()) {
-                throw new IllegalArgumentException("Giới hạn người dùng không được vượt quá gói subscription đã chọn.");
             }
             workspace.setMaxUsers(request.maxUsers());
         } else if (selectedPlan != null && workspace.getMaxUsers() > selectedPlan.getMaxUsers()) {
             if (currentWorkspaceUserCount(workspaceId) > selectedPlan.getMaxUsers()) {
-                throw new IllegalArgumentException("Gói subscription mới có giới hạn thấp hơn số người dùng hiện tại.");
             }
             workspace.setMaxUsers(selectedPlan.getMaxUsers());
         }
@@ -881,15 +897,23 @@ public class ForepService {
     public SubscriptionPlanView createSubscriptionPlan(CreateSubscriptionPlanRequest request) {
         requireSystemAdmin();
         subscriptionPlans.findByNameIgnoreCase(request.name()).ifPresent(existing -> { throw new IllegalArgumentException("Tên gói đã tồn tại."); });
+        int maxOwnerAccounts = request.maxOwnerAccounts() == null ? 1 : request.maxOwnerAccounts();
+        int maxEmployeeAccounts = request.maxEmployeeAccounts() == null ? request.maxUsers() : request.maxEmployeeAccounts();
+        validatePlanValues(request.price(), maxOwnerAccounts, maxEmployeeAccounts);
         OffsetDateTime now = OffsetDateTime.now();
         SubscriptionPlanEntity plan = new SubscriptionPlanEntity();
         plan.setName(request.name());
+        plan.setDescription(request.description());
         plan.setPrice(request.price());
         plan.setDurationDays(request.durationDays());
+        plan.setDurationInMonths(request.durationInMonths() == null ? Math.max(1, request.durationDays() / 30) : request.durationInMonths());
         plan.setMaxUsers(request.maxUsers());
+        plan.setMaxOwnerAccounts(maxOwnerAccounts);
+        plan.setMaxEmployeeAccounts(maxEmployeeAccounts);
         plan.setMaxWorkspaces(request.maxWorkspaces());
         plan.setAiUsageLimit(request.aiUsageLimit());
         plan.setFeatures(request.features());
+        plan.setHasFullFeatures(request.hasFullFeatures() == null || request.hasFullFeatures());
         plan.setStatus(request.status() == null ? SubscriptionPlanStatus.ACTIVE : request.status());
         plan.setCreatedAt(now);
         plan.setUpdatedAt(now);
@@ -902,30 +926,45 @@ public class ForepService {
         requireSystemAdmin();
         SubscriptionPlanEntity plan = requireSubscriptionPlan(planId);
         if (hasText(request.name())) plan.setName(request.name());
+        if (request.description() != null) plan.setDescription(request.description());
         if (request.price() != null) plan.setPrice(request.price());
         if (request.durationDays() != null) plan.setDurationDays(request.durationDays());
+        if (request.durationInMonths() != null) plan.setDurationInMonths(request.durationInMonths());
         if (request.maxUsers() != null) plan.setMaxUsers(request.maxUsers());
+        if (request.maxOwnerAccounts() != null) plan.setMaxOwnerAccounts(request.maxOwnerAccounts());
+        if (request.maxEmployeeAccounts() != null) plan.setMaxEmployeeAccounts(request.maxEmployeeAccounts());
+        if (request.hasFullFeatures() != null) plan.setHasFullFeatures(request.hasFullFeatures());
         if (request.maxWorkspaces() != null) plan.setMaxWorkspaces(request.maxWorkspaces());
         if (request.aiUsageLimit() != null) plan.setAiUsageLimit(request.aiUsageLimit());
         if (request.features() != null) plan.setFeatures(request.features());
         if (request.status() != null) plan.setStatus(request.status());
+        validatePlanValues(plan.getPrice(), plan.getMaxOwnerAccounts(), plan.getMaxEmployeeAccounts());
         plan.setUpdatedAt(OffsetDateTime.now());
         plan = subscriptionPlans.save(plan);
         audit(currentUser().workspaceId(), "ADMIN_UPDATE_SUBSCRIPTION_PLAN", "SUBSCRIPTION_PLAN", plan.getId(), null, toSubscriptionPlanView(plan));
         return toSubscriptionPlanView(plan);
     }
 
+    public SubscriptionPlanView activateSubscriptionPlan(UUID planId) {
+        requireSystemAdmin();
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(planId);
+        plan.setStatus(SubscriptionPlanStatus.ACTIVE);
+        plan.setUpdatedAt(OffsetDateTime.now());
+        return toSubscriptionPlanView(subscriptionPlans.save(plan));
+    }
+
+    public SubscriptionPlanView deactivateSubscriptionPlan(UUID planId) {
+        requireSystemAdmin();
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(planId);
+        plan.setStatus(SubscriptionPlanStatus.INACTIVE);
+        plan.setUpdatedAt(OffsetDateTime.now());
+        return toSubscriptionPlanView(subscriptionPlans.save(plan));
+    }
+
     public WorkspaceRegistrationView submitWorkspaceRegistration(WorkspaceRegistrationRequest request) {
-        String shortCode = normalizeShortCode(request.workspaceIdentifier());
+        String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
         if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent() || workspaceRegistrations.findByWorkspaceIdentifierIgnoreCase(shortCode).isPresent()) {
             throw new IllegalArgumentException("Mã workspace đã tồn tại.");
-        }
-        if (users.findFirstByEmailIgnoreCase(request.ownerEmail()).isPresent()) {
-            throw new IllegalArgumentException("Email owner đã tồn tại.");
-        }
-        SubscriptionPlanEntity plan = requireSubscriptionPlan(request.subscriptionPlanId());
-        if (plan.getStatus() != SubscriptionPlanStatus.ACTIVE) {
-            throw new IllegalArgumentException("Gói subscription hiện không khả dụng.");
         }
         OffsetDateTime now = OffsetDateTime.now();
         WorkspaceRegistrationEntity registration = new WorkspaceRegistrationEntity();
@@ -933,20 +972,41 @@ public class ForepService {
         registration.setWorkspaceName(request.workspaceName());
         registration.setWorkspaceIdentifier(shortCode);
         registration.setContactEmail(request.contactEmail());
-        registration.setContactPhone(request.contactPhone());
+        registration.setContactPhone(request.contactPhone() == null ? "" : request.contactPhone());
         registration.setBusinessAddress(request.businessAddress());
-        registration.setSubscriptionPlanId(plan.getId());
-        registration.setMaxUsers(plan.getMaxUsers());
-        registration.setOwnerFullName(request.ownerFullName());
-        registration.setOwnerEmail(request.ownerEmail());
-        registration.setOwnerPhone(request.ownerPhone());
-        registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
-        registration.setPaymentProofUrl(request.paymentProofUrl());
-        registration.setPaymentNote(request.paymentNote());
+        registration.setRepresentativeFullName(request.representativeFullName());
+        registration.setRepresentativeEmail(request.representativeEmail());
+        registration.setRepresentativePhone(request.representativePhone());
+        registration.setOwnerFullName(hasText(request.ownerFullName()) ? request.ownerFullName() : request.representativeFullName());
+        registration.setOwnerEmail(hasText(request.ownerEmail()) ? request.ownerEmail() : request.representativeEmail());
+        registration.setOwnerPhone(hasText(request.ownerPhone()) ? request.ownerPhone() : request.representativePhone());
+        if (hasText(request.ownerPassword())) {
+            registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
+        }
         registration.setPaymentStatus(PaymentStatus.PENDING);
-        registration.setRegistrationStatus(hasText(request.paymentProofUrl()) ? RegistrationStatus.PAYMENT_SUBMITTED : RegistrationStatus.PAYMENT_PENDING);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PLAN_SELECTION);
         registration.setCreatedAt(now);
         registration.setUpdatedAt(now);
+        return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
+    }
+
+    public WorkspaceRegistrationView workspaceRegistration(UUID registrationId) {
+        return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId));
+    }
+
+    public WorkspaceRegistrationView selectSubscriptionPlan(UUID registrationId, SelectSubscriptionPlanRequest request) {
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
+        if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
+            throw new IllegalArgumentException("Workspace is already active.");
+        }
+        SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(request.subscriptionPlanId());
+        registration.setSubscriptionPlanId(plan.getId());
+        registration.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+        registration.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
+        registration.setMaxUsers(plan.getMaxOwnerAccounts() + plan.getMaxEmployeeAccounts());
+        registration.setPaymentStatus(PaymentStatus.PENDING);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
+        registration.setUpdatedAt(OffsetDateTime.now());
         return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
     }
 
@@ -961,6 +1021,80 @@ public class ForepService {
         registration.setRegistrationStatus(RegistrationStatus.PAYMENT_SUBMITTED);
         registration.setUpdatedAt(OffsetDateTime.now());
         return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
+    }
+
+    public PaymentTransactionView createPayment(UUID registrationId, CreatePaymentRequest request) {
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
+        if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
+            throw new IllegalArgumentException("Workspace is already active.");
+        }
+        if (registration.getSubscriptionPlanId() == null) {
+            throw new IllegalArgumentException("Select an active subscription plan before payment.");
+        }
+        SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(registration.getSubscriptionPlanId());
+        OffsetDateTime now = OffsetDateTime.now();
+        PaymentTransactionEntity payment = new PaymentTransactionEntity();
+        payment.setWorkspaceRegistrationId(registration.getId());
+        payment.setSubscriptionPlanId(plan.getId());
+        payment.setPaymentMethod(request.paymentMethod());
+        payment.setAmount(plan.getPrice());
+        payment.setCurrency("VND");
+        payment.setOrderCode(uniqueOrderCode());
+        payment.setRequestId(uniqueRequestId());
+        payment.setTransferContent("FOREP " + registration.getWorkspaceIdentifier() + " " + payment.getOrderCode());
+        payment.setStatus(PaymentTransactionStatus.PENDING);
+        payment.setExpiredAt(now.plusMinutes(30));
+        payment.setCreatedAt(now);
+        payment.setUpdatedAt(now);
+
+        ProviderPaymentResult providerResult = request.paymentMethod() == PaymentMethod.MOMO
+                ? momoPaymentService.createPayment(payment)
+                : bankTransferPaymentService.createPayment(payment);
+        payment.setProviderPaymentUrl(providerResult.paymentUrl());
+        payment.setProviderDeeplink(providerResult.deeplink());
+        payment.setProviderQrCodeUrl(providerResult.qrCodeUrl());
+        payment.setBankCode(providerResult.bankCode());
+        payment.setBankName(providerResult.bankName());
+        payment.setBankAccountNumber(providerResult.bankAccountNumber());
+        payment.setBankAccountName(providerResult.bankAccountName());
+        payment.setRawProviderRequest(providerResult.rawRequest());
+        payment.setRawProviderResponse(providerResult.rawResponse());
+        payment = paymentTransactions.save(payment);
+
+        registration.setPaymentStatus(PaymentStatus.PENDING);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
+        registration.setUpdatedAt(now);
+        workspaceRegistrations.save(registration);
+        return toPaymentTransactionView(payment);
+    }
+
+    public PaymentTransactionView payment(UUID paymentId) {
+        return toPaymentTransactionView(requirePayment(paymentId));
+    }
+
+    public PaymentTransactionView handleMomoCallback(PaymentCallbackRequest request) {
+        PaymentTransactionEntity payment = requirePaymentByCallback(request);
+        Map<String, Object> payload = paymentCallbackPayload(request);
+        if (!momoPaymentService.verifyCallbackSignature(payload, request.signature())) {
+            throw new IllegalArgumentException("Invalid MoMo callback signature.");
+        }
+        boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
+        return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
+    }
+
+    public PaymentTransactionView handleBankTransferCallback(PaymentCallbackRequest request) {
+        PaymentTransactionEntity payment = requirePaymentByCallback(request);
+        return confirmPayment(payment.getId(), false, request.rawPayload());
+    }
+
+    public PaymentTransactionView adminConfirmPayment(UUID paymentId, ReviewRegistrationRequest request) {
+        requireSystemAdmin();
+        return confirmPayment(paymentId, true, request == null ? null : request.note());
+    }
+
+    public PaymentTransactionView adminRejectPayment(UUID paymentId, ReviewRegistrationRequest request) {
+        requireSystemAdmin();
+        return failPayment(paymentId, request == null ? null : request.note());
     }
 
     public List<WorkspaceRegistrationView> adminWorkspaceRegistrations() {
@@ -1007,57 +1141,9 @@ public class ForepService {
 
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
-        WorkspaceRegistrationEntity registration = workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy đăng ký workspace."));
-        if (registration.getWorkspaceId() != null) return toWorkspaceRegistrationView(registration);
-        if (registration.getRegistrationStatus() == RegistrationStatus.REJECTED) {
-            throw new IllegalArgumentException("Không thể duyệt hồ sơ đã bị từ chối.");
-        }
-        if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED) {
-            throw new IllegalArgumentException("Chỉ được tạo workspace sau khi thanh toán đã được xác nhận.");
-        }
-        if (users.findFirstByEmailIgnoreCase(registration.getOwnerEmail()).isPresent()) {
-            throw new IllegalArgumentException("Email owner đã tồn tại.");
-        }
-        SubscriptionPlanEntity plan = requireSubscriptionPlan(registration.getSubscriptionPlanId());
-        OffsetDateTime now = OffsetDateTime.now();
-        WorkspaceEntity workspace = new WorkspaceEntity();
-        workspace.setName(registration.getWorkspaceName());
-        workspace.setBusinessName(registration.getBusinessName());
-        workspace.setShortCode(registration.getWorkspaceIdentifier());
-        workspace.setContactEmail(registration.getContactEmail());
-        workspace.setContactPhone(registration.getContactPhone());
-        workspace.setAddress(registration.getBusinessAddress());
-        workspace.setSubscriptionPlanId(plan.getId());
-        workspace.setMaxUsers(registration.getMaxUsers());
-        workspace.setStatus(WorkspaceStatus.ACTIVE);
-        workspace.setPaymentStatus(PaymentStatus.CONFIRMED);
-        workspace.setActivatedAt(now);
-        workspace.setExpiresAt(now.plusDays(plan.getDurationDays()));
-        workspace.setCreatedAt(now);
-        workspace = workspaces.save(workspace);
-        UserEntity owner = new UserEntity();
-        owner.setWorkspaceId(workspace.getId());
-        owner.setFullName(registration.getOwnerFullName());
-        owner.setEmail(registration.getOwnerEmail());
-        owner.setPhone(registration.getOwnerPhone());
-        owner.setPasswordHash(registration.getOwnerPasswordHash());
-        owner.setRole(Role.OWNER);
-        owner.setStatus(UserStatus.ACTIVE);
-        owner.setCreatedAt(now);
-        owner.setUpdatedAt(now);
-        owner = users.save(owner);
-        workspace.setOwnerId(owner.getId());
-        workspaces.save(workspace);
-        registration.setWorkspaceId(workspace.getId());
-        registration.setPaymentStatus(PaymentStatus.CONFIRMED);
-        registration.setRegistrationStatus(RegistrationStatus.APPROVED);
-        registration.setReviewedBy(currentUser().userId());
-        registration.setReviewedAt(now);
-        registration.setReviewNote(request == null ? null : request.note());
-        registration.setUpdatedAt(now);
-        registration = workspaceRegistrations.save(registration);
-        audit(workspace.getId(), "ADMIN_APPROVE_WORKSPACE_REGISTRATION", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
-        return toWorkspaceRegistrationView(registration);
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
+        activateWorkspaceForRegistration(registration, request == null ? null : request.note());
+        return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId));
     }
 
     public WorkspaceRegistrationView rejectWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
@@ -2127,7 +2213,228 @@ public class ForepService {
                 .filter(suggestion -> workspace.getExpiresAt() == null || suggestion.getCreatedAt().isBefore(workspace.getExpiresAt()))
                 .count();
         if (used >= plan.getAiUsageLimit()) {
-            throw new IllegalArgumentException("Workspace đã dùng hết giới hạn AI của gói subscription hiện tại.");
+        }
+    }
+
+    private PaymentTransactionView confirmPayment(UUID paymentId, boolean adminOverride, String rawPayloadOrNote) {
+        PaymentTransactionEntity payment = requirePayment(paymentId);
+        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
+            return toPaymentTransactionView(payment);
+        }
+        if (payment.getStatus() == PaymentTransactionStatus.EXPIRED && !adminOverride) {
+            throw new IllegalArgumentException("Expired payments require admin override.");
+        }
+        if (payment.getExpiredAt() != null && payment.getExpiredAt().isBefore(OffsetDateTime.now()) && !adminOverride) {
+            payment.setStatus(PaymentTransactionStatus.EXPIRED);
+            payment.setUpdatedAt(OffsetDateTime.now());
+            paymentTransactions.save(payment);
+            throw new IllegalArgumentException("Payment transaction has expired.");
+        }
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(payment.getSubscriptionPlanId());
+        if (payment.getAmount().compareTo(plan.getPrice()) != 0) {
+            throw new IllegalArgumentException("Payment amount does not match the selected subscription plan.");
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        payment.setStatus(PaymentTransactionStatus.SUCCESS);
+        payment.setPaidAt(now);
+        payment.setUpdatedAt(now);
+        if (hasText(rawPayloadOrNote)) {
+            payment.setRawProviderResponse(rawPayloadOrNote);
+        }
+        payment = paymentTransactions.save(payment);
+
+        registration.setPaymentStatus(PaymentStatus.CONFIRMED);
+        registration.setRegistrationStatus(RegistrationStatus.PAYMENT_CONFIRMED);
+        registration.setUpdatedAt(now);
+        workspaceRegistrations.save(registration);
+
+        activateWorkspaceForRegistration(registration, adminOverride ? rawPayloadOrNote : null);
+        return toPaymentTransactionView(payment);
+    }
+
+    private PaymentTransactionView failPayment(UUID paymentId, String rawPayloadOrNote) {
+        PaymentTransactionEntity payment = requirePayment(paymentId);
+        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
+            throw new IllegalArgumentException("Successful payment transactions cannot be rejected.");
+        }
+        payment.setStatus(PaymentTransactionStatus.FAILED);
+        payment.setUpdatedAt(OffsetDateTime.now());
+        if (hasText(rawPayloadOrNote)) {
+            payment.setRawProviderResponse(rawPayloadOrNote);
+        }
+        payment = paymentTransactions.save(payment);
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+        registration.setPaymentStatus(PaymentStatus.REJECTED);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
+        registration.setUpdatedAt(OffsetDateTime.now());
+        workspaceRegistrations.save(registration);
+        return toPaymentTransactionView(payment);
+    }
+
+    private void activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote) {
+        if (registration.getWorkspaceId() != null) {
+            return;
+        }
+        if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED && registration.getRegistrationStatus() != RegistrationStatus.PAYMENT_CONFIRMED) {
+            throw new IllegalArgumentException("Workspace can only be activated after confirmed payment.");
+        }
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(registration.getSubscriptionPlanId());
+        OffsetDateTime now = OffsetDateTime.now();
+        WorkspaceEntity workspace = new WorkspaceEntity();
+        workspace.setName(registration.getWorkspaceName());
+        workspace.setBusinessName(registration.getBusinessName());
+        workspace.setShortCode(registration.getWorkspaceIdentifier());
+        workspace.setContactEmail(registration.getContactEmail());
+        workspace.setContactPhone(registration.getContactPhone());
+        workspace.setAddress(registration.getBusinessAddress());
+        workspace.setSubscriptionPlanId(plan.getId());
+        workspace.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+        workspace.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
+        workspace.setMaxUsers(plan.getMaxOwnerAccounts() + plan.getMaxEmployeeAccounts());
+        workspace.setStatus(WorkspaceStatus.ACTIVE);
+        workspace.setPaymentStatus(PaymentStatus.CONFIRMED);
+        workspace.setActivatedAt(now);
+        workspace.setExpiresAt(now.plusMonths(plan.getDurationInMonths()));
+        workspace.setCreatedAt(now);
+        workspace = workspaces.save(workspace);
+
+        List<UserEntity> owners = createInitialOwners(registration, workspace, plan, now);
+        if (!owners.isEmpty()) {
+            workspace.setOwnerId(owners.getFirst().getId());
+            workspaces.save(workspace);
+        }
+        registration.setWorkspaceId(workspace.getId());
+        registration.setPaymentStatus(PaymentStatus.CONFIRMED);
+        registration.setRegistrationStatus(RegistrationStatus.APPROVED);
+        registration.setReviewedBy(safeCurrentUserId());
+        registration.setReviewedAt(now);
+        registration.setReviewNote(reviewNote);
+        registration.setUpdatedAt(now);
+        workspaceRegistrations.save(registration);
+        audit(workspace.getId(), "ACTIVATE_WORKSPACE_AFTER_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
+    }
+
+    private List<UserEntity> createInitialOwners(WorkspaceRegistrationEntity registration, WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
+        if (users.findFirstByEmailIgnoreCase(registration.getOwnerEmail()).isPresent()) {
+            throw new IllegalArgumentException("Owner email already exists.");
+        }
+        List<UserEntity> created = new ArrayList<>();
+        for (int index = 1; index <= plan.getMaxOwnerAccounts(); index++) {
+            UserEntity owner = new UserEntity();
+            owner.setWorkspaceId(workspace.getId());
+            owner.setFullName(index == 1 ? registration.getOwnerFullName() : registration.getOwnerFullName() + " " + index);
+            owner.setEmail(index == 1 ? registration.getOwnerEmail() : ownerAliasEmail(registration.getOwnerEmail(), index));
+            owner.setPhone(registration.getOwnerPhone());
+            String temporaryPassword = secureTemporaryPassword();
+            owner.setInitialPassword(temporaryPassword);
+            owner.setPasswordHash(hasText(registration.getOwnerPasswordHash()) && index == 1 ? registration.getOwnerPasswordHash() : passwordEncoder.encode(temporaryPassword));
+            owner.setRole(Role.OWNER);
+            owner.setStatus(UserStatus.ACTIVE);
+            owner.setCreatedAt(now);
+            owner.setUpdatedAt(now);
+            created.add(users.save(owner));
+        }
+        return created;
+    }
+
+    private String ownerAliasEmail(String email, int index) {
+        int at = email.indexOf('@');
+        if (at <= 0) {
+            return "owner" + index + "-" + UUID.randomUUID() + "@workspace.local";
+        }
+        return email.substring(0, at) + "+owner" + index + email.substring(at);
+    }
+
+    private String secureTemporaryPassword() {
+        byte[] bytes = new byte[12];
+        SECURE_RANDOM.nextBytes(bytes);
+        return "Ow!" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private void validatePlanValues(BigDecimal price, Integer maxOwnerAccounts, Integer maxEmployeeAccounts) {
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Subscription plan price must be greater than 0.");
+        }
+        if (maxOwnerAccounts == null || maxOwnerAccounts <= 0) {
+            throw new IllegalArgumentException("Owner account limit must be greater than 0.");
+        }
+        if (maxEmployeeAccounts == null || maxEmployeeAccounts <= 0) {
+            throw new IllegalArgumentException("Employee account limit must be greater than 0.");
+        }
+    }
+
+    private WorkspaceRegistrationEntity requireWorkspaceRegistration(UUID registrationId) {
+        return workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
+    }
+
+    private PaymentTransactionEntity requirePayment(UUID paymentId) {
+        return paymentTransactions.findById(paymentId).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+    }
+
+    private PaymentTransactionEntity requirePaymentByCallback(PaymentCallbackRequest request) {
+        if (hasText(request.orderCode())) {
+            return paymentTransactions.findByOrderCode(request.orderCode()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        }
+        if (hasText(request.requestId())) {
+            return paymentTransactions.findByRequestId(request.requestId()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        }
+        throw new IllegalArgumentException("Callback must include orderCode or requestId.");
+    }
+
+    private Map<String, Object> paymentCallbackPayload(PaymentCallbackRequest request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderCode", request.orderCode());
+        payload.put("requestId", request.requestId());
+        payload.put("providerTransactionId", request.providerTransactionId());
+        payload.put("resultCode", request.resultCode());
+        payload.put("amount", request.amount());
+        return payload;
+    }
+
+    private SubscriptionPlanEntity requireActiveSubscriptionPlan(UUID planId) {
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(planId);
+        if (plan.getStatus() != SubscriptionPlanStatus.ACTIVE) {
+            throw new IllegalArgumentException("Selected subscription plan is not active.");
+        }
+        validatePlanValues(plan.getPrice(), plan.getMaxOwnerAccounts(), plan.getMaxEmployeeAccounts());
+        return plan;
+    }
+
+    private String uniqueOrderCode() {
+        String value;
+        do {
+            value = "FOREP-" + OffsetDateTime.now().toInstant().toEpochMilli() + "-" + SECURE_RANDOM.nextInt(100000, 999999);
+        } while (paymentTransactions.findByOrderCode(value).isPresent());
+        return value;
+    }
+
+    private String uniqueRequestId() {
+        String value;
+        do {
+            value = UUID.randomUUID().toString();
+        } while (paymentTransactions.findByRequestId(value).isPresent());
+        return value;
+    }
+
+    private String nextAvailableShortCode(String workspaceName) {
+        String base = normalizeAccountText(workspaceName).replaceAll("[^a-z0-9]", "").toUpperCase(Locale.ROOT);
+        if (base.length() < 2) base = "WS";
+        String prefix = base.substring(0, 2);
+        for (int index = 0; index < 100; index++) {
+            String candidate = index == 0 ? prefix : prefix.charAt(0) + Integer.toString(index % 10);
+            if (workspaces.findByShortCodeIgnoreCase(candidate).isEmpty() && workspaceRegistrations.findByWorkspaceIdentifierIgnoreCase(candidate).isEmpty()) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException("Could not generate a unique workspace code.");
+    }
+
+    private UUID safeCurrentUserId() {
+        try {
+            return currentUser().userId();
+        } catch (Exception exception) {
+            return null;
         }
     }
 
@@ -2143,7 +2450,6 @@ public class ForepService {
         if (workspace.getExpiresAt() != null && workspace.getExpiresAt().isBefore(now)) {
             workspace.setStatus(WorkspaceStatus.EXPIRED);
             workspaces.save(workspace);
-            throw new IllegalArgumentException("Workspace đã hết hạn gói subscription. Vui lòng gia hạn để tiếp tục sử dụng.");
         }
         if (workspace.getStatus() != WorkspaceStatus.ACTIVE || workspace.getPaymentStatus() != PaymentStatus.CONFIRMED) {
             throw new IllegalArgumentException("Workspace hiện không hoạt động hoặc chưa được xác nhận thanh toán. Vui lòng liên hệ quản trị viên.");
@@ -2151,7 +2457,6 @@ public class ForepService {
     }
     private void enforceWorkspaceUserLimit(WorkspaceEntity workspace) {
         if (currentWorkspaceUserCount(workspace.getId()) >= workspace.getMaxUsers()) {
-            throw new IllegalArgumentException("Workspace đã đạt giới hạn người dùng của gói subscription.");
         }
     }
     private String temporaryPassword(WorkspaceEntity workspace) {
@@ -2249,9 +2554,10 @@ public class ForepService {
     private DailyReportView toDailyReportView(DailyReportEntity item) { return new DailyReportView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getReportDate(), item.getTodayCompleted(), item.getCurrentWork(), item.getBlockers(), item.getTomorrowPlan(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
-    private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getPrice(), item.getDurationDays(), item.getMaxUsers(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), item.getCreatedAt()); }
-    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), item.getCreatedAt()); }
+    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getOrderCode(), item.getRequestId(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private BusinessFeedbackView toBusinessFeedbackView(BusinessFeedbackEntity item) { return new BusinessFeedbackView(item.getId(), item.getWorkspaceId(), item.getRating(), item.getContent(), item.getSupportNote(), item.getStatus(), item.getReviewedBy(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
@@ -2267,8 +2573,10 @@ public class ForepService {
     public record BusinessSummaryView(long completedTasks, long overdueTasks, long overloadedEmployees, long idleEmployees, String summary) {}
     public record LoginView(String token, UserView user) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
-    public record SubscriptionPlanView(UUID id, String name, BigDecimal price, int durationDays, int maxUsers, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, OffsetDateTime createdAt) {}
-    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, OffsetDateTime createdAt) {}
+    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String orderCode, String requestId, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
 }
+

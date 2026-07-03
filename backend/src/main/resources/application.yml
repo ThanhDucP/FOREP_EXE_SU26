@@ -31,3 +31,17 @@ forep:
     retry-after-seconds: ${AI_SERVICE_RETRY_AFTER_SECONDS:15}
     circuit-breaker-failure-threshold: ${AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD:5}
     circuit-breaker-open-millis: ${AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS:60000}
+  payments:
+    momo:
+      endpoint: ${MOMO_PAYMENT_ENDPOINT:}
+      partner-code: ${MOMO_PARTNER_CODE:}
+      access-key: ${MOMO_ACCESS_KEY:}
+      secret-key: ${MOMO_SECRET_KEY:}
+      return-url: ${MOMO_RETURN_URL:}
+      notify-url: ${MOMO_NOTIFY_URL:}
+    bank:
+      bank-code: ${BANK_TRANSFER_BANK_CODE:}
+      bank-name: ${BANK_TRANSFER_BANK_NAME:}
+      account-number: ${BANK_TRANSFER_ACCOUNT_NUMBER:}
+      account-name: ${BANK_TRANSFER_ACCOUNT_NAME:}
+      vietqr-template: ${VIETQR_TEMPLATE:https://img.vietqr.io/image/{bankCode}-{accountNumber}-compact2.png?amount={amount}&addInfo={content}&accountName={accountName}}

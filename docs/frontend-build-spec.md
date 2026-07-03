@@ -5,7 +5,7 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 ## 1. Nguyen tac tich hop API
 
 - Front-end chi goi Backend API, khong goi truc tiep AI Service.
-- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, `GET /subscription-plans`, `POST /workspace-registrations`, `PATCH /workspace-registrations/{id}/payment`, can header `Authorization: Bearer <token>`.
+- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, `GET /subscription-plans`, `GET /subscription-plans/active`, `POST /workspace-registrations`, `GET /workspace-registrations/{id}`, `PATCH /workspace-registrations/{id}/select-plan`, `POST /workspace-registrations/{id}/payments`, `GET /payments/{paymentId}`, `POST /payments/momo/callback`, `POST /payments/bank-transfer/callback`, can header `Authorization: Bearer <token>`.
 - Moi response chuan co dang:
 
 ```json
@@ -40,18 +40,33 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 
 ### PaymentStatus
 
-- `PENDING`: cho admin kiem tra.
+- `PENDING`: cho provider/admin xac nhan.
 - `CONFIRMED`: da xac nhan thanh toan.
 - `REJECTED`: thanh toan bi tu choi.
 - `CORRECTION_REQUESTED`: can bo sung/sua thong tin thanh toan.
 
+### PaymentMethod
+
+- `MOMO`: thanh toan MoMo.
+- `BANK_TRANSFER`: chuyen khoan ngan hang/VietQR.
+
+### PaymentTransactionStatus
+
+- `PENDING`: giao dich da tao, dang cho user thanh toan.
+- `SUCCESS`: payment da duoc provider/admin xac nhan, workspace duoc kich hoat.
+- `FAILED`: payment that bai/bi tu choi, user co the tao giao dich moi.
+- `EXPIRED`: payment het han, user can tao giao dich moi.
+- `CANCELLED`: giao dich bi huy.
+
 ### RegistrationStatus
 
-- `SUBMITTED`: da gui thong tin.
-- `PAYMENT_PENDING`: cho thanh toan.
-- `PAYMENT_SUBMITTED`: da gui minh chung thanh toan.
+- `PENDING_PLAN_SELECTION`: da gui thong tin dang ky, dang cho chon goi.
+- `PENDING_PAYMENT`: da chon goi, dang cho tao/xac nhan payment.
+- `PAYMENT_CONFIRMED`: payment da xac nhan, backend dang/da kich hoat workspace.
 - `APPROVED`: da duyet va tao workspace.
 - `REJECTED`: bi tu choi.
+- `CANCELLED`: ho so bi huy.
+- `SUBMITTED`, `PAYMENT_PENDING`, `PAYMENT_SUBMITTED`: trang thai cu chi dung de hien thi backward-compatible neu backend tra ve du lieu cu.
 
 ### UserStatus
 

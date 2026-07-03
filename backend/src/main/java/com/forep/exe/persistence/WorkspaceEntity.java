@@ -30,6 +30,10 @@ public class WorkspaceEntity extends BaseEntity {
     private String contactPhone;
     @Column(nullable = false)
     private int maxUsers = 50;
+    @Column(nullable = false)
+    private int maxOwnerAccounts = 1;
+    @Column(nullable = false)
+    private int maxEmployeeAccounts = 49;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private WorkspaceStatus status = WorkspaceStatus.ACTIVE;
@@ -109,6 +113,14 @@ public class WorkspaceEntity extends BaseEntity {
     public int getMaxUsers() { return maxUsers; }
 
     public void setMaxUsers(int maxUsers) { this.maxUsers = maxUsers; }
+
+    public int getMaxOwnerAccounts() { return maxOwnerAccounts; }
+
+    public void setMaxOwnerAccounts(int maxOwnerAccounts) { this.maxOwnerAccounts = maxOwnerAccounts; }
+
+    public int getMaxEmployeeAccounts() { return maxEmployeeAccounts; }
+
+    public void setMaxEmployeeAccounts(int maxEmployeeAccounts) { this.maxEmployeeAccounts = maxEmployeeAccounts; }
 
     public WorkspaceStatus getStatus() { return status; }
 

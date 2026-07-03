@@ -1,6 +1,7 @@
 package com.forep.exe.dto;
 
 import com.forep.exe.domain.Enums.Role;
+import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
 import com.forep.exe.domain.Enums.TaskPriority;
@@ -140,9 +141,14 @@ public final class Requests {
 
     public record CreateSubscriptionPlanRequest(
             @NotBlank String name,
+            String description,
             @NotNull BigDecimal price,
             @Min(1) int durationDays,
+            @Min(1) Integer durationInMonths,
             @Min(1) int maxUsers,
+            @Min(1) Integer maxOwnerAccounts,
+            @Min(1) Integer maxEmployeeAccounts,
+            Boolean hasFullFeatures,
             Integer maxWorkspaces,
             Integer aiUsageLimit,
             String features,
@@ -152,9 +158,14 @@ public final class Requests {
 
     public record UpdateSubscriptionPlanRequest(
             String name,
+            String description,
             BigDecimal price,
             Integer durationDays,
+            Integer durationInMonths,
             Integer maxUsers,
+            Integer maxOwnerAccounts,
+            Integer maxEmployeeAccounts,
+            Boolean hasFullFeatures,
             Integer maxWorkspaces,
             Integer aiUsageLimit,
             String features,
@@ -204,18 +215,39 @@ public final class Requests {
     public record WorkspaceRegistrationRequest(
             @NotBlank String businessName,
             @NotBlank String workspaceName,
-            @NotBlank @Pattern(regexp = "^[A-Za-z0-9]{2}$") String workspaceIdentifier,
+            @Pattern(regexp = "^[A-Za-z0-9]{2}$") String workspaceIdentifier,
             @Email @NotBlank String contactEmail,
-            @NotBlank String contactPhone,
+            String contactPhone,
             String businessAddress,
-            @NotNull UUID subscriptionPlanId,
+            UUID subscriptionPlanId,
             @Min(1) Integer maxUsers,
-            @NotBlank String ownerFullName,
-            @Email @NotBlank String ownerEmail,
+            String ownerFullName,
+            @Email String ownerEmail,
             String ownerPhone,
-            @NotBlank String ownerPassword,
+            String ownerPassword,
+            @NotBlank String representativeFullName,
+            @Email @NotBlank String representativeEmail,
+            String representativePhone,
             String paymentProofUrl,
             String paymentNote
+    ) {
+    }
+
+    public record SelectSubscriptionPlanRequest(@NotNull UUID subscriptionPlanId) {
+    }
+
+    public record CreatePaymentRequest(@NotNull PaymentMethod paymentMethod) {
+    }
+
+    public record PaymentCallbackRequest(
+            String orderCode,
+            String requestId,
+            String providerTransactionId,
+            String resultCode,
+            String message,
+            BigDecimal amount,
+            String signature,
+            String rawPayload
     ) {
     }
 

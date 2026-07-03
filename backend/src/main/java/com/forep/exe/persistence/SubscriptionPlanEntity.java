@@ -15,12 +15,22 @@ import java.time.OffsetDateTime;
 public class SubscriptionPlanEntity extends BaseEntity {
     @Column(nullable = false, unique = true)
     private String name;
+    @Column(columnDefinition = "text")
+    private String description;
     @Column(nullable = false)
     private BigDecimal price;
     @Column(nullable = false)
     private int durationDays;
     @Column(nullable = false)
+    private int durationInMonths = 1;
+    @Column(nullable = false)
     private int maxUsers;
+    @Column(nullable = false)
+    private int maxOwnerAccounts = 1;
+    @Column(nullable = false)
+    private int maxEmployeeAccounts = 1;
+    @Column(nullable = false)
+    private boolean hasFullFeatures = true;
     private Integer maxWorkspaces;
     private Integer aiUsageLimit;
     @Column(columnDefinition = "text")
@@ -35,12 +45,22 @@ public class SubscriptionPlanEntity extends BaseEntity {
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
     public BigDecimal getPrice() { return price; }
     public void setPrice(BigDecimal price) { this.price = price; }
     public int getDurationDays() { return durationDays; }
     public void setDurationDays(int durationDays) { this.durationDays = durationDays; }
+    public int getDurationInMonths() { return durationInMonths; }
+    public void setDurationInMonths(int durationInMonths) { this.durationInMonths = durationInMonths; }
     public int getMaxUsers() { return maxUsers; }
     public void setMaxUsers(int maxUsers) { this.maxUsers = maxUsers; }
+    public int getMaxOwnerAccounts() { return maxOwnerAccounts; }
+    public void setMaxOwnerAccounts(int maxOwnerAccounts) { this.maxOwnerAccounts = maxOwnerAccounts; }
+    public int getMaxEmployeeAccounts() { return maxEmployeeAccounts; }
+    public void setMaxEmployeeAccounts(int maxEmployeeAccounts) { this.maxEmployeeAccounts = maxEmployeeAccounts; }
+    public boolean isHasFullFeatures() { return hasFullFeatures; }
+    public void setHasFullFeatures(boolean hasFullFeatures) { this.hasFullFeatures = hasFullFeatures; }
     public Integer getMaxWorkspaces() { return maxWorkspaces; }
     public void setMaxWorkspaces(Integer maxWorkspaces) { this.maxWorkspaces = maxWorkspaces; }
     public Integer getAiUsageLimit() { return aiUsageLimit; }

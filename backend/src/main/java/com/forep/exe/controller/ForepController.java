@@ -10,15 +10,18 @@ import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
+import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
+import com.forep.exe.dto.Requests.PaymentCallbackRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
+import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
@@ -77,14 +80,49 @@ public class ForepController {
         return ApiResponse.ok(service.submitWorkspaceRegistration(request));
     }
 
+    @GetMapping("/workspace-registrations/{id}")
+    ApiResponse<?> workspaceRegistration(@PathVariable UUID id) {
+        return ApiResponse.ok(service.workspaceRegistration(id));
+    }
+
     @GetMapping("/subscription-plans")
     ApiResponse<?> publicSubscriptionPlans() {
         return ApiResponse.ok(service.publicSubscriptionPlans());
     }
 
+    @GetMapping("/subscription-plans/active")
+    ApiResponse<?> activeSubscriptionPlans() {
+        return ApiResponse.ok(service.publicSubscriptionPlans());
+    }
+
+    @PatchMapping("/workspace-registrations/{id}/select-plan")
+    ApiResponse<?> selectSubscriptionPlan(@PathVariable UUID id, @RequestBody @Valid SelectSubscriptionPlanRequest request) {
+        return ApiResponse.ok(service.selectSubscriptionPlan(id, request));
+    }
+
     @PatchMapping("/workspace-registrations/{id}/payment")
     ApiResponse<?> submitRegistrationPayment(@PathVariable UUID id, @RequestBody @Valid SubmitPaymentRequest request) {
         return ApiResponse.ok(service.submitRegistrationPayment(id, request));
+    }
+
+    @PostMapping("/workspace-registrations/{id}/payments")
+    ApiResponse<?> createPayment(@PathVariable UUID id, @RequestBody @Valid CreatePaymentRequest request) {
+        return ApiResponse.ok(service.createPayment(id, request));
+    }
+
+    @GetMapping("/payments/{paymentId}")
+    ApiResponse<?> payment(@PathVariable UUID paymentId) {
+        return ApiResponse.ok(service.payment(paymentId));
+    }
+
+    @PostMapping("/payments/momo/callback")
+    ApiResponse<?> momoCallback(@RequestBody PaymentCallbackRequest request) {
+        return ApiResponse.ok(service.handleMomoCallback(request));
+    }
+
+    @PostMapping("/payments/bank-transfer/callback")
+    ApiResponse<?> bankTransferCallback(@RequestBody PaymentCallbackRequest request) {
+        return ApiResponse.ok(service.handleBankTransferCallback(request));
     }
 
     @GetMapping("/admin/workspaces")
@@ -147,6 +185,16 @@ public class ForepController {
         return ApiResponse.ok(service.updateSubscriptionPlan(id, request));
     }
 
+    @PatchMapping("/admin/subscription-plans/{id}/activate")
+    ApiResponse<?> activateSubscriptionPlan(@PathVariable UUID id) {
+        return ApiResponse.ok(service.activateSubscriptionPlan(id));
+    }
+
+    @PatchMapping("/admin/subscription-plans/{id}/deactivate")
+    ApiResponse<?> deactivateSubscriptionPlan(@PathVariable UUID id) {
+        return ApiResponse.ok(service.deactivateSubscriptionPlan(id));
+    }
+
     @GetMapping("/admin/workspace-registrations")
     ApiResponse<?> adminWorkspaceRegistrations() {
         return ApiResponse.ok(service.adminWorkspaceRegistrations());
@@ -160,6 +208,21 @@ public class ForepController {
     @PatchMapping("/admin/workspace-registrations/{id}/confirm-payment")
     ApiResponse<?> confirmRegistrationPayment(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
         return ApiResponse.ok(service.confirmRegistrationPayment(id, request));
+    }
+
+    @PostMapping("/admin/workspace-registrations/{id}/activate")
+    ApiResponse<?> activateWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
+    }
+
+    @PatchMapping("/admin/payments/{paymentId}/confirm")
+    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
+    }
+
+    @PatchMapping("/admin/payments/{paymentId}/reject")
+    ApiResponse<?> adminRejectPayment(@PathVariable UUID paymentId, @RequestBody(required = false) ReviewRegistrationRequest request) {
+        return ApiResponse.ok(service.adminRejectPayment(paymentId, request));
     }
 
     @PatchMapping("/admin/workspace-registrations/{id}/request-payment-correction")

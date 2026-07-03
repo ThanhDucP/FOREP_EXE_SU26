@@ -61,8 +61,24 @@ public final class Enums {
         PENDING, CONFIRMED, REJECTED, CORRECTION_REQUESTED
     }
 
+    public enum PaymentMethod {
+        MOMO, BANK_TRANSFER
+    }
+
+    public enum PaymentTransactionStatus {
+        PENDING, SUCCESS, FAILED, EXPIRED, CANCELLED
+    }
+
     public enum RegistrationStatus {
-        SUBMITTED, PAYMENT_PENDING, PAYMENT_SUBMITTED, APPROVED, REJECTED
+        SUBMITTED,
+        PAYMENT_PENDING,
+        PAYMENT_SUBMITTED,
+        PENDING_PLAN_SELECTION,
+        PENDING_PAYMENT,
+        PAYMENT_CONFIRMED,
+        APPROVED,
+        REJECTED,
+        CANCELLED
     }
 
     public enum FeedbackStatus {

@@ -26,10 +26,15 @@ public class WorkspaceRegistrationEntity extends BaseEntity {
     private String contactPhone;
     @Column(columnDefinition = "text")
     private String businessAddress;
-    @Column(nullable = false)
     private UUID subscriptionPlanId;
-    @Column(nullable = false)
     private int maxUsers;
+    @Column(nullable = false)
+    private int maxOwnerAccounts = 0;
+    @Column(nullable = false)
+    private int maxEmployeeAccounts = 0;
+    private String representativeFullName;
+    private String representativeEmail;
+    private String representativePhone;
     private String ownerFullName;
     private String ownerEmail;
     private String ownerPhone;
@@ -71,6 +76,16 @@ public class WorkspaceRegistrationEntity extends BaseEntity {
     public void setSubscriptionPlanId(UUID subscriptionPlanId) { this.subscriptionPlanId = subscriptionPlanId; }
     public int getMaxUsers() { return maxUsers; }
     public void setMaxUsers(int maxUsers) { this.maxUsers = maxUsers; }
+    public int getMaxOwnerAccounts() { return maxOwnerAccounts; }
+    public void setMaxOwnerAccounts(int maxOwnerAccounts) { this.maxOwnerAccounts = maxOwnerAccounts; }
+    public int getMaxEmployeeAccounts() { return maxEmployeeAccounts; }
+    public void setMaxEmployeeAccounts(int maxEmployeeAccounts) { this.maxEmployeeAccounts = maxEmployeeAccounts; }
+    public String getRepresentativeFullName() { return representativeFullName; }
+    public void setRepresentativeFullName(String representativeFullName) { this.representativeFullName = representativeFullName; }
+    public String getRepresentativeEmail() { return representativeEmail; }
+    public void setRepresentativeEmail(String representativeEmail) { this.representativeEmail = representativeEmail; }
+    public String getRepresentativePhone() { return representativePhone; }
+    public void setRepresentativePhone(String representativePhone) { this.representativePhone = representativePhone; }
     public String getOwnerFullName() { return ownerFullName; }
     public void setOwnerFullName(String ownerFullName) { this.ownerFullName = ownerFullName; }
     public String getOwnerEmail() { return ownerEmail; }
