@@ -8,5 +8,6 @@ import java.util.UUID;
 
 public interface WorkspaceRegistrationRepository extends JpaRepository<WorkspaceRegistrationEntity, UUID> {
     Optional<WorkspaceRegistrationEntity> findByWorkspaceIdentifierIgnoreCase(String workspaceIdentifier);
+    Optional<WorkspaceRegistrationEntity> findByRegistrationToken(String registrationToken);
     List<WorkspaceRegistrationEntity> findAllByOrderByCreatedAtDesc();
 }

@@ -35,6 +35,9 @@ public class WorkspaceRegistrationEntity extends BaseEntity {
     private String representativeFullName;
     private String representativeEmail;
     private String representativePhone;
+    @Column(unique = true)
+    private String registrationToken;
+    private OffsetDateTime expiredAt;
     private String ownerFullName;
     private String ownerEmail;
     private String ownerPhone;
@@ -86,6 +89,10 @@ public class WorkspaceRegistrationEntity extends BaseEntity {
     public void setRepresentativeEmail(String representativeEmail) { this.representativeEmail = representativeEmail; }
     public String getRepresentativePhone() { return representativePhone; }
     public void setRepresentativePhone(String representativePhone) { this.representativePhone = representativePhone; }
+    public String getRegistrationToken() { return registrationToken; }
+    public void setRegistrationToken(String registrationToken) { this.registrationToken = registrationToken; }
+    public OffsetDateTime getExpiredAt() { return expiredAt; }
+    public void setExpiredAt(OffsetDateTime expiredAt) { this.expiredAt = expiredAt; }
     public String getOwnerFullName() { return ownerFullName; }
     public void setOwnerFullName(String ownerFullName) { this.ownerFullName = ownerFullName; }
     public String getOwnerEmail() { return ownerEmail; }

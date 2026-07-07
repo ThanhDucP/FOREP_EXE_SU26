@@ -233,9 +233,14 @@ type AssigneeRecommendation = {
 type SubscriptionPlan = {
   id: string;
   name: string;
+  description: string | null;
   price: number;
   durationDays: number;
+  durationInMonths: number;
   maxUsers: number;
+  maxOwnerAccounts: number;
+  maxEmployeeAccounts: number;
+  hasFullFeatures: boolean;
   maxWorkspaces: number | null;
   aiUsageLimit: number | null;
   features: string | null;
@@ -252,14 +257,19 @@ type WorkspaceRegistration = {
   contactEmail: string;
   contactPhone: string;
   businessAddress: string | null;
-  subscriptionPlanId: string;
+  representativeFullName: string;
+  representativeEmail: string;
+  representativePhone: string | null;
+  subscriptionPlanId: string | null;
   maxUsers: number;
+  maxOwnerAccounts: number;
+  maxEmployeeAccounts: number;
   ownerFullName: string;
   ownerEmail: string;
   ownerPhone: string | null;
   paymentProofUrl: string | null;
   paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
-  registrationStatus: 'SUBMITTED' | 'PAYMENT_PENDING' | 'PAYMENT_SUBMITTED' | 'APPROVED' | 'REJECTED';
+  registrationStatus: 'PENDING_PLAN_SELECTION' | 'PENDING_PAYMENT' | 'PAYMENT_CONFIRMED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'SUBMITTED' | 'PAYMENT_PENDING' | 'PAYMENT_SUBMITTED';
   workspaceId: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
@@ -278,6 +288,8 @@ type PlatformWorkspace = {
   businessAddress: string | null;
   subscriptionPlanId: string | null;
   maxUsers: number;
+  maxOwnerAccounts: number;
+  maxEmployeeAccounts: number;
   currentUsers: number;
   status: 'PENDING_PAYMENT' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'EXPIRED';
   paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
@@ -286,6 +298,31 @@ type PlatformWorkspace = {
   expiresAt: string | null;
   lastActivityAt: string | null;
   createdAt: string;
+};
+
+type PaymentTransaction = {
+  id: string;
+  workspaceRegistrationId: string;
+  subscriptionPlanId: string;
+  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
+  amount: number;
+  currency: 'VND';
+  orderCode: string;
+  requestId: string;
+  providerTransactionId: string | null;
+  providerPaymentUrl: string | null;
+  providerDeeplink: string | null;
+  providerQrCodeUrl: string | null;
+  bankCode: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
+  transferContent: string | null;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  paidAt: string | null;
+  expiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 ```
 
@@ -316,9 +353,12 @@ type PlatformWorkspace = {
 
 | Chuc nang | Method | Path | Body | Quyen |
 |---|---|---|---|---|
-| Danh sach goi dang ky | GET | `/subscription-plans` | none | public |
-| Gui ho so dang ky workspace | POST | `/workspace-registrations` | `{ businessName, workspaceName, workspaceIdentifier, contactEmail, contactPhone, businessAddress, subscriptionPlanId, ownerFullName, ownerEmail, ownerPhone, ownerPassword, paymentProofUrl, paymentNote }` | public |
-| Bo sung minh chung thanh toan | PATCH | `/workspace-registrations/{id}/payment` | `{ paymentProofUrl, paymentNote }` | public |
+| Danh sach goi dang ky active | GET | `/subscription-plans/active` | none | public |
+| Gui thong tin dang ky workspace | POST | `/workspace-registrations` | `{ businessName, workspaceName, contactEmail, contactPhone, businessAddress, representativeFullName, representativeEmail, representativePhone }` | public |
+| Xem ho so dang ky | GET | `/workspace-registrations/{id}` | none | public |
+| Chon goi dang ky | PATCH | `/workspace-registrations/{id}/select-plan` | `{ subscriptionPlanId }` | public |
+| Tao giao dich thanh toan | POST | `/workspace-registrations/{id}/payments` | `{ paymentMethod: 'MOMO' \| 'BANK_TRANSFER' }` | public |
+| Xem payment | GET | `/payments/{paymentId}` | none | public |
 | Xem workspace | GET | `/workspaces/current` | none | OWNER |
 | Sua workspace | PUT | `/workspaces/current` | `{ name, shortCode, logo, address }` | OWNER |
 
@@ -326,15 +366,14 @@ Khong dung `/workspaces/register` cho user public nua. Endpoint nay da bi chan d
 
 Flow dang ky workspace public:
 
-1. Hien thi trang pricing tu `GET /subscription-plans`, moi goi can co ten, gia, thoi han, gioi han user, gioi han AI va danh sach tinh nang theo cach trinh bay card/plan nhu cac san pham subscription.
-2. User chon goi va nhap thong tin doanh nghiep, workspace, owner account dau tien.
-   UI khong cho user tu nhap `maxUsers`; backend lay gioi han user tu goi subscription da chon.
-3. UI hien thi huong dan chuyen khoan/payment instructions cua nen tang.
-4. User upload/nhap `paymentProofUrl` va `paymentNote`.
-5. UI goi `POST /workspace-registrations`; neu user bo sung sau thi goi `PATCH /workspace-registrations/{id}/payment`.
-6. Trang ket qua hien thi trang thai `PAYMENT_PENDING` hoac `PAYMENT_SUBMITTED`, khong cho login owner.
-7. Chi khi System Admin confirm payment va approve, backend moi tao workspace + tai khoan OWNER.
-8. Sau khi duoc approve, Business Owner moi nhan thong tin va dang nhap.
+1. Trang workspace registration nhap thong tin doanh nghiep va nguoi dai dien, goi `POST /workspace-registrations`, sau do chuyen sang trang chon goi bang `registrationId`.
+2. Trang chon goi goi `GET /subscription-plans/active`, hien thi name, description, price, duration, `maxOwnerAccounts`, `maxEmployeeAccounts`, full features va nut chon goi.
+3. Khi user chon goi, UI goi `PATCH /workspace-registrations/{id}/select-plan` roi chuyen sang trang chon phuong thuc thanh toan.
+4. Trang chon payment method bat buoc user chon `MOMO` hoac `BANK_TRANSFER`, sau do goi `POST /workspace-registrations/{id}/payments`.
+5. Trang payment instruction hien thi theo `PaymentTransaction`: MoMo QR/payUrl/deeplink hoac VietQR bank info, amount, orderCode, status.
+6. UI poll `GET /payments/{paymentId}` moi 3-5 giay den khi status la `SUCCESS`, `FAILED` hoac `EXPIRED`.
+7. Trang ket qua goi them `GET /workspace-registrations/{id}` de hien thi payment result va workspace activation status.
+8. UI khong cho login owner khi payment chua `SUCCESS`; frontend khong tu tin payment success tu query string/callback client.
 
 Neu khong thanh toan, user public khong tao duoc workspace/account. Chi System Admin moi duoc tao workspace truc tiep bang API admin.
 
@@ -355,12 +394,17 @@ Tat ca endpoint duoi day chi danh cho `SYSTEM_ADMIN`.
 | Reset password owner | PATCH | `/admin/business-owners/{id}/reset-password` | none |
 | Doi status owner | PATCH | `/admin/business-owners/{id}/status?status=ACTIVE` | query `status` |
 | Danh sach goi | GET | `/admin/subscription-plans` | none |
-| Tao goi | POST | `/admin/subscription-plans` | `{ name, price, durationDays, maxUsers, maxWorkspaces, aiUsageLimit, features, status }` |
-| Sua goi | PUT | `/admin/subscription-plans/{id}` | `{ name, price, durationDays, maxUsers, maxWorkspaces, aiUsageLimit, features, status }` |
+| Tao goi | POST | `/admin/subscription-plans` | `{ name, description, price, durationDays, durationInMonths, maxUsers, maxOwnerAccounts, maxEmployeeAccounts, hasFullFeatures, maxWorkspaces, aiUsageLimit, features, status }` |
+| Sua goi | PUT | `/admin/subscription-plans/{id}` | `{ name, description, price, durationDays, durationInMonths, maxUsers, maxOwnerAccounts, maxEmployeeAccounts, hasFullFeatures, maxWorkspaces, aiUsageLimit, features, status }` |
+| Kich hoat goi | PATCH | `/admin/subscription-plans/{id}/activate` | none |
+| Tat goi | PATCH | `/admin/subscription-plans/{id}/deactivate` | none |
 | Danh sach ho so dang ky | GET | `/admin/workspace-registrations` | none |
-| Xac nhan thanh toan | PATCH | `/admin/workspace-registrations/{id}/confirm-payment` | `{ note }` |
+| Xac nhan payment transaction | PATCH | `/admin/payments/{paymentId}/confirm` | `{ note }` |
+| Tu choi payment transaction | PATCH | `/admin/payments/{paymentId}/reject` | `{ note }` |
+| Xac nhan thanh toan theo ho so legacy | PATCH | `/admin/workspace-registrations/{id}/confirm-payment` | `{ note }` |
 | Yeu cau sua thanh toan | PATCH | `/admin/workspace-registrations/{id}/request-payment-correction` | `{ note }` |
 | Duyet dang ky, tao workspace + owner | PATCH | `/admin/workspace-registrations/{id}/approve` | `{ note }` |
+| Kich hoat dang ky | POST | `/admin/workspace-registrations/{id}/activate` | `{ note }` |
 | Tu choi dang ky | PATCH | `/admin/workspace-registrations/{id}/reject` | `{ note }` |
 | Danh sach feedback | GET | `/admin/business-feedback` | none |
 | Review feedback | PATCH | `/admin/business-feedback/{id}/review` | `{ supportNote }` |
@@ -555,19 +599,87 @@ States:
 
 ### Workspace registration
 
+Implement thanh 5 man hinh public rieng, khong gom chon goi va payment vao form dau tien.
+
+#### Registration information
+
 Fields:
 
+- Ten doanh nghiep: required.
 - Ten workspace: required.
-- Ma viet tat to chuc: required, dung 2 ky tu chu/so, vi du `SE`.
-- Dia chi: optional.
-- Ho ten owner: required.
-- Email owner: required, email.
-- So dien thoai owner: optional.
-- Mat khau owner: required.
+- Email doanh nghiep: required, email.
+- So dien thoai doanh nghiep: optional.
+- Dia chi doanh nghiep: optional.
+- Ho ten nguoi dai dien: required.
+- Email nguoi dai dien: required, email.
+- So dien thoai nguoi dai dien: optional.
+
+Submit `POST /workspace-registrations`. Khi thanh cong, lay `data.id` va dieu huong den `/workspace-registration/{registrationId}/plans`.
+
+#### Plan selection
+
+API:
+
+- `GET /subscription-plans/active`
+- `PATCH /workspace-registrations/{id}/select-plan`
+
+Card goi can hien:
+
+- Ten goi va mo ta.
+- Gia thang VND.
+- So Business Owner toi da.
+- So Employee toi da.
+- Full features/AI usage limit neu co.
+
+#### Payment method
+
+Fields:
+
+- Radio/card `MOMO`.
+- Radio/card `BANK_TRANSFER`.
+
+Submit `POST /workspace-registrations/{id}/payments`, sau do dieu huong den trang instruction bang `paymentId`.
+
+#### Payment instruction
+
+API:
+
+- `GET /payments/{paymentId}` poll moi 3-5 giay.
+
+MoMo UI:
+
+- Hien `providerQrCodeUrl` neu co.
+- Hien nut mo `providerPaymentUrl` neu co.
+- Hien deeplink neu co.
+- Hien amount, orderCode, status.
+
+Bank/VietQR UI:
+
+- Hien `providerQrCodeUrl`.
+- Hien bankName, bankCode, bankAccountNumber, bankAccountName.
+- Hien amount va transferContent.
+- Hien status.
+
+#### Payment result
+
+API:
+
+- `GET /payments/{paymentId}`.
+- `GET /workspace-registrations/{registrationId}`.
+
+States:
+
+- `SUCCESS`: hien thanh toan thanh cong, workspace dang kich hoat/da kich hoat.
+- `FAILED`: hien that bai va nut tao giao dich moi.
+- `EXPIRED`: hien het han va nut tao giao dich moi.
+- `PENDING`: tiep tuc hien instruction/polling.
 
 Buttons:
 
-- `Tao workspace`: submit `POST /workspace-registrations`.
+- `Gui thong tin`: submit `POST /workspace-registrations`.
+- `Chon goi`: submit `PATCH /workspace-registrations/{id}/select-plan`.
+- `Tiep tuc thanh toan`: submit `POST /workspace-registrations/{id}/payments`.
+- `Thu lai thanh toan`: tao payment transaction moi.
 - `Da co tai khoan`: chuyen login.
 
 ### Owner dashboard
@@ -825,7 +937,11 @@ Buttons:
 | Button | Man hinh | Role | API | Disabled khi |
 |---|---|---|---|---|
 | Dang nhap | Login | Public | `POST /auth/login` | form invalid/loading |
-| Tao workspace | Register | Public | `POST /workspace-registrations` | form invalid/loading |
+| Gui thong tin dang ky | Registration information | Public | `POST /workspace-registrations` | form invalid/loading |
+| Chon goi dang ky | Plan selection | Public | `PATCH /workspace-registrations/{id}/select-plan` | no plan selected/loading |
+| Tiep tuc thanh toan | Payment method | Public | `POST /workspace-registrations/{id}/payments` | no payment method selected/loading |
+| Mo trang MoMo | Payment instruction | Public | external `providerPaymentUrl` | no providerPaymentUrl |
+| Thu lai thanh toan | Payment result | Public | `POST /workspace-registrations/{id}/payments` | loading |
 | Dang xuat | User menu | Authenticated | `POST /auth/logout` | loading |
 | Doi mat khau | Profile/User menu | Authenticated | `PATCH /auth/change-password` | form invalid/loading |
 | Them nhan vien | Employees | OWNER | none, mo modal | none |

@@ -27,6 +27,8 @@ public class PaymentTransactionEntity extends BaseEntity {
     @Column(nullable = false)
     private String currency = "VND";
     @Column(nullable = false, unique = true)
+    private String paymentCode;
+    @Column(nullable = false, unique = true)
     private String orderCode;
     @Column(nullable = false, unique = true)
     private String requestId;
@@ -63,6 +65,8 @@ public class PaymentTransactionEntity extends BaseEntity {
     public void setAmount(BigDecimal amount) { this.amount = amount; }
     public String getCurrency() { return currency; }
     public void setCurrency(String currency) { this.currency = currency; }
+    public String getPaymentCode() { return paymentCode; }
+    public void setPaymentCode(String paymentCode) { this.paymentCode = paymentCode; }
     public String getOrderCode() { return orderCode; }
     public void setOrderCode(String orderCode) { this.orderCode = orderCode; }
     public String getRequestId() { return requestId; }

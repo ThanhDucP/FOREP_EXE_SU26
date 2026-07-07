@@ -35,12 +35,16 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/api/public/**", "/api/payment-callbacks/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/workspace-registrations").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/payments/momo/callback", "/api/v1/payments/bank-transfer/callback").permitAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login", "/api/v1/workspaces/register",
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
-                                "/api/v1/workspace-registrations/**", "/api/v1/payments/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
-                        .requestMatchers("/api/v1/employees/**", "/api/v1/analytics/**", "/api/v1/ai/**").hasRole("OWNER")
-                        .requestMatchers("/api/v1/workspaces/current").hasRole("OWNER")
+                        .requestMatchers("/api/v1/admin/**", "/api/admin/**").hasAnyRole("PLATFORM_ADMIN", "SYSTEM_ADMIN")
+                        .requestMatchers("/api/v1/employees/**").hasAnyRole("BUSINESS_OWNER", "OWNER")
+                        .requestMatchers("/api/v1/analytics/**", "/api/v1/ai/**").hasAnyRole("BUSINESS_OWNER", "MANAGER", "OWNER")
+                        .requestMatchers("/api/v1/workspaces/current", "/api/workspace/**").hasAnyRole("BUSINESS_OWNER", "OWNER")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

@@ -5,7 +5,8 @@ public final class Enums {
     }
 
     public enum Role {
-        SYSTEM_ADMIN, OWNER, EMPLOYEE
+        PLATFORM_ADMIN, BUSINESS_OWNER, MANAGER, EMPLOYEE, SYSTEM,
+        SYSTEM_ADMIN, OWNER
     }
 
     public enum UserStatus {
@@ -66,11 +67,12 @@ public final class Enums {
     }
 
     public enum PaymentTransactionStatus {
-        PENDING, SUCCESS, FAILED, EXPIRED, CANCELLED
+        PENDING, PROCESSING, SUCCESS, FAILED, EXPIRED, CANCELLED, REFUNDED, MANUAL_REVIEW
     }
 
     public enum RegistrationStatus {
         SUBMITTED,
+        DRAFT,
         PAYMENT_PENDING,
         PAYMENT_SUBMITTED,
         PENDING_PLAN_SELECTION,
@@ -78,7 +80,8 @@ public final class Enums {
         PAYMENT_CONFIRMED,
         APPROVED,
         REJECTED,
-        CANCELLED
+        CANCELLED,
+        EXPIRED
     }
 
     public enum FeedbackStatus {
