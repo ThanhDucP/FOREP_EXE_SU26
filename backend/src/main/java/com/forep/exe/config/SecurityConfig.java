@@ -36,7 +36,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login", "/api/v1/workspaces/register",
-                                "/api/v1/subscription-plans", "/api/v1/workspace-registrations/**",
+                                "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
+                                "/api/v1/workspace-registrations/**", "/api/v1/payments/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/v1/employees/**", "/api/v1/analytics/**", "/api/v1/ai/**").hasRole("OWNER")
                         .requestMatchers("/api/v1/workspaces/current").hasRole("OWNER")
