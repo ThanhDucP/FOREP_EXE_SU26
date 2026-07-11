@@ -8,6 +8,14 @@ Luong dung:
 Frontend -> Backend API -> AI Service -> Gemini/Groq
 ```
 
+Nguyen tac loi: Backend computes, LLM explains.
+
+- Backend validate permission, workspace scope, subscription/payment rules, va input.
+- Backend lay data that tu database va tinh deterministic metrics.
+- AI Service chi nhan clean structured context tu backend.
+- LLM chi phan tich text, giai thich recommendation, canh bao workload, va tom tat bao cao.
+- LLM khong duoc assign task, sua data, query database truc tiep, hay quyet dinh nghiep vu cuoi cung.
+
 ## Chay local bang Docker
 
 ```bash
@@ -28,6 +36,16 @@ Health:
 Internal AI:
 
 - POST `/internal/ai/recommend-assignee`
+- POST `/internal/ai/tasks/analyze`
+- POST `/internal/ai/tasks/estimate-hours`
+- POST `/internal/ai/recommendations/individual/explain`
+- POST `/internal/ai/recommendations/team-leader/explain`
+- POST `/internal/ai/recommendations/team-member/explain`
+- POST `/internal/ai/recommendations/result/explain`
+- POST `/internal/ai/workload-risk`
+- POST `/internal/ai/employee-report`
+- POST `/internal/ai/business-owner/summary`
+- POST `/internal/ai/platform-admin/summary`
 - POST `/internal/ai/workload-summary`
 - POST `/internal/ai/delay-risks`
 - POST `/internal/ai/daily-summary`

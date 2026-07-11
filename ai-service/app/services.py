@@ -20,25 +20,46 @@ from app.schemas import (
     AssigneeRecommendation,
     BusinessSummaryRequest,
     BusinessSummaryResponse,
+    BusinessOwnerOperationalSummaryRequest,
+    BusinessOwnerOperationalSummaryResponse,
     DailyReportInsightsRequest,
     DailyReportInsightsResponse,
     DailySummaryRequest,
     DailySummaryResponse,
     DelayRisk,
     DelayRiskRequest,
+    EmployeeReportRequest,
+    EmployeeReportResponse,
+    EstimatedHoursRequest,
+    EstimatedHoursResponse,
     ExtractTasksRequest,
     ExtractTasksResponse,
     ExtractedTask,
+    IndividualRecommendationExplanationResponse,
+    MemberCandidateExplanation,
     MissingReportSuggestion,
     MissingReportsRequest,
     MissingReportsResponse,
+    PlatformAdminSystemSummaryRequest,
+    PlatformAdminSystemSummaryResponse,
     RecommendAssigneeRequest,
+    RecommendationExplanationRequest,
+    RecommendationResultExplanationRequest,
+    RecommendationResultExplanationResponse,
+    TeamLeaderRecommendationExplanationResponse,
+    TeamMemberRecommendationExplanationResponse,
+    TaskDescriptionAnalysisRequest,
+    TaskDescriptionAnalysisResponse,
     SplitTaskRequest,
     SplitTaskResponse,
     SubtaskSuggestion,
     TaskAdjustmentRequest,
     TaskAdjustmentResponse,
     TaskAdjustmentSuggestion,
+    WorkloadMonthlyWarning,
+    WorkloadRiskRequest,
+    WorkloadRiskResponse,
+    WorkloadWarningNumbers,
     WorkloadSummaryRequest,
     WorkloadSummaryResponse,
 )
@@ -257,6 +278,166 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
     if not parsed:
         raise AiProviderError("AI response contains no valid recommendations.", "AI_SCHEMA_VALIDATION_ERROR", "RECOMMEND_ASSIGNEE")
     return parsed[:3]
+
+
+def analyze_task_description(payload: TaskDescriptionAnalysisRequest) -> TaskDescriptionAnalysisResponse:
+    output = _ask_llm_json(
+        task=(
+            "Analyze task text and return exactly this JSON schema: "
+            "{\"taskType\":\"string\",\"taskDomain\":\"string\",\"suggestedDifficulty\":\"EASY|MEDIUM|HARD|CRITICAL\","
+            "\"suggestedEmployeeLevel\":\"INTERN|FRESHER|JUNIOR|MIDDLE|SENIOR|LEAD\","
+            "\"requiredSkills\":[\"string\"],\"requiredJobPositions\":[\"string\"],\"relatedDepartment\":\"string\","
+            "\"estimatedWorkingHoursSuggestion\":{\"value\":number|null,\"reason\":\"string\",\"confidence\":0},"
+            "\"missingInformation\":[\"string\"],\"clarifyingQuestions\":[\"string\"],\"summary\":\"string\"}. "
+            "Use only availableTaskTypes, availableJobPositions, availableSkills, and availableDepartments from input. "
+            "If no suitable item exists, return UNKNOWN for that field. "
+            "If deadline is missing, include deadline in missingInformation. "
+            "If estimated hours cannot be inferred, set value to null and ask for user input. "
+            "Confidence must be between 0 and 1. Never fabricate unavailable data."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="TASK_DESCRIPTION_ANALYSIS",
+    )
+    response = TaskDescriptionAnalysisResponse(**output)
+    response.required_skills = _filter_known_values(response.required_skills, payload.available_skills)
+    response.required_job_positions = _filter_known_values(response.required_job_positions, payload.available_job_positions)
+    response.task_type = _known_or_unknown(response.task_type, payload.available_task_types)
+    response.related_department = _known_or_unknown(response.related_department, payload.available_departments)
+    response.estimated_working_hours_suggestion.confidence = _clamp_confidence(response.estimated_working_hours_suggestion.confidence)
+    if not payload.deadline and "deadline" not in response.missing_information:
+        response.missing_information.append("deadline")
+    return response
+
+
+def suggest_estimated_hours(payload: EstimatedHoursRequest) -> EstimatedHoursResponse:
+    output = _ask_llm_json(
+        task=(
+            "Suggest estimated working hours. Return exactly: "
+            "{\"suggestedHours\":number|null,\"workingDays\":number|null,\"calculationBasis\":\"string\","
+            "\"confidence\":0,\"userConfirmationRequired\":true}. "
+            "Use backendWorkingDays and backendDefaultHours when provided. One working day is 8 hours and weekends are excluded by backend. "
+            "Do not make a final decision; user confirmation is required."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="ESTIMATED_HOURS",
+    )
+    response = EstimatedHoursResponse(**output)
+    if payload.backend_working_days is not None:
+        response.working_days = payload.backend_working_days
+    if payload.backend_default_hours is not None and response.suggested_hours is None:
+        response.suggested_hours = payload.backend_default_hours
+    response.confidence = _clamp_confidence(response.confidence)
+    response.user_confirmation_required = True
+    return response
+
+
+def explain_individual_recommendation(payload: RecommendationExplanationRequest) -> IndividualRecommendationExplanationResponse:
+    output = _recommendation_explanation_json(payload, "INDIVIDUAL")
+    response = IndividualRecommendationExplanationResponse(**output)
+    response.ranked_candidates = _validate_individual_candidates(response.ranked_candidates, payload)
+    return response
+
+
+def explain_team_leader_recommendation(payload: RecommendationExplanationRequest) -> TeamLeaderRecommendationExplanationResponse:
+    output = _recommendation_explanation_json(payload, "TEAM_LEADER")
+    response = TeamLeaderRecommendationExplanationResponse(**output)
+    response.leader_candidates = _validate_leader_candidates(response.leader_candidates, payload)
+    return response
+
+
+def explain_team_member_recommendation(payload: RecommendationExplanationRequest) -> TeamMemberRecommendationExplanationResponse:
+    output = _recommendation_explanation_json(payload, "TEAM_MEMBER")
+    response = TeamMemberRecommendationExplanationResponse(**output)
+    response.member_candidates = _validate_member_candidates(response.member_candidates, payload)
+    return response
+
+
+def explain_recommendation_result(payload: RecommendationResultExplanationRequest) -> RecommendationResultExplanationResponse:
+    output = _ask_llm_json(
+        task=(
+            "Explain an already selected assignee or team. Return exactly: "
+            "{\"explanationTitle\":\"string\",\"shortExplanation\":\"string\",\"detailedExplanation\":\"string\","
+            "\"keyReasons\":[\"string\"],\"riskWarnings\":[\"string\"],\"dataUsed\":[\"string\"]}. "
+            "Use only task, selectedAssigneeOrTeam, rankingData, workloadData, and performanceData. "
+            "Do not hide risks, do not exaggerate, and do not make or change the assignment."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="RECOMMENDATION_RESULT_EXPLANATION",
+    )
+    return RecommendationResultExplanationResponse(**output)
+
+
+def explain_workload_risk(payload: WorkloadRiskRequest) -> WorkloadRiskResponse:
+    output = _ask_llm_json(
+        task=(
+            "Explain backend-calculated monthly workload risk. Return exactly: "
+            "{\"overallRisk\":\"LOW|MEDIUM|HIGH\",\"monthlyWarnings\":[{\"month\":\"string\",\"status\":\"string\","
+            "\"message\":\"string\",\"numbers\":{\"existingHours\":0,\"newTaskHours\":0,\"totalHours\":0,"
+            "\"capacityHours\":0,\"usagePercentage\":0}}],\"recommendation\":\"string\"}. "
+            "Do not recalculate numbers. Use the numbers provided by backend. "
+            "If any month is Quá tải or usagePercentage > 100, overallRisk should be HIGH unless backendOverallRisk is provided."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="WORKLOAD_RISK",
+    )
+    response = WorkloadRiskResponse(**output)
+    response.monthly_warnings = _validate_workload_warnings(response.monthly_warnings, payload)
+    if payload.backend_overall_risk:
+        response.overall_risk = payload.backend_overall_risk
+    elif any(item.usage_percentage > 100 or item.workload_status == "Quá tải" for item in payload.monthly_workload_evaluation):
+        response.overall_risk = "HIGH"
+    return response
+
+
+def generate_employee_report(payload: EmployeeReportRequest) -> EmployeeReportResponse:
+    output = _ask_llm_json(
+        task=(
+            "Generate an employee performance report. Return exactly: "
+            "{\"reportType\":\"WEEKLY|MONTHLY|QUARTERLY|YEARLY\",\"employeeName\":\"string\",\"periodSummary\":\"string\","
+            "\"performanceEvaluation\":\"EXCELLENT|GOOD|STABLE|NEEDS_ATTENTION|RISKY\",\"keyMetrics\":{},"
+            "\"strengths\":[\"string\"],\"issues\":[\"string\"],\"recommendations\":[\"string\"]}. "
+            "Use backend metrics only. Do not invent actualWorkingHours if unavailable. Avoid sensitive personal judgment."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="EMPLOYEE_REPORT",
+    )
+    response = EmployeeReportResponse(**output)
+    response.report_type = str(payload.period.get("type", response.report_type))
+    response.employee_name = str(payload.employee.get("fullName", response.employee_name))
+    response.key_metrics = _copy_report_metrics(payload.metrics)
+    return response
+
+
+def summarize_business_owner_operations(payload: BusinessOwnerOperationalSummaryRequest) -> BusinessOwnerOperationalSummaryResponse:
+    output = _ask_llm_json(
+        task=(
+            "Create a business owner operational summary from workspace-level data only. Return exactly: "
+            "{\"summaryTitle\":\"string\",\"businessHealthLabel\":\"GOOD|STABLE|NEEDS_ATTENTION|RISK\",\"summary\":\"string\","
+            "\"keyNumbers\":{},\"workloadInsights\":[\"string\"],\"subscriptionInsights\":[\"string\"],"
+            "\"risks\":[\"string\"],\"recommendedActions\":[\"string\"]}. "
+            "Do not expose employee private data. Include subscription warnings when close to limits or expiration."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="BUSINESS_OWNER_OPERATIONAL_SUMMARY",
+    )
+    response = BusinessOwnerOperationalSummaryResponse(**output)
+    response.key_numbers = _business_key_numbers(payload)
+    return response
+
+
+def summarize_platform_admin_system(payload: PlatformAdminSystemSummaryRequest) -> PlatformAdminSystemSummaryResponse:
+    output = _ask_llm_json(
+        task=(
+            "Create a platform admin summary from platform-level data only. Return exactly: "
+            "{\"summaryTitle\":\"string\",\"platformStatusLabel\":\"HEALTHY|STABLE|NEEDS_ATTENTION|RISK\",\"summary\":\"string\","
+            "\"revenueInsights\":[\"string\"],\"workspaceInsights\":[\"string\"],\"paymentInsights\":[\"string\"],"
+            "\"feedbackInsights\":[\"string\"],\"risks\":[\"string\"],\"recommendedActions\":[\"string\"]}. "
+            "Do not include internal task or employee data. Do not expose confidential business details."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature="PLATFORM_ADMIN_SYSTEM_SUMMARY",
+    )
+    return PlatformAdminSystemSummaryResponse(**output)
 
 
 def workload_summary(payload: WorkloadSummaryRequest) -> WorkloadSummaryResponse:
@@ -1074,6 +1255,165 @@ def _parse_delay_risks(items: list[Any], payload: DelayRiskRequest) -> list[Dela
         except Exception:
             continue
     return parsed
+
+
+def _recommendation_explanation_json(payload: RecommendationExplanationRequest, expected_type: str) -> dict[str, Any]:
+    if payload.recommendation_type != expected_type:
+        raise AiProviderError(
+            f"recommendationType must be {expected_type}.",
+            "AI_SCHEMA_VALIDATION_ERROR",
+            f"{expected_type}_EXPLANATION",
+            http_status=400,
+        )
+    return _ask_llm_json(
+        task=(
+            f"Explain backend-ranked {expected_type} recommendations. "
+            "Backend already calculated metrics and ranking; do not change rank, candidate IDs, names, or numbers. "
+            "Use only the task and candidates in the input. Do not recommend unavailable or outside-workspace employees. "
+            "Do not claim experience if similarTaskCount is 0. Clearly say when data is insufficient. "
+            "Return raw JSON in the exact schema for this recommendation type and no extra fields."
+        ),
+        data=payload.model_dump(by_alias=True),
+        feature=f"{expected_type}_EXPLANATION",
+    )
+
+
+def _candidate_by_id(payload: RecommendationExplanationRequest) -> dict[str, Any]:
+    return {candidate.employee_id: candidate for candidate in payload.candidates}
+
+
+def _ranked_ids(payload: RecommendationExplanationRequest) -> list[str]:
+    return [candidate.employee_id for candidate in sorted(payload.candidates, key=lambda item: item.rank)]
+
+
+def _validate_individual_candidates(items, payload: RecommendationExplanationRequest):
+    allowed = _candidate_by_id(payload)
+    expected_order = _ranked_ids(payload)
+    valid = []
+    for item in items:
+        candidate = allowed.get(item.employee_id)
+        if candidate is None or item.full_name != candidate.full_name:
+            continue
+        item.rank = candidate.rank
+        item.numbers = _candidate_numbers(candidate, item.numbers)
+        if candidate.similar_task_count == 0:
+            item.strengths = [text for text in item.strengths if "tương tự" not in text.lower()]
+        valid.append(item)
+    return sorted(valid, key=lambda item: expected_order.index(item.employee_id) if item.employee_id in expected_order else 999)
+
+
+def _validate_leader_candidates(items, payload: RecommendationExplanationRequest):
+    allowed = _candidate_by_id(payload)
+    expected_order = _ranked_ids(payload)
+    valid = []
+    for item in items:
+        candidate = allowed.get(item.employee_id)
+        if candidate is None or item.full_name != candidate.full_name:
+            continue
+        item.rank = candidate.rank
+        item.numbers = _candidate_numbers(candidate, item.numbers)
+        previous_lead_count = candidate.previous_lead_count
+        item.leadership_evidence.previous_lead_count = previous_lead_count
+        item.leadership_evidence.lead_completion_rate = candidate.lead_completion_rate
+        item.leadership_evidence.domain_match = candidate.domain_match
+        item.leadership_evidence.similar_project_count = candidate.similar_project_count
+        if previous_lead_count <= 0:
+            item.strengths = [text for text in item.strengths if "đã dẫn" not in text.lower() and "lead" not in text.lower()]
+        valid.append(item)
+    return sorted(valid, key=lambda item: expected_order.index(item.employee_id) if item.employee_id in expected_order else 999)
+
+
+def _validate_member_candidates(items, payload: RecommendationExplanationRequest):
+    allowed = _candidate_by_id(payload)
+    expected_order = _ranked_ids(payload)
+    valid = []
+    for item in items:
+        candidate = allowed.get(item.employee_id)
+        if candidate is None or item.full_name != candidate.full_name:
+            continue
+        item.rank = candidate.rank
+        item.numbers = _candidate_numbers(candidate, item.numbers)
+        valid.append(item)
+    return sorted(valid, key=lambda item: expected_order.index(item.employee_id) if item.employee_id in expected_order else 999)
+
+
+def _candidate_numbers(candidate, numbers):
+    numbers.final_ranking_score = candidate.final_ranking_score
+    numbers.skill_match_score = candidate.skill_match_score
+    numbers.role_suitability_score = candidate.role_suitability_score
+    numbers.job_position_suitability_score = candidate.job_position_suitability_score
+    numbers.leadership_score = candidate.leadership_score
+    numbers.domain_experience_score = candidate.domain_experience_score
+    numbers.performance_score = candidate.performance_score
+    numbers.workload_availability_score = candidate.workload_availability_score
+    numbers.similar_task_count = candidate.similar_task_count
+    numbers.completion_rate = candidate.completion_rate
+    numbers.overdue_rate = candidate.overdue_rate
+    numbers.current_monthly_hours = candidate.current_monthly_hours
+    numbers.monthly_capacity_hours = candidate.monthly_capacity_hours
+    if numbers.workload_usage_percentage is not None and candidate.monthly_capacity_hours:
+        numbers.workload_usage_percentage = round(candidate.current_monthly_hours * 100 / candidate.monthly_capacity_hours, 2)
+    return numbers
+
+
+def _validate_workload_warnings(items: list[WorkloadMonthlyWarning], payload: WorkloadRiskRequest) -> list[WorkloadMonthlyWarning]:
+    by_month = {item.month: item for item in payload.monthly_workload_evaluation}
+    valid: list[WorkloadMonthlyWarning] = []
+    for warning in items:
+        source = by_month.get(warning.month)
+        if source is None:
+            continue
+        warning.status = source.workload_status
+        warning.numbers = WorkloadWarningNumbers(
+            existingHours=source.existing_hours,
+            newTaskHours=source.new_task_hours,
+            totalHours=source.total_hours_after_assignment,
+            capacityHours=payload.monthly_capacity_hours,
+            usagePercentage=source.usage_percentage,
+        )
+        valid.append(warning)
+    return valid
+
+
+def _filter_known_values(values: list[str], allowed: list[str]) -> list[str]:
+    if not allowed:
+        return []
+    allowed_map = {item.lower(): item for item in allowed}
+    return [allowed_map[item.lower()] for item in values if item.lower() in allowed_map]
+
+
+def _known_or_unknown(value: str, allowed: list[str]) -> str:
+    if not allowed:
+        return "UNKNOWN"
+    allowed_map = {item.lower(): item for item in allowed}
+    return allowed_map.get(str(value).lower(), "UNKNOWN")
+
+
+def _copy_report_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "assignedTasks",
+        "completedTasks",
+        "inProgressTasks",
+        "overdueTasks",
+        "completionRate",
+        "overdueRate",
+        "estimatedWorkingHours",
+        "actualWorkingHours",
+        "workloadStatus",
+    }
+    return {key: value for key, value in metrics.items() if key in allowed}
+
+
+def _business_key_numbers(payload: BusinessOwnerOperationalSummaryRequest) -> dict[str, Any]:
+    return {
+        "totalEmployees": payload.total_employees,
+        "activeEmployees": payload.active_employees,
+        "totalTasks": payload.total_tasks,
+        "completedTasks": payload.completed_tasks,
+        "overdueTasks": payload.overdue_tasks,
+        "completionRate": payload.completion_rate,
+        "overdueRate": payload.overdue_rate,
+    }
 
 
 def _candidate_score(employee) -> int:

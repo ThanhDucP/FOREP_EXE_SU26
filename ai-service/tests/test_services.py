@@ -14,9 +14,15 @@ from app.schemas import (
     BusinessSummaryTask,
     DailyReportInsightsRequest,
     EmployeeWorkload,
+    MonthlyWorkloadDetail,
     MissingReportEmployee,
     MissingReportsRequest,
     RecommendAssigneeRequest,
+    RecommendationExplanationRequest,
+    RecommendationTaskContext,
+    RankedCandidate,
+    TaskDescriptionAnalysisRequest,
+    WorkloadRiskRequest,
 )
 
 
@@ -202,6 +208,133 @@ class AiServiceTests(unittest.TestCase):
         self.assertEqual(len(result.missing_reports), 1)
         self.assertEqual(result.missing_reports[0].employee_id, "e1")
         self.assertEqual(result.missing_reports[0].confidence, 1.0)
+
+    def test_task_analysis_uses_only_available_catalogs(self):
+        payload = TaskDescriptionAnalysisRequest(
+            workspaceId="ws1",
+            taskTitle="Build CRM export",
+            taskDescription="Export customer list",
+            availableTaskTypes=["BACKEND"],
+            availableJobPositions=["Backend Engineer"],
+            availableSkills=["Java"],
+            availableDepartments=["Engineering"],
+            deadline=None,
+        )
+
+        with patch("app.services._ask_llm_json", return_value={
+            "taskType": "MADE_UP",
+            "taskDomain": "CRM",
+            "suggestedDifficulty": "MEDIUM",
+            "suggestedEmployeeLevel": "MIDDLE",
+            "requiredSkills": ["Java", "FakeSkill"],
+            "requiredJobPositions": ["Backend Engineer", "Fake Role"],
+            "relatedDepartment": "Unknown Department",
+            "estimatedWorkingHoursSuggestion": {"value": 16, "reason": "Two days", "confidence": 2},
+            "missingInformation": [],
+            "clarifyingQuestions": [],
+            "summary": "Analyze task.",
+        }):
+            result = services.analyze_task_description(payload)
+
+        self.assertEqual(result.task_type, "UNKNOWN")
+        self.assertEqual(result.required_skills, ["Java"])
+        self.assertEqual(result.required_job_positions, ["Backend Engineer"])
+        self.assertEqual(result.related_department, "UNKNOWN")
+        self.assertIn("deadline", result.missing_information)
+        self.assertEqual(result.estimated_working_hours_suggestion.confidence, 1.0)
+
+    def test_individual_explanation_preserves_backend_rank_and_numbers(self):
+        payload = RecommendationExplanationRequest(
+            workspaceId="ws1",
+            recommendationType="INDIVIDUAL",
+            task=RecommendationTaskContext(title="Task", requiredSkills=["Java"]),
+            candidates=[
+                RankedCandidate(
+                    rank=1,
+                    employeeId="e1",
+                    fullName="An",
+                    skillMatchScore=90,
+                    roleSuitabilityScore=80,
+                    jobPositionSuitabilityScore=70,
+                    similarTaskCount=0,
+                    completionRate=95,
+                    overdueRate=5,
+                    currentMonthlyHours=80,
+                    monthlyCapacityHours=168,
+                    finalRankingScore=88,
+                )
+            ],
+        )
+
+        with patch("app.services._ask_llm_json", return_value={
+            "recommendationType": "INDIVIDUAL",
+            "taskSummary": "Task summary",
+            "rankedCandidates": [{
+                "rank": 99,
+                "employeeId": "e1",
+                "fullName": "An",
+                "recommendationLabel": "HIGHLY_RECOMMENDED",
+                "summaryReason": "Phù hợp.",
+                "strengths": ["Có kinh nghiệm tương tự"],
+                "risks": [],
+                "numbers": {
+                    "finalRankingScore": 1,
+                    "skillMatchScore": 1,
+                    "roleSuitabilityScore": 1,
+                    "similarTaskCount": 99,
+                    "completionRate": 1,
+                    "overdueRate": 1,
+                    "currentMonthlyHours": 1,
+                    "monthlyCapacityHours": 1,
+                },
+            }],
+            "finalNote": "Manager quyết định.",
+        }):
+            result = services.explain_individual_recommendation(payload)
+
+        self.assertEqual(result.ranked_candidates[0].rank, 1)
+        self.assertEqual(result.ranked_candidates[0].numbers.final_ranking_score, 88)
+        self.assertEqual(result.ranked_candidates[0].numbers.similar_task_count, 0)
+        self.assertEqual(result.ranked_candidates[0].strengths, [])
+
+    def test_workload_risk_uses_backend_numbers_and_overload_high(self):
+        payload = WorkloadRiskRequest(
+            workspaceId="ws1",
+            employeeName="An",
+            monthlyCapacityHours=168,
+            monthlyWorkloadEvaluation=[
+                MonthlyWorkloadDetail(
+                    month="2026-07",
+                    existingHours=150,
+                    newTaskHours=50,
+                    totalHoursAfterAssignment=200,
+                    usagePercentage=119.05,
+                    workloadStatus="Quá tải",
+                )
+            ],
+        )
+
+        with patch("app.services._ask_llm_json", return_value={
+            "overallRisk": "LOW",
+            "monthlyWarnings": [{
+                "month": "2026-07",
+                "status": "Rảnh rỗi",
+                "message": "Rủi ro cao.",
+                "numbers": {
+                    "existingHours": 0,
+                    "newTaskHours": 0,
+                    "totalHours": 0,
+                    "capacityHours": 0,
+                    "usagePercentage": 0,
+                },
+            }],
+            "recommendation": "Cân nhắc giảm tải.",
+        }):
+            result = services.explain_workload_risk(payload)
+
+        self.assertEqual(result.overall_risk, "HIGH")
+        self.assertEqual(result.monthly_warnings[0].status, "Quá tải")
+        self.assertEqual(result.monthly_warnings[0].numbers.total_hours, 200)
 
 
 if __name__ == "__main__":

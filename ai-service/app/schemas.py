@@ -293,3 +293,322 @@ class ActionSuggestion(StrictModel):
 class ActionSuggestionsResponse(StrictModel):
     suggestions: list[ActionSuggestion]
 
+
+Difficulty = Literal["EASY", "MEDIUM", "HARD", "CRITICAL"]
+EmployeeLevelLiteral = Literal["INTERN", "FRESHER", "JUNIOR", "MIDDLE", "SENIOR", "LEAD"]
+RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
+
+
+class WorkspaceScopedRequest(StrictModel):
+    workspace_id: str = Field(alias="workspaceId")
+
+
+class TaskDescriptionAnalysisRequest(WorkspaceScopedRequest):
+    task_title: str = Field(alias="taskTitle")
+    task_description: str = Field(alias="taskDescription")
+    project_description: Optional[str] = Field(default=None, alias="projectDescription")
+    department_name: Optional[str] = Field(default=None, alias="departmentName")
+    available_task_types: list[str] = Field(default_factory=list, alias="availableTaskTypes")
+    available_job_positions: list[str] = Field(default_factory=list, alias="availableJobPositions")
+    available_skills: list[str] = Field(default_factory=list, alias="availableSkills")
+    available_departments: list[str] = Field(default_factory=list, alias="availableDepartments")
+    start_date: Optional[str] = Field(default=None, alias="startDate")
+    deadline: Optional[str] = None
+
+
+class EstimatedWorkingHoursSuggestion(StrictModel):
+    value: Optional[float]
+    reason: str
+    confidence: float
+
+
+class TaskDescriptionAnalysisResponse(StrictModel):
+    task_type: str = Field(alias="taskType")
+    task_domain: str = Field(alias="taskDomain")
+    suggested_difficulty: Difficulty = Field(alias="suggestedDifficulty")
+    suggested_employee_level: EmployeeLevelLiteral = Field(alias="suggestedEmployeeLevel")
+    required_skills: list[str] = Field(alias="requiredSkills")
+    required_job_positions: list[str] = Field(alias="requiredJobPositions")
+    related_department: str = Field(alias="relatedDepartment")
+    estimated_working_hours_suggestion: EstimatedWorkingHoursSuggestion = Field(alias="estimatedWorkingHoursSuggestion")
+    missing_information: list[str] = Field(alias="missingInformation")
+    clarifying_questions: list[str] = Field(alias="clarifyingQuestions")
+    summary: str
+
+
+class EstimatedHoursRequest(WorkspaceScopedRequest):
+    task_title: str = Field(alias="taskTitle")
+    task_description: Optional[str] = Field(default=None, alias="taskDescription")
+    difficulty: Optional[str] = None
+    task_type: Optional[str] = Field(default=None, alias="taskType")
+    start_date: Optional[str] = Field(default=None, alias="startDate")
+    deadline: Optional[str] = None
+    backend_working_days: Optional[int] = Field(default=None, alias="backendWorkingDays")
+    backend_default_hours: Optional[float] = Field(default=None, alias="backendDefaultHours")
+
+
+class EstimatedHoursResponse(StrictModel):
+    suggested_hours: Optional[float] = Field(alias="suggestedHours")
+    working_days: Optional[int] = Field(alias="workingDays")
+    calculation_basis: str = Field(alias="calculationBasis")
+    confidence: float
+    user_confirmation_required: bool = Field(default=True, alias="userConfirmationRequired")
+
+
+class RecommendationTaskContext(StrictModel):
+    title: str
+    difficulty: Optional[str] = None
+    task_type: Optional[str] = Field(default=None, alias="taskType")
+    task_domain: Optional[str] = Field(default=None, alias="taskDomain")
+    required_skills: list[str] = Field(default_factory=list, alias="requiredSkills")
+    required_job_positions: list[str] = Field(default_factory=list, alias="requiredJobPositions")
+    estimated_working_hours: Optional[float] = Field(default=None, alias="estimatedWorkingHours")
+    start_date: Optional[str] = Field(default=None, alias="startDate")
+    deadline: Optional[str] = None
+
+
+class MonthlyWorkloadDetail(StrictModel):
+    month: str
+    existing_hours: float = Field(alias="existingHours")
+    new_task_hours: float = Field(default=0, alias="newTaskHours")
+    total_hours_after_assignment: float = Field(alias="totalHoursAfterAssignment")
+    usage_percentage: float = Field(alias="usagePercentage")
+    workload_status: str = Field(alias="workloadStatus")
+
+
+class RankedCandidate(StrictModel):
+    rank: int
+    employee_id: str = Field(alias="employeeId")
+    full_name: str = Field(alias="fullName")
+    role: Optional[str] = None
+    job_position: Optional[str] = Field(default=None, alias="jobPosition")
+    department: Optional[str] = None
+    employee_level: Optional[str] = Field(default=None, alias="employeeLevel")
+    skill_match_score: float = Field(alias="skillMatchScore")
+    role_suitability_score: float = Field(alias="roleSuitabilityScore")
+    job_position_suitability_score: float = Field(alias="jobPositionSuitabilityScore")
+    similar_task_count: int = Field(default=0, alias="similarTaskCount")
+    completion_rate: float = Field(default=0, alias="completionRate")
+    overdue_rate: float = Field(default=0, alias="overdueRate")
+    current_monthly_hours: float = Field(default=0, alias="currentMonthlyHours")
+    monthly_capacity_hours: float = Field(default=168, alias="monthlyCapacityHours")
+    workload_status_after_assignment: Optional[str] = Field(default=None, alias="workloadStatusAfterAssignment")
+    monthly_workload_details: list[MonthlyWorkloadDetail] = Field(default_factory=list, alias="monthlyWorkloadDetails")
+    final_ranking_score: float = Field(alias="finalRankingScore")
+    risk_flags: list[str] = Field(default_factory=list, alias="riskFlags")
+    previous_lead_count: int = Field(default=0, alias="previousLeadCount")
+    lead_completion_rate: float = Field(default=0, alias="leadCompletionRate")
+    domain_match: Literal["LOW", "MEDIUM", "HIGH"] = Field(default="LOW", alias="domainMatch")
+    similar_project_count: int = Field(default=0, alias="similarProjectCount")
+    leadership_score: Optional[float] = Field(default=None, alias="leadershipScore")
+    domain_experience_score: Optional[float] = Field(default=None, alias="domainExperienceScore")
+    performance_score: Optional[float] = Field(default=None, alias="performanceScore")
+    workload_availability_score: Optional[float] = Field(default=None, alias="workloadAvailabilityScore")
+
+
+class RecommendationExplanationRequest(WorkspaceScopedRequest):
+    recommendation_type: Literal["INDIVIDUAL", "TEAM_LEADER", "TEAM_MEMBER"] = Field(alias="recommendationType")
+    task: RecommendationTaskContext
+    candidates: list[RankedCandidate]
+
+
+class CandidateNumbers(StrictModel):
+    final_ranking_score: float = Field(alias="finalRankingScore")
+    skill_match_score: Optional[float] = Field(default=None, alias="skillMatchScore")
+    role_suitability_score: Optional[float] = Field(default=None, alias="roleSuitabilityScore")
+    similar_task_count: Optional[int] = Field(default=None, alias="similarTaskCount")
+    completion_rate: Optional[float] = Field(default=None, alias="completionRate")
+    overdue_rate: Optional[float] = Field(default=None, alias="overdueRate")
+    current_monthly_hours: Optional[float] = Field(default=None, alias="currentMonthlyHours")
+    monthly_capacity_hours: Optional[float] = Field(default=None, alias="monthlyCapacityHours")
+    job_position_suitability_score: Optional[float] = Field(default=None, alias="jobPositionSuitabilityScore")
+    leadership_score: Optional[float] = Field(default=None, alias="leadershipScore")
+    domain_experience_score: Optional[float] = Field(default=None, alias="domainExperienceScore")
+    performance_score: Optional[float] = Field(default=None, alias="performanceScore")
+    workload_availability_score: Optional[float] = Field(default=None, alias="workloadAvailabilityScore")
+    workload_usage_percentage: Optional[float] = Field(default=None, alias="workloadUsagePercentage")
+
+
+class IndividualCandidateExplanation(StrictModel):
+    rank: int
+    employee_id: str = Field(alias="employeeId")
+    full_name: str = Field(alias="fullName")
+    recommendation_label: Literal["HIGHLY_RECOMMENDED", "RECOMMENDED", "CONSIDER_WITH_CAUTION", "NOT_RECOMMENDED"] = Field(alias="recommendationLabel")
+    summary_reason: str = Field(alias="summaryReason")
+    strengths: list[str]
+    risks: list[str]
+    numbers: CandidateNumbers
+
+
+class IndividualRecommendationExplanationResponse(StrictModel):
+    recommendation_type: Literal["INDIVIDUAL"] = Field(alias="recommendationType")
+    task_summary: str = Field(alias="taskSummary")
+    ranked_candidates: list[IndividualCandidateExplanation] = Field(alias="rankedCandidates")
+    final_note: str = Field(alias="finalNote")
+
+
+class LeadershipEvidence(StrictModel):
+    previous_lead_count: int = Field(default=0, alias="previousLeadCount")
+    lead_completion_rate: float = Field(default=0, alias="leadCompletionRate")
+    domain_match: Literal["LOW", "MEDIUM", "HIGH"] = Field(alias="domainMatch")
+    similar_project_count: int = Field(default=0, alias="similarProjectCount")
+
+
+class LeaderCandidateExplanation(StrictModel):
+    rank: int
+    employee_id: str = Field(alias="employeeId")
+    full_name: str = Field(alias="fullName")
+    leader_recommendation_label: Literal["STRONG_LEADER", "SUITABLE_LEADER", "POSSIBLE_LEADER", "WEAK_LEADER"] = Field(alias="leaderRecommendationLabel")
+    summary_reason: str = Field(alias="summaryReason")
+    leadership_evidence: LeadershipEvidence = Field(alias="leadershipEvidence")
+    strengths: list[str]
+    risks: list[str]
+    numbers: CandidateNumbers
+
+
+class TeamLeaderRecommendationExplanationResponse(StrictModel):
+    recommendation_type: Literal["TEAM_LEADER"] = Field(alias="recommendationType")
+    task_or_project_domain: str = Field(alias="taskOrProjectDomain")
+    leader_candidates: list[LeaderCandidateExplanation] = Field(alias="leaderCandidates")
+    final_note: str = Field(alias="finalNote")
+
+
+class MemberCandidateExplanation(StrictModel):
+    rank: int
+    employee_id: str = Field(alias="employeeId")
+    full_name: str = Field(alias="fullName")
+    member_recommendation_label: Literal["HIGHLY_SUITABLE", "SUITABLE", "CONSIDER_WITH_CAUTION", "NOT_SUITABLE"] = Field(alias="memberRecommendationLabel")
+    summary_reason: str = Field(alias="summaryReason")
+    strengths: list[str]
+    risks: list[str]
+    numbers: CandidateNumbers
+
+
+class TeamMemberRecommendationExplanationResponse(StrictModel):
+    recommendation_type: Literal["TEAM_MEMBER"] = Field(alias="recommendationType")
+    task_summary: str = Field(alias="taskSummary")
+    member_candidates: list[MemberCandidateExplanation] = Field(alias="memberCandidates")
+    team_composition_advice: str = Field(alias="teamCompositionAdvice")
+
+
+class RecommendationResultExplanationRequest(WorkspaceScopedRequest):
+    task: dict[str, Any]
+    selected_assignee_or_team: dict[str, Any] = Field(alias="selectedAssigneeOrTeam")
+    ranking_data: list[dict[str, Any]] = Field(default_factory=list, alias="rankingData")
+    comparison_with_other_candidates: list[dict[str, Any]] = Field(default_factory=list, alias="comparisonWithOtherCandidates")
+    workload_data: dict[str, Any] = Field(default_factory=dict, alias="workloadData")
+    performance_data: dict[str, Any] = Field(default_factory=dict, alias="performanceData")
+
+
+class RecommendationResultExplanationResponse(StrictModel):
+    explanation_title: str = Field(alias="explanationTitle")
+    short_explanation: str = Field(alias="shortExplanation")
+    detailed_explanation: str = Field(alias="detailedExplanation")
+    key_reasons: list[str] = Field(alias="keyReasons")
+    risk_warnings: list[str] = Field(alias="riskWarnings")
+    data_used: list[str] = Field(alias="dataUsed")
+
+
+class WorkloadRiskRequest(WorkspaceScopedRequest):
+    employee_name: str = Field(alias="employeeName")
+    monthly_capacity_hours: float = Field(alias="monthlyCapacityHours")
+    monthly_workload_evaluation: list[MonthlyWorkloadDetail] = Field(alias="monthlyWorkloadEvaluation")
+    backend_overall_risk: Optional[RiskLevel] = Field(default=None, alias="backendOverallRisk")
+
+
+class WorkloadWarningNumbers(StrictModel):
+    existing_hours: float = Field(alias="existingHours")
+    new_task_hours: float = Field(alias="newTaskHours")
+    total_hours: float = Field(alias="totalHours")
+    capacity_hours: float = Field(alias="capacityHours")
+    usage_percentage: float = Field(alias="usagePercentage")
+
+
+class WorkloadMonthlyWarning(StrictModel):
+    month: str
+    status: str
+    message: str
+    numbers: WorkloadWarningNumbers
+
+
+class WorkloadRiskResponse(StrictModel):
+    overall_risk: RiskLevel = Field(alias="overallRisk")
+    monthly_warnings: list[WorkloadMonthlyWarning] = Field(alias="monthlyWarnings")
+    recommendation: str
+
+
+class EmployeeReportRequest(WorkspaceScopedRequest):
+    employee: dict[str, Any]
+    period: dict[str, Any]
+    metrics: dict[str, Any]
+    notable_tasks: list[dict[str, Any]] = Field(default_factory=list, alias="notableTasks")
+    risks: list[str] = Field(default_factory=list)
+
+
+class EmployeeReportResponse(StrictModel):
+    report_type: Literal["WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"] = Field(alias="reportType")
+    employee_name: str = Field(alias="employeeName")
+    period_summary: str = Field(alias="periodSummary")
+    performance_evaluation: Literal["EXCELLENT", "GOOD", "STABLE", "NEEDS_ATTENTION", "RISKY"] = Field(alias="performanceEvaluation")
+    key_metrics: dict[str, Any] = Field(alias="keyMetrics")
+    strengths: list[str]
+    issues: list[str]
+    recommendations: list[str]
+
+
+class BusinessOwnerOperationalSummaryRequest(WorkspaceScopedRequest):
+    total_employees: int = Field(alias="totalEmployees")
+    active_employees: int = Field(alias="activeEmployees")
+    total_tasks: int = Field(alias="totalTasks")
+    completed_tasks: int = Field(alias="completedTasks")
+    overdue_tasks: int = Field(alias="overdueTasks")
+    completion_rate: float = Field(alias="completionRate")
+    overdue_rate: float = Field(alias="overdueRate")
+    workload_distribution: dict[str, Any] = Field(default_factory=dict, alias="workloadDistribution")
+    department_workload: list[dict[str, Any]] = Field(default_factory=list, alias="departmentWorkload")
+    ai_recommendation_effectiveness: Optional[dict[str, Any]] = Field(default=None, alias="aiRecommendationEffectiveness")
+    subscription_status: Optional[str] = Field(default=None, alias="subscriptionStatus")
+    plan_limit_usage: Optional[dict[str, Any]] = Field(default=None, alias="planLimitUsage")
+    expiration_date: Optional[str] = Field(default=None, alias="expirationDate")
+    upgrade_options: list[str] = Field(default_factory=list, alias="upgradeOptions")
+
+
+class BusinessOwnerOperationalSummaryResponse(StrictModel):
+    summary_title: str = Field(alias="summaryTitle")
+    business_health_label: Literal["GOOD", "STABLE", "NEEDS_ATTENTION", "RISK"] = Field(alias="businessHealthLabel")
+    summary: str
+    key_numbers: dict[str, Any] = Field(alias="keyNumbers")
+    workload_insights: list[str] = Field(alias="workloadInsights")
+    subscription_insights: list[str] = Field(alias="subscriptionInsights")
+    risks: list[str]
+    recommended_actions: list[str] = Field(alias="recommendedActions")
+
+
+class PlatformAdminSystemSummaryRequest(StrictModel):
+    total_workspaces: int = Field(alias="totalWorkspaces")
+    active_workspaces: int = Field(alias="activeWorkspaces")
+    suspended_workspaces: int = Field(alias="suspendedWorkspaces")
+    expired_workspaces: int = Field(alias="expiredWorkspaces")
+    new_workspaces_this_month: int = Field(alias="newWorkspacesThisMonth")
+    revenue_by_month: dict[str, float] = Field(default_factory=dict, alias="revenueByMonth")
+    revenue_by_quarter: dict[str, float] = Field(default_factory=dict, alias="revenueByQuarter")
+    revenue_by_year: dict[str, float] = Field(default_factory=dict, alias="revenueByYear")
+    revenue_by_plan: dict[str, float] = Field(default_factory=dict, alias="revenueByPlan")
+    payment_success_rate: float = Field(alias="paymentSuccessRate")
+    failed_payments: int = Field(alias="failedPayments")
+    pending_manual_payments: int = Field(alias="pendingManualPayments")
+    business_feedback_summary: dict[str, Any] = Field(default_factory=dict, alias="businessFeedbackSummary")
+    ai_usage_statistics: dict[str, Any] = Field(default_factory=dict, alias="aiUsageStatistics")
+
+
+class PlatformAdminSystemSummaryResponse(StrictModel):
+    summary_title: str = Field(alias="summaryTitle")
+    platform_status_label: Literal["HEALTHY", "STABLE", "NEEDS_ATTENTION", "RISK"] = Field(alias="platformStatusLabel")
+    summary: str
+    revenue_insights: list[str] = Field(alias="revenueInsights")
+    workspace_insights: list[str] = Field(alias="workspaceInsights")
+    payment_insights: list[str] = Field(alias="paymentInsights")
+    feedback_insights: list[str] = Field(alias="feedbackInsights")
+    risks: list[str]
+    recommended_actions: list[str] = Field(alias="recommendedActions")
+
