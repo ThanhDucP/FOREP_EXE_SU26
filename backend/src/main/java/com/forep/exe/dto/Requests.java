@@ -1,5 +1,10 @@
 package com.forep.exe.dto;
 
+import com.forep.exe.domain.Enums.AssignmentType;
+import com.forep.exe.domain.Enums.AttachmentType;
+import com.forep.exe.domain.Enums.EmployeeLevel;
+import com.forep.exe.domain.Enums.EmploymentType;
+import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.Role;
 import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.SeniorityLevel;
@@ -8,6 +13,7 @@ import com.forep.exe.domain.Enums.TaskPriority;
 import com.forep.exe.domain.Enums.TaskStatus;
 import com.forep.exe.domain.Enums.UpdateType;
 import com.forep.exe.domain.Enums.UserStatus;
+import com.forep.exe.domain.Enums.WorkingStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
@@ -20,6 +26,7 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public final class Requests {
@@ -54,7 +61,19 @@ public final class Requests {
             SeniorityLevel seniorityLevel,
             @Min(1) @Max(5) Integer skillRating,
             @Min(0) Integer yearsOfExperience,
-            String skills
+            String skills,
+            UUID departmentId,
+            UUID jobPositionId,
+            LocalDate dateOfBirth,
+            String gender,
+            String address,
+            String personalSummary,
+            EmploymentType employmentType,
+            WorkingStatus workingStatus,
+            EmployeeLevel employeeLevel,
+            @Min(1) Integer monthlyWorkingCapacityHours,
+            String mainExpertise,
+            String secondaryExpertise
     ) {
         public Role role() {
             return Role.EMPLOYEE;
@@ -76,7 +95,19 @@ public final class Requests {
             SeniorityLevel seniorityLevel,
             @Min(1) @Max(5) Integer skillRating,
             @Min(0) Integer yearsOfExperience,
-            String skills
+            String skills,
+            UUID departmentId,
+            UUID jobPositionId,
+            LocalDate dateOfBirth,
+            String gender,
+            String address,
+            String personalSummary,
+            EmploymentType employmentType,
+            WorkingStatus workingStatus,
+            EmployeeLevel employeeLevel,
+            @Min(1) Integer monthlyWorkingCapacityHours,
+            String mainExpertise,
+            String secondaryExpertise
     ) {
     }
 
@@ -84,10 +115,21 @@ public final class Requests {
             @NotBlank String title,
             @NotBlank String requirements,
             String description,
-            @NotNull UUID assigneeId,
+            UUID assigneeId,
+            AssignmentType assignmentType,
+            UUID teamLeaderId,
+            List<UUID> teamMemberIds,
             TaskPriority priority,
             @NotNull OffsetDateTime deadline,
-            BigDecimal estimatedHours
+            OffsetDateTime startDate,
+            @NotNull @Min(1) BigDecimal estimatedHours,
+            @Min(1) @Max(5) Integer difficulty,
+            String requiredSkills,
+            UUID requiredJobPositionId,
+            String taskDomain,
+            UUID projectId,
+            UUID departmentId,
+            List<TaskAttachmentRequest> attachments
     ) {
     }
 
@@ -95,14 +137,49 @@ public final class Requests {
             @NotBlank String title,
             @NotBlank String requirements,
             String description,
-            @NotNull UUID assigneeId,
+            UUID assigneeId,
+            AssignmentType assignmentType,
+            UUID teamLeaderId,
+            List<UUID> teamMemberIds,
             TaskPriority priority,
             @NotNull OffsetDateTime deadline,
-            BigDecimal estimatedHours
+            OffsetDateTime startDate,
+            @NotNull @Min(1) BigDecimal estimatedHours,
+            @Min(1) @Max(5) Integer difficulty,
+            String requiredSkills,
+            UUID requiredJobPositionId,
+            String taskDomain,
+            UUID projectId,
+            UUID departmentId,
+            List<TaskAttachmentRequest> attachments
     ) {
     }
 
     public record AssignTaskRequest(@NotNull UUID assigneeId) {
+    }
+
+    public record AssignIndividualRequest(@NotNull UUID employeeId) {
+    }
+
+    public record AssignTeamRequest(@NotNull UUID teamLeaderId, List<UUID> teamMemberIds) {
+    }
+
+    public record TaskAttachmentRequest(
+            @NotBlank String fileName,
+            @NotBlank String fileUrl,
+            String contentType,
+            Long fileSize,
+            AttachmentType attachmentType
+    ) {
+    }
+
+    public record JobPositionRequest(
+            @NotBlank String title,
+            String departmentName,
+            String description,
+            String requiredSkills,
+            JobPositionStatus status
+    ) {
     }
 
     public record UpdateTaskStatusRequest(@NotNull TaskStatus status) {
