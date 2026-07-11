@@ -5,7 +5,7 @@ public final class Enums {
     }
 
     public enum Role {
-        PLATFORM_ADMIN, BUSINESS_OWNER, MANAGER, EMPLOYEE, SYSTEM,
+        PLATFORM_ADMIN, BUSINESS_OWNER, HR, MANAGER, EMPLOYEE, SYSTEM,
         SYSTEM_ADMIN, OWNER
     }
 
@@ -31,6 +31,34 @@ public final class Enums {
 
     public enum WorkloadLevel {
         NO_WORK, LOW, NORMAL, HIGH, OVERLOADED
+    }
+
+    public enum AssignmentType {
+        INDIVIDUAL, TEAM
+    }
+
+    public enum TaskParticipantRole {
+        ASSIGNEE, LEADER, MEMBER
+    }
+
+    public enum AttachmentType {
+        REQUIREMENT, REFERENCE, RESULT, OTHER
+    }
+
+    public enum EmploymentType {
+        FULL_TIME, PART_TIME, CONTRACTOR, INTERN
+    }
+
+    public enum WorkingStatus {
+        WORKING, ON_LEAVE, RESIGNED
+    }
+
+    public enum EmployeeLevel {
+        INTERN, FRESHER, JUNIOR, MIDDLE, SENIOR, LEAD, MANAGER
+    }
+
+    public enum JobPositionStatus {
+        ACTIVE, INACTIVE
     }
 
     public enum AiSuggestionType {

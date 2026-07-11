@@ -42,9 +42,10 @@ public class SecurityConfig {
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/v1/admin/**", "/api/admin/**").hasAnyRole("PLATFORM_ADMIN", "SYSTEM_ADMIN")
-                        .requestMatchers("/api/v1/employees/**").hasAnyRole("BUSINESS_OWNER", "OWNER")
-                        .requestMatchers("/api/v1/analytics/**", "/api/v1/ai/**").hasAnyRole("BUSINESS_OWNER", "MANAGER", "OWNER")
-                        .requestMatchers("/api/v1/workspaces/current", "/api/workspace/**").hasAnyRole("BUSINESS_OWNER", "OWNER")
+                        .requestMatchers("/api/v1/employees/**", "/api/v1/hr/**", "/api/workspace/hr/**").hasAnyRole("BUSINESS_OWNER", "OWNER", "HR")
+                        .requestMatchers("/api/v1/analytics/**", "/api/v1/ai/**", "/api/workspace/ai/**", "/api/workspace/workload/**", "/api/workspace/business-owner/**").hasAnyRole("BUSINESS_OWNER", "MANAGER", "OWNER")
+                        .requestMatchers("/api/workspace/tasks/**").hasAnyRole("BUSINESS_OWNER", "MANAGER", "EMPLOYEE", "OWNER")
+                        .requestMatchers("/api/v1/workspaces/current").hasAnyRole("BUSINESS_OWNER", "OWNER", "HR", "MANAGER", "EMPLOYEE")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

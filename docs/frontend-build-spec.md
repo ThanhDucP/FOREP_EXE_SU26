@@ -2,6 +2,8 @@
 
 Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai tai base URL `http://localhost:8080/api/v1`.
 
+Cap nhat moi cho module HR, giao task ca nhan/nhom, attachment, recommendation va workload thang nam trong `docs/FE.md`. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh.
+
 ## 1. Nguyen tac tich hop API
 
 - Front-end chi goi Backend API, khong goi truc tiep AI Service.
@@ -20,15 +22,18 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 - Luu token sau login. Khuyen nghi dung memory state + `localStorage` neu can giu dang nhap sau reload.
 - Date-time gui len backend dung ISO 8601 offset, vi du `2026-06-29T17:00:00+07:00`.
 - Date cho daily report dung `YYYY-MM-DD`.
-- Backend phan quyen theo role `SYSTEM_ADMIN`, `OWNER` va `EMPLOYEE`; UI phai an hanh dong khong dung role.
+- Backend phan quyen theo role `PLATFORM_ADMIN`, `BUSINESS_OWNER`, `HR`, `MANAGER`, `EMPLOYEE`, `SYSTEM`, kem alias cu `SYSTEM_ADMIN`, `OWNER`; UI phai an hanh dong khong dung role.
 
 ## 2. Enum dung trong UI
 
 ### Role
 
-- `SYSTEM_ADMIN`: quan tri nen tang, goi subscription, thanh toan, workspace va business owner account khoi tao.
-- `OWNER`: chu workspace, quan ly nhan vien, task, analytics, AI.
+- `PLATFORM_ADMIN`: quan tri nen tang, goi subscription, thanh toan, workspace va business owner account khoi tao.
+- `BUSINESS_OWNER`: chu workspace, quan ly nhan vien, task, analytics, AI.
+- `HR`: quan ly ho so nhan su, vi tri cong viec, import nhan vien, tai lieu nhan su.
+- `MANAGER`: tao va quan ly task, giao viec ca nhan/nhom, xem workload.
 - `EMPLOYEE`: nhan vien, xem task duoc giao, cap nhat tien do, gui daily report.
+- `SYSTEM_ADMIN`, `OWNER`: alias tuong thich nguoc cho du lieu cu.
 
 ### WorkspaceStatus
 

@@ -1,5 +1,6 @@
 package com.forep.exe.persistence;
 
+import com.forep.exe.domain.Enums.AssignmentType;
 import com.forep.exe.domain.Enums.TaskPriority;
 import com.forep.exe.domain.Enums.TaskStatus;
 import jakarta.persistence.Column;
@@ -23,6 +24,9 @@ public class TaskEntity extends BaseEntity {
     private String requirements;
     @Column(columnDefinition = "text")
     private String description;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private AssignmentType assignmentType;
     @Column(nullable = false)
     private UUID assigneeId;
     @Column(nullable = false)
@@ -32,7 +36,15 @@ public class TaskEntity extends BaseEntity {
     private TaskPriority priority;
     @Column(nullable = false)
     private OffsetDateTime deadline;
+    private OffsetDateTime startDate;
     private BigDecimal estimatedHours;
+    private Integer difficulty;
+    @Column(columnDefinition = "text")
+    private String requiredSkills;
+    private UUID requiredJobPositionId;
+    private String taskDomain;
+    private UUID projectId;
+    private UUID departmentId;
     @Column(nullable = false)
     private int progressPercent;
     @Enumerated(EnumType.STRING)
@@ -52,6 +64,8 @@ public class TaskEntity extends BaseEntity {
     public void setRequirements(String requirements) { this.requirements = requirements; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public AssignmentType getAssignmentType() { return assignmentType; }
+    public void setAssignmentType(AssignmentType assignmentType) { this.assignmentType = assignmentType; }
     public UUID getAssigneeId() { return assigneeId; }
     public void setAssigneeId(UUID assigneeId) { this.assigneeId = assigneeId; }
     public UUID getCreatorId() { return creatorId; }
@@ -60,8 +74,22 @@ public class TaskEntity extends BaseEntity {
     public void setPriority(TaskPriority priority) { this.priority = priority; }
     public OffsetDateTime getDeadline() { return deadline; }
     public void setDeadline(OffsetDateTime deadline) { this.deadline = deadline; }
+    public OffsetDateTime getStartDate() { return startDate; }
+    public void setStartDate(OffsetDateTime startDate) { this.startDate = startDate; }
     public BigDecimal getEstimatedHours() { return estimatedHours; }
     public void setEstimatedHours(BigDecimal estimatedHours) { this.estimatedHours = estimatedHours; }
+    public Integer getDifficulty() { return difficulty; }
+    public void setDifficulty(Integer difficulty) { this.difficulty = difficulty; }
+    public String getRequiredSkills() { return requiredSkills; }
+    public void setRequiredSkills(String requiredSkills) { this.requiredSkills = requiredSkills; }
+    public UUID getRequiredJobPositionId() { return requiredJobPositionId; }
+    public void setRequiredJobPositionId(UUID requiredJobPositionId) { this.requiredJobPositionId = requiredJobPositionId; }
+    public String getTaskDomain() { return taskDomain; }
+    public void setTaskDomain(String taskDomain) { this.taskDomain = taskDomain; }
+    public UUID getProjectId() { return projectId; }
+    public void setProjectId(UUID projectId) { this.projectId = projectId; }
+    public UUID getDepartmentId() { return departmentId; }
+    public void setDepartmentId(UUID departmentId) { this.departmentId = departmentId; }
     public int getProgressPercent() { return progressPercent; }
     public void setProgressPercent(int progressPercent) { this.progressPercent = progressPercent; }
     public TaskStatus getStatus() { return status; }
