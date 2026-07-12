@@ -22,6 +22,7 @@ public class MomoPaymentService {
     private final String secretKey;
     private final String returnUrl;
     private final String notifyUrl;
+    private final boolean sandboxMode;
 
     public MomoPaymentService(ObjectMapper objectMapper,
                               @Value("${forep.payments.momo.endpoint:}") String endpoint,
@@ -29,7 +30,8 @@ public class MomoPaymentService {
                               @Value("${forep.payments.momo.access-key:}") String accessKey,
                               @Value("${forep.payments.momo.secret-key:}") String secretKey,
                               @Value("${forep.payments.momo.return-url:}") String returnUrl,
-                              @Value("${forep.payments.momo.notify-url:}") String notifyUrl) {
+                              @Value("${forep.payments.momo.notify-url:}") String notifyUrl,
+                              @Value("${forep.payments.momo.sandbox-mode:false}") boolean sandboxMode) {
         this.objectMapper = objectMapper;
         this.endpoint = endpoint;
         this.partnerCode = partnerCode;
@@ -37,6 +39,7 @@ public class MomoPaymentService {
         this.secretKey = secretKey;
         this.returnUrl = returnUrl;
         this.notifyUrl = notifyUrl;
+        this.sandboxMode = sandboxMode;
     }
 
     public ProviderPaymentResult createPayment(PaymentTransactionEntity payment) {
@@ -77,7 +80,7 @@ public class MomoPaymentService {
 
     public boolean verifyCallbackSignature(Map<String, ?> payload, String signature) {
         if (!hasText(secretKey)) {
-            return true;
+            return sandboxMode;
         }
         String expected = signCanonical(payload);
         return hasText(signature) && expected.equalsIgnoreCase(signature);

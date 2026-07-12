@@ -686,8 +686,11 @@ public class ForepService {
 
     public Map<String, Object> workloadSummary() {
         requireOwner();
-        enforceAiUsageLimit();
         List<WorkloadView> currentWorkload = workload();
+        if (isAiUsageLimitReached()) {
+            return fallbackWorkloadSummary(currentWorkload, new AiProviderException("AI usage limit reached."));
+        }
+        enforceAiUsageLimit();
         Map<String, Object> output;
         try {
             output = aiServiceClient.workloadSummary(currentWorkload);
@@ -701,9 +704,12 @@ public class ForepService {
 
     public Map<String, Object> delayRisks() {
         requireOwner();
-        enforceAiUsageLimit();
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
         Map<UUID, String> employeeNames = users.findByWorkspaceId(currentUser().workspaceId()).stream().collect(java.util.stream.Collectors.toMap(UserEntity::getId, UserEntity::getFullName));
+        if (isAiUsageLimitReached()) {
+            return fallbackDelayRisks(scopedTasks, employeeNames, new AiProviderException("AI usage limit reached."));
+        }
+        enforceAiUsageLimit();
         List<TaskView> taskViews = scopedTasks.stream().map(this::toTaskView).toList();
         Map<String, Object> payload = Map.of("tasks", taskViews, "employeeNames", employeeNames);
         Map<String, Object> output;
@@ -831,8 +837,11 @@ public class ForepService {
 
     public Map<String, Object> actionSuggestions() {
         requireOwner();
-        enforceAiUsageLimit();
         List<WorkloadView> currentWorkload = workload();
+        if (isAiUsageLimitReached()) {
+            return fallbackActionSuggestions(currentWorkload, new AiProviderException("AI usage limit reached."));
+        }
+        enforceAiUsageLimit();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tasks", taskPayloads(LocalDate.now().minusDays(30)));
         payload.put("reports", reportPayloads(LocalDate.now().minusDays(6)));
@@ -1145,6 +1154,7 @@ public class ForepService {
     }
 
     public WorkspaceRegistrationView workspaceRegistration(UUID registrationId) {
+        requireSystemAdmin();
         return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId));
     }
 
@@ -1153,6 +1163,11 @@ public class ForepService {
     }
 
     public WorkspaceRegistrationView selectSubscriptionPlan(UUID registrationId, SelectSubscriptionPlanRequest request) {
+        requireSystemAdmin();
+        return selectSubscriptionPlanForRegistration(registrationId, request);
+    }
+
+    private WorkspaceRegistrationView selectSubscriptionPlanForRegistration(UUID registrationId, SelectSubscriptionPlanRequest request) {
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
         if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
             throw new IllegalArgumentException("Workspace is already active.");
@@ -1170,7 +1185,7 @@ public class ForepService {
 
     public WorkspaceRegistrationView publicSelectSubscriptionPlan(UUID registrationId, String token, SelectSubscriptionPlanRequest request) {
         requireWorkspaceRegistrationWithToken(registrationId, token);
-        return selectSubscriptionPlan(registrationId, request);
+        return selectSubscriptionPlanForRegistration(registrationId, request);
     }
 
     public WorkspaceRegistrationView publicCancelWorkspaceRegistration(UUID registrationId, String token) {
@@ -1184,6 +1199,7 @@ public class ForepService {
     }
 
     public WorkspaceRegistrationView submitRegistrationPayment(UUID registrationId, SubmitPaymentRequest request) {
+        requireSystemAdmin();
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy đăng ký workspace."));
         if (List.of(RegistrationStatus.APPROVED, RegistrationStatus.REJECTED).contains(registration.getRegistrationStatus())) {
             throw new IllegalArgumentException("Hồ sơ đăng ký đã đóng, không thể cập nhật thanh toán.");
@@ -1197,6 +1213,11 @@ public class ForepService {
     }
 
     public PaymentTransactionView createPayment(UUID registrationId, CreatePaymentRequest request) {
+        requireSystemAdmin();
+        return createPaymentForRegistration(registrationId, request);
+    }
+
+    private PaymentTransactionView createPaymentForRegistration(UUID registrationId, CreatePaymentRequest request) {
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
         if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
             throw new IllegalArgumentException("Workspace is already active.");
@@ -1206,6 +1227,11 @@ public class ForepService {
         }
         SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(registration.getSubscriptionPlanId());
         OffsetDateTime now = OffsetDateTime.now();
+        expireStalePaymentsForRegistration(registration.getId(), now);
+        PaymentTransactionEntity pendingPayment = reusablePendingPayment(registration.getId(), now);
+        if (pendingPayment != null) {
+            return toPaymentTransactionView(pendingPayment);
+        }
         PaymentTransactionEntity payment = new PaymentTransactionEntity();
         payment.setWorkspaceRegistrationId(registration.getId());
         payment.setSubscriptionPlanId(plan.getId());
@@ -1243,17 +1269,22 @@ public class ForepService {
     }
 
     public PaymentTransactionView payment(UUID paymentId) {
+        requireSystemAdmin();
         return toPaymentTransactionView(requirePayment(paymentId));
     }
 
-    public PaymentTransactionView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
+    public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
         requireWorkspaceRegistrationWithToken(registrationId, token);
-        return createPayment(registrationId, request);
+        PaymentTransactionView payment = createPaymentForRegistration(registrationId, request);
+        return toPublicPaymentStatusView(requirePayment(payment.id()));
     }
 
-    public PaymentTransactionView publicPaymentStatus(String paymentCode) {
-        return toPaymentTransactionView(paymentTransactions.findByPaymentCode(paymentCode)
-                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found.")));
+    public PublicPaymentStatusView publicPaymentStatus(String paymentCode, String token) {
+        PaymentTransactionEntity payment = paymentTransactions.findByPaymentCode(paymentCode)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistrationWithToken(payment.getWorkspaceRegistrationId(), token);
+        payment = refreshExpiredPayment(payment, OffsetDateTime.now());
+        return toPublicPaymentStatusView(payment, registration);
     }
 
     public PaymentTransactionView handleMomoCallback(PaymentCallbackRequest request) {
@@ -1262,12 +1293,18 @@ public class ForepService {
         if (!momoPaymentService.verifyCallbackSignature(payload, request.signature())) {
             throw new IllegalArgumentException("Invalid MoMo callback signature.");
         }
+        assertCallbackAmountMatches(payment, request);
         boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
         return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
     }
 
     public PaymentTransactionView handleBankTransferCallback(PaymentCallbackRequest request) {
         PaymentTransactionEntity payment = requirePaymentByCallback(request);
+        Map<String, Object> payload = paymentCallbackPayload(request);
+        if (!bankTransferPaymentService.verifyCallbackSignature(payload, request.signature())) {
+            throw new IllegalArgumentException("Invalid bank transfer callback signature.");
+        }
+        assertCallbackAmountMatches(payment, request);
         return confirmPayment(payment.getId(), false, request.rawPayload());
     }
 
@@ -1279,6 +1316,16 @@ public class ForepService {
     public PaymentTransactionView adminRejectPayment(UUID paymentId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         return failPayment(paymentId, request == null ? null : request.note());
+    }
+
+    public List<PaymentTransactionView> adminPayments() {
+        requireSystemAdmin();
+        return paymentTransactions.findAllByOrderByCreatedAtDesc().stream().map(this::toPaymentTransactionView).toList();
+    }
+
+    public PaymentTransactionView adminPayment(UUID paymentId) {
+        requireSystemAdmin();
+        return toPaymentTransactionView(requirePayment(paymentId));
     }
 
     public List<WorkspaceRegistrationView> adminWorkspaceRegistrations() {
@@ -1388,6 +1435,11 @@ public class ForepService {
         feedback.setReviewedAt(OffsetDateTime.now());
         feedback.setUpdatedAt(OffsetDateTime.now());
         return toBusinessFeedbackView(businessFeedback.save(feedback));
+    }
+
+    public List<AuditLogView> adminAuditLogs() {
+        requireSystemAdmin();
+        return auditLogs.findAllByOrderByCreatedAtDesc().stream().map(this::toAuditLogView).toList();
     }
 
     private List<DashboardAiRecommendationView> cachedDashboardRecommendations() {
@@ -1775,7 +1827,53 @@ public class ForepService {
         output.put("overloadedEmployees", overloadedEmployees);
         output.put("idleEmployees", idleEmployees);
         output.put("overdueEmployees", overdueEmployees);
+        output.put("summary", "Đang theo dõi " + currentWorkload.size()
+                + " nhân viên: " + overloadedEmployees.size()
+                + " quá tải, " + idleEmployees.size()
+                + " chưa có task mở, " + overdueEmployees.size()
+                + " có task quá hạn.");
+        output.put("workloadInsights", fallbackWorkloadInsights(currentWorkload, overloadedEmployees, idleEmployees, overdueEmployees));
+        output.put("recommendedActions", fallbackWorkloadActions(overloadedEmployees, idleEmployees, overdueEmployees));
         return withFallbackMetadata(output, exception);
+    }
+
+    private List<String> fallbackWorkloadInsights(List<WorkloadView> currentWorkload, List<String> overloadedEmployees, List<String> idleEmployees, List<String> overdueEmployees) {
+        List<String> insights = new ArrayList<>();
+        if (currentWorkload.isEmpty()) {
+            insights.add("Chưa có dữ liệu nhân viên để đánh giá mức tải.");
+            return insights;
+        }
+        insights.add("Tổng quan workload dựa trên task đang mở, task quá hạn, task bị blocker và tổng giờ ước tính.");
+        if (!overloadedEmployees.isEmpty()) {
+            insights.add("Nhóm quá tải cần được rà soát trước khi giao thêm việc: " + String.join(", ", overloadedEmployees) + ".");
+        }
+        if (!idleEmployees.isEmpty()) {
+            insights.add("Có nhân sự chưa có task mở, có thể cân nhắc phân bổ việc mới nếu kỹ năng phù hợp: " + String.join(", ", idleEmployees) + ".");
+        }
+        if (!overdueEmployees.isEmpty()) {
+            insights.add("Có nhân sự gắn với task quá hạn, owner nên kiểm tra ETA và rào cản thực tế: " + String.join(", ", overdueEmployees) + ".");
+        }
+        if (insights.size() == 1) {
+            insights.add("Chưa phát hiện tín hiệu quá tải hoặc quá hạn nổi bật trong dữ liệu hiện tại.");
+        }
+        return insights;
+    }
+
+    private List<String> fallbackWorkloadActions(List<String> overloadedEmployees, List<String> idleEmployees, List<String> overdueEmployees) {
+        List<String> actions = new ArrayList<>();
+        if (!overloadedEmployees.isEmpty()) {
+            actions.add("Không giao thêm task cho nhóm quá tải cho tới khi rà soát lại deadline và phân bổ.");
+        }
+        if (!overdueEmployees.isEmpty()) {
+            actions.add("Ưu tiên follow-up task quá hạn và yêu cầu cập nhật ETA trong ngày.");
+        }
+        if (!idleEmployees.isEmpty()) {
+            actions.add("Dùng danh sách nhân sự tải thấp để cân bằng lại task mới hoặc task cần hỗ trợ.");
+        }
+        if (actions.isEmpty()) {
+            actions.add("Tiếp tục theo dõi workload định kỳ và yêu cầu nhân viên cập nhật tiến độ/report đầy đủ.");
+        }
+        return actions;
     }
 
     private Map<String, Object> fallbackDelayRisks(List<TaskEntity> scopedTasks, Map<UUID, String> employeeNames, AiProviderException exception) {
@@ -1794,8 +1892,29 @@ public class ForepService {
         }
 
         Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summary", fallbackDelayRiskSummary(risks));
         output.put("risks", risks);
+        output.put("recommendedActions", fallbackDelayRecommendedActions(risks));
         return withFallbackMetadata(output, exception);
+    }
+
+    private String fallbackDelayRiskSummary(List<Map<String, Object>> risks) {
+        long high = risks.stream().filter(item -> "HIGH".equals(item.get("riskLevel"))).count();
+        long medium = risks.stream().filter(item -> "MEDIUM".equals(item.get("riskLevel"))).count();
+        if (risks.isEmpty()) {
+            return "Chưa phát hiện task có tín hiệu trễ hạn rõ ràng từ dữ liệu hiện tại.";
+        }
+        return "Có " + risks.size() + " task cần owner kiểm tra, gồm " + high + " rủi ro cao và " + medium + " rủi ro trung bình.";
+    }
+
+    private List<String> fallbackDelayRecommendedActions(List<Map<String, Object>> risks) {
+        if (risks.isEmpty()) {
+            return List.of("Tiếp tục theo dõi deadline, blocker và cập nhật tiến độ hằng ngày.");
+        }
+        return risks.stream()
+                .limit(3)
+                .map(item -> displayText(String.valueOf(item.get("recommendedAction"))))
+                .toList();
     }
 
     private Map<String, Object> fallbackDelayRisk(TaskEntity task, Map<UUID, String> employeeNames) {
@@ -1808,9 +1927,46 @@ public class ForepService {
         item.put("taskId", task.getId().toString());
         item.put("title", task.getTitle());
         item.put("riskLevel", riskLevel);
-        item.put("reason", fallbackDelayReason(task));
-        item.put("recommendedAction", fallbackDelayAction(task, employeeNames));
+        item.put("reason", fallbackDelayReasonClean(task));
+        item.put("recommendedAction", fallbackDelayActionClean(task, employeeNames));
         return item;
+    }
+
+    private String fallbackDelayReasonClean(TaskEntity task) {
+        long hoursUntilDeadline = Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours();
+        if (isOverdue(task)) {
+            return "Task đã quá deadline và chưa hoàn thành.";
+        }
+        if (task.getStatus() == TaskStatus.BLOCKED) {
+            return "Task đang có vướng mắc cần owner kiểm tra.";
+        }
+        if (hoursUntilDeadline <= 48 && task.getProgressPercent() < 30) {
+            return "Tiến độ dưới 30% trong khi deadline còn dưới 48 giờ.";
+        }
+        if (hoursUntilDeadline <= 48) {
+            return "Deadline sắp đến trong vòng 48 giờ.";
+        }
+        if (task.getProgressPercent() < 50) {
+            return "Tiến độ task dưới 50%, cần cập nhật tình hình.";
+        }
+        if (task.getPriority() == TaskPriority.CRITICAL || task.getPriority() == TaskPriority.HIGH) {
+            return "Task ưu tiên cao cần được theo dõi sát.";
+        }
+        return "Task có tín hiệu cần theo dõi thêm.";
+    }
+
+    private String fallbackDelayActionClean(TaskEntity task, Map<UUID, String> employeeNames) {
+        String assigneeName = displayText(employeeNames.getOrDefault(task.getAssigneeId(), "nhân viên phụ trách"));
+        if (task.getStatus() == TaskStatus.BLOCKED) {
+            return "Làm việc với " + assigneeName + " để gỡ vướng mắc và chốt người hỗ trợ.";
+        }
+        if (isOverdue(task)) {
+            return "Liên hệ " + assigneeName + " để cập nhật ETA, điều chỉnh deadline hoặc bổ sung nguồn lực.";
+        }
+        if (Duration.between(OffsetDateTime.now(), task.getDeadline()).toHours() <= 48) {
+            return "Kiểm tra tiến độ với " + assigneeName + " trong hôm nay.";
+        }
+        return "Yêu cầu " + assigneeName + " cập nhật tiến độ và rủi ro hiện tại.";
     }
 
     private String fallbackDelayRiskLevel(TaskEntity task) {
@@ -1987,8 +2143,16 @@ public class ForepService {
         }
 
         Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summary", fallbackActionSummary(suggestions));
         output.put("suggestions", suggestions);
         return withFallbackMetadata(output, exception);
+    }
+
+    private String fallbackActionSummary(List<Map<String, Object>> suggestions) {
+        if (suggestions.isEmpty()) {
+            return "Chưa có hành động khẩn cấp. Owner nên tiếp tục theo dõi task quá hạn, blocker, workload và daily report.";
+        }
+        return "Có " + suggestions.size() + " khuyến nghị hành động. Ưu tiên xử lý: " + displayText(String.valueOf(suggestions.getFirst().get("title"))) + ".";
     }
 
     private Map<String, Object> fallbackBusinessSummary(Map<String, Object> payload, AiProviderException exception) {
@@ -2455,6 +2619,43 @@ public class ForepService {
         return value != null && !value.isBlank();
     }
 
+    @Scheduled(fixedDelayString = "${forep.payments.expiration-scan-delay-ms:60000}", initialDelayString = "${forep.payments.expiration-initial-delay-ms:60000}")
+    public void expireStalePaymentAndRegistrationFlows() {
+        OffsetDateTime now = OffsetDateTime.now();
+        List<PaymentTransactionEntity> expiredPayments = paymentTransactions.findByStatusInAndExpiredAtBefore(
+                List.of(PaymentTransactionStatus.PENDING, PaymentTransactionStatus.PROCESSING),
+                now
+        );
+        expiredPayments.forEach(payment -> {
+            payment.setStatus(PaymentTransactionStatus.EXPIRED);
+            payment.setUpdatedAt(now);
+        });
+        if (!expiredPayments.isEmpty()) {
+            paymentTransactions.saveAll(expiredPayments);
+        }
+
+        List<WorkspaceRegistrationEntity> expiredRegistrations = workspaceRegistrations.findByRegistrationStatusInAndExpiredAtBefore(
+                List.of(
+                        RegistrationStatus.SUBMITTED,
+                        RegistrationStatus.DRAFT,
+                        RegistrationStatus.PAYMENT_PENDING,
+                        RegistrationStatus.PAYMENT_SUBMITTED,
+                        RegistrationStatus.PENDING_PLAN_SELECTION,
+                        RegistrationStatus.PENDING_PAYMENT
+                ),
+                now
+        ).stream()
+                .filter(registration -> registration.getWorkspaceId() == null)
+                .toList();
+        expiredRegistrations.forEach(registration -> {
+            registration.setRegistrationStatus(RegistrationStatus.EXPIRED);
+            registration.setUpdatedAt(now);
+        });
+        if (!expiredRegistrations.isEmpty()) {
+            workspaceRegistrations.saveAll(expiredRegistrations);
+        }
+    }
+
     @Scheduled(fixedDelayString = "${forep.notifications.fixed-delay-ms:300000}", initialDelayString = "${forep.notifications.initial-delay-ms:60000}")
     public void generateScheduledOperationalNotifications() {
         workspaces.findAll().stream()
@@ -2541,21 +2742,26 @@ public class ForepService {
     }
 
     private void enforceAiUsageLimit() {
+        if (isAiUsageLimitReached()) {
+            throw new IllegalArgumentException("Workspace đã sử dụng hết quota AI của gói subscription hiện tại.");
+        }
+    }
+
+    private boolean isAiUsageLimitReached() {
         WorkspaceEntity workspace = requireWorkspace(currentUser().workspaceId());
         if (workspace.getSubscriptionPlanId() == null) {
-            return;
+            return false;
         }
         SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
         if (plan.getAiUsageLimit() == null || plan.getAiUsageLimit() <= 0) {
-            return;
+            return false;
         }
         OffsetDateTime periodStart = workspace.getActivatedAt() == null ? workspace.getCreatedAt() : workspace.getActivatedAt();
         long used = aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(workspace.getId()).stream()
                 .filter(suggestion -> periodStart == null || !suggestion.getCreatedAt().isBefore(periodStart))
                 .filter(suggestion -> workspace.getExpiresAt() == null || suggestion.getCreatedAt().isBefore(workspace.getExpiresAt()))
                 .count();
-        if (used >= plan.getAiUsageLimit()) {
-        }
+        return used >= plan.getAiUsageLimit();
     }
 
     private PaymentTransactionView confirmPayment(UUID paymentId, boolean adminOverride, String rawPayloadOrNote) {
@@ -2732,6 +2938,39 @@ public class ForepService {
         return paymentTransactions.findById(paymentId).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
     }
 
+    private PaymentTransactionEntity reusablePendingPayment(UUID registrationId, OffsetDateTime now) {
+        return paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
+                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.PENDING || payment.getStatus() == PaymentTransactionStatus.PROCESSING)
+                .filter(payment -> payment.getExpiredAt() == null || payment.getExpiredAt().isAfter(now))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void expireStalePaymentsForRegistration(UUID registrationId, OffsetDateTime now) {
+        List<PaymentTransactionEntity> expiredPayments = paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
+                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.PENDING || payment.getStatus() == PaymentTransactionStatus.PROCESSING)
+                .filter(payment -> payment.getExpiredAt() != null && !payment.getExpiredAt().isAfter(now))
+                .toList();
+        expiredPayments.forEach(payment -> {
+            payment.setStatus(PaymentTransactionStatus.EXPIRED);
+            payment.setUpdatedAt(now);
+        });
+        if (!expiredPayments.isEmpty()) {
+            paymentTransactions.saveAll(expiredPayments);
+        }
+    }
+
+    private PaymentTransactionEntity refreshExpiredPayment(PaymentTransactionEntity payment, OffsetDateTime now) {
+        if ((payment.getStatus() == PaymentTransactionStatus.PENDING || payment.getStatus() == PaymentTransactionStatus.PROCESSING)
+                && payment.getExpiredAt() != null
+                && !payment.getExpiredAt().isAfter(now)) {
+            payment.setStatus(PaymentTransactionStatus.EXPIRED);
+            payment.setUpdatedAt(now);
+            return paymentTransactions.save(payment);
+        }
+        return payment;
+    }
+
     private PaymentTransactionEntity requirePaymentByCallback(PaymentCallbackRequest request) {
         if (hasText(request.orderCode())) {
             return paymentTransactions.findByOrderCode(request.orderCode()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
@@ -2740,6 +2979,15 @@ public class ForepService {
             return paymentTransactions.findByRequestId(request.requestId()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
         }
         throw new IllegalArgumentException("Callback must include orderCode or requestId.");
+    }
+
+    private void assertCallbackAmountMatches(PaymentTransactionEntity payment, PaymentCallbackRequest request) {
+        if (request.amount() == null) {
+            throw new IllegalArgumentException("Callback amount is required.");
+        }
+        if (payment.getAmount().compareTo(request.amount()) != 0) {
+            throw new IllegalArgumentException("Callback amount does not match the payment transaction.");
+        }
     }
 
     private Map<String, Object> paymentCallbackPayload(PaymentCallbackRequest request) {
@@ -2948,7 +3196,10 @@ public class ForepService {
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
+    private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private BusinessFeedbackView toBusinessFeedbackView(BusinessFeedbackEntity item) { return new BusinessFeedbackView(item.getId(), item.getWorkspaceId(), item.getRating(), item.getContent(), item.getSupportNote(), item.getStatus(), item.getReviewedBy(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private AuditLogView toAuditLogView(AuditLogEntity item) { return new AuditLogView(item.getId(), item.getWorkspaceId(), item.getActorId(), item.getAction(), item.getEntityType(), item.getEntityId(), item.getOldValue(), item.getNewValue(), item.getCreatedAt()); }
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
     public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
@@ -2971,7 +3222,9 @@ public class ForepService {
     public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String action, String entityType, UUID entityId, String oldValue, String newValue, OffsetDateTime createdAt) {}
     private record AssignmentPlan(AssignmentType assignmentType, UUID primaryAssigneeId, UUID teamLeaderId, List<UUID> participantIds) {}
 }
 

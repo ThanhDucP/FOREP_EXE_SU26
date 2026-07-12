@@ -60,8 +60,8 @@ public class PublicRegistrationController {
     }
 
     @GetMapping("/public/payments/{paymentCode}/status")
-    ApiResponse<?> paymentStatus(@PathVariable String paymentCode) {
-        return ApiResponse.ok(service.publicPaymentStatus(paymentCode));
+    ApiResponse<?> paymentStatus(@PathVariable String paymentCode, @RequestParam String token) {
+        return ApiResponse.ok(service.publicPaymentStatus(paymentCode, token));
     }
 
     @PostMapping("/payment-callbacks/momo")

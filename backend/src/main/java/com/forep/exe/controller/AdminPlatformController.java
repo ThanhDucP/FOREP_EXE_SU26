@@ -56,6 +56,16 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.workspaceRegistration(id));
     }
 
+    @GetMapping("/payments")
+    ApiResponse<?> payments() {
+        return ApiResponse.ok(service.adminPayments());
+    }
+
+    @GetMapping("/payments/{paymentId}")
+    ApiResponse<?> payment(@PathVariable UUID paymentId) {
+        return ApiResponse.ok(service.adminPayment(paymentId));
+    }
+
     @PatchMapping("/workspace-registrations/{id}/approve")
     ApiResponse<?> approveWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
         return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
@@ -104,5 +114,10 @@ public class AdminPlatformController {
     @PatchMapping("/business-feedback/{id}/mark-reviewed")
     ApiResponse<?> markBusinessFeedbackReviewed(@PathVariable UUID id, @RequestBody(required = false) ReviewBusinessFeedbackRequest request) {
         return ApiResponse.ok(service.reviewBusinessFeedback(id, request));
+    }
+
+    @GetMapping("/audit-logs")
+    ApiResponse<?> auditLogs() {
+        return ApiResponse.ok(service.adminAuditLogs());
     }
 }

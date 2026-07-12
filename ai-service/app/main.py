@@ -149,7 +149,7 @@ def workload_summary_endpoint(payload: WorkloadSummaryRequest):
 
 @app.post("/internal/ai/delay-risks", dependencies=[Depends(verify_internal_token)])
 def delay_risks_endpoint(payload: DelayRiskRequest):
-    return {"risks": [item.model_dump(by_alias=True) for item in delay_risks(payload)]}
+    return delay_risks(payload).model_dump(by_alias=True)
 
 
 @app.post("/internal/ai/daily-summary", dependencies=[Depends(verify_internal_token)])

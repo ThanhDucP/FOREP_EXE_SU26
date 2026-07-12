@@ -39,9 +39,11 @@ forep:
       secret-key: ${MOMO_SECRET_KEY:}
       return-url: ${MOMO_RETURN_URL:}
       notify-url: ${MOMO_NOTIFY_URL:}
+      sandbox-mode: ${MOMO_SANDBOX_MODE:false}
     bank:
       bank-code: ${BANK_TRANSFER_BANK_CODE:}
       bank-name: ${BANK_TRANSFER_BANK_NAME:}
       account-number: ${BANK_TRANSFER_ACCOUNT_NUMBER:}
       account-name: ${BANK_TRANSFER_ACCOUNT_NAME:}
+      webhook-secret: ${BANK_TRANSFER_WEBHOOK_SECRET:}
       vietqr-template: ${VIETQR_TEMPLATE:https://img.vietqr.io/image/{bankCode}-{accountNumber}-compact2.png?amount={amount}&addInfo={content}&accountName={accountName}}

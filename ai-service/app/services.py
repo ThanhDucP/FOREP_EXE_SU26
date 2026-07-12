@@ -28,6 +28,7 @@ from app.schemas import (
     DailySummaryResponse,
     DelayRisk,
     DelayRiskRequest,
+    DelayRiskResponse,
     EmployeeReportRequest,
     EmployeeReportResponse,
     EstimatedHoursRequest,
@@ -445,34 +446,51 @@ def workload_summary(payload: WorkloadSummaryRequest) -> WorkloadSummaryResponse
         task=(
             "Summarize employee workload for an owner. "
             "Output schema: {\"summary\":\"string\",\"overloadedEmployees\":[\"string\"],"
-            "\"idleEmployees\":[\"string\"],\"overdueEmployees\":[\"string\"]}. "
+            "\"idleEmployees\":[\"string\"],\"overdueEmployees\":[\"string\"],"
+            "\"workloadInsights\":[\"string\"],\"recommendedActions\":[\"string\"]}. "
             "overloadedEmployees must contain only names with workloadLevel OVERLOADED. "
             "idleEmployees must contain only names with workloadLevel NO_WORK. "
-            "overdueEmployees must contain only names with overdueTasks > 0."
+            "overdueEmployees must contain only names with overdueTasks > 0. "
+            "summary must be 2-3 concise Vietnamese sentences with concrete counts and labels. "
+            "workloadInsights must mention high load, low load/no work, overdue tasks, or insufficient data. "
+            "recommendedActions must be practical owner actions; do not assign tasks automatically."
         ),
         data=payload.model_dump(by_alias=True),
         feature="WORKLOAD_SUMMARY",
     )
-    return WorkloadSummaryResponse(**llm_output)
+    response = WorkloadSummaryResponse(**llm_output)
+    allowed = {employee.full_name: employee for employee in payload.employees}
+    response.overloaded_employees = [name for name in response.overloaded_employees if allowed.get(name) and allowed[name].workload_level == "OVERLOADED"]
+    response.idle_employees = [name for name in response.idle_employees if allowed.get(name) and allowed[name].workload_level == "NO_WORK"]
+    response.overdue_employees = [name for name in response.overdue_employees if allowed.get(name) and allowed[name].overdue_tasks > 0]
+    if not response.workload_insights:
+        response.workload_insights = _workload_insights(payload)
+    if not response.recommended_actions:
+        response.recommended_actions = _workload_actions(payload)
+    return response
 
 
-def delay_risks(payload: DelayRiskRequest) -> list[DelayRisk]:
+def delay_risks(payload: DelayRiskRequest) -> DelayRiskResponse:
     llm_output = _ask_llm_json(
         task=(
             "Detect task delay risks for active tasks. "
-            "Output schema: {\"risks\":[{\"taskId\":\"string\",\"title\":\"string\",\"riskLevel\":\"LOW|MEDIUM|HIGH\","
-            "\"reason\":\"string\",\"recommendedAction\":\"string\"}]}. "
+            "Output schema: {\"summary\":\"string\",\"risks\":[{\"taskId\":\"string\",\"title\":\"string\",\"riskLevel\":\"LOW|MEDIUM|HIGH\","
+            "\"reason\":\"string\",\"recommendedAction\":\"string\"}],\"recommendedActions\":[\"string\"]}. "
             "taskId and title must exactly match an input task. "
             "HIGH: overdue true, blocked, progressPercent < 30 with close deadline. "
             "MEDIUM: progressPercent < 50 or needs follow-up. LOW: mild risk only. "
-            "Omit tasks with no meaningful risk."
+            "Omit tasks with no meaningful risk. "
+            "summary must be a short Vietnamese diagnosis for the owner, including count of risky tasks."
         ),
         data=payload.model_dump(by_alias=True),
         feature="DELAY_RISKS",
     )
     if not isinstance(llm_output.get("risks"), list):
         raise AiProviderError("AI response missing risks.", "AI_SCHEMA_VALIDATION_ERROR", "DELAY_RISKS")
-    return _parse_delay_risks(llm_output["risks"], payload)
+    risks = _parse_delay_risks(llm_output["risks"], payload)
+    recommended_actions = llm_output.get("recommendedActions") if isinstance(llm_output.get("recommendedActions"), list) else []
+    summary = str(llm_output.get("summary") or _delay_risk_summary(risks))
+    return DelayRiskResponse(summary=summary, risks=risks, recommendedActions=[str(item) for item in recommended_actions][:5])
 
 
 def daily_summary(payload: DailySummaryRequest) -> DailySummaryResponse:
@@ -711,12 +729,13 @@ def action_suggestions(payload: ActionSuggestionsRequest) -> ActionSuggestionsRe
     llm_output = _ask_llm_json(
         task=(
             "Suggest concrete owner actions from tasks, reports, and workload. "
-            "Output schema: {\"suggestions\":[{\"actionType\":\"FOLLOW_UP_TASK|REASSIGN_TASK|CHANGE_DEADLINE|CHANGE_PRIORITY|REQUEST_REPORT|REVIEW_BLOCKER|CREATE_TASK|NONE\","
+            "Output schema: {\"summary\":\"string\",\"suggestions\":[{\"actionType\":\"FOLLOW_UP_TASK|REASSIGN_TASK|CHANGE_DEADLINE|CHANGE_PRIORITY|REQUEST_REPORT|REVIEW_BLOCKER|CREATE_TASK|NONE\","
             "\"targetEntityType\":\"TASK|EMPLOYEE|DAILY_REPORT|WORKSPACE\",\"targetEntityId\":\"string\","
             "\"title\":\"string\",\"reason\":\"string\",\"confidence\":0.0}]}. "
             "Use only provided target IDs from tasks taskId, reports reportId, or workload employeeId. "
             "Prioritize overdue tasks, blocked tasks, low progress with close deadline, overloaded employees, and report blockers. "
-            "Omit NONE actions. confidence must be 0.0 to 1.0."
+            "Omit NONE actions. confidence must be 0.0 to 1.0. "
+            "summary must briefly say what owner should focus on next, even when suggestions is empty."
         ),
         data=payload.model_dump(by_alias=True),
         feature="ACTION_SUGGESTIONS",
@@ -730,7 +749,8 @@ def action_suggestions(payload: ActionSuggestionsRequest) -> ActionSuggestionsRe
         except Exception:
             continue
     allowed_ids = _allowed_action_ids(payload.tasks, payload.reports, payload.workload)
-    return ActionSuggestionsResponse(suggestions=_valid_actions(suggestions, allowed_ids)[:8])
+    valid = _valid_actions(suggestions, allowed_ids)[:8]
+    return ActionSuggestionsResponse(summary=str(llm_output.get("summary") or _action_summary(valid)), suggestions=valid)
 
 
 def _ask_llm_json(task: str, data: dict[str, Any], feature: str) -> dict[str, Any]:
@@ -1255,6 +1275,56 @@ def _parse_delay_risks(items: list[Any], payload: DelayRiskRequest) -> list[Dela
         except Exception:
             continue
     return parsed
+
+
+def _workload_insights(payload: WorkloadSummaryRequest) -> list[str]:
+    total = len(payload.employees)
+    overloaded = [item for item in payload.employees if item.workload_level == "OVERLOADED"]
+    high = [item for item in payload.employees if item.workload_level == "HIGH"]
+    idle = [item for item in payload.employees if item.workload_level == "NO_WORK"]
+    overdue = [item for item in payload.employees if item.overdue_tasks > 0]
+    if total == 0:
+        return ["Chưa có dữ liệu nhân sự để đánh giá mức tải."]
+    insights = [
+        f"Đang theo dõi {total} nhân viên; {len(overloaded)} quá tải, {len(high)} tải cao, {len(idle)} chưa có task mở.",
+    ]
+    if overdue:
+        insights.append(f"Có {len(overdue)} nhân viên đang gắn với task quá hạn, cần owner kiểm tra tiến độ.")
+    if idle:
+        insights.append("Có nhân sự tải thấp, có thể cân nhắc phân bổ việc mới nếu kỹ năng phù hợp.")
+    if not overloaded and not overdue:
+        insights.append("Chưa thấy tín hiệu quá tải hoặc quá hạn nổi bật trong dữ liệu hiện tại.")
+    return insights
+
+
+def _workload_actions(payload: WorkloadSummaryRequest) -> list[str]:
+    overloaded = [item.full_name for item in payload.employees if item.workload_level == "OVERLOADED"]
+    idle = [item.full_name for item in payload.employees if item.workload_level == "NO_WORK"]
+    actions: list[str] = []
+    if overloaded:
+        actions.append("Rà soát task đang mở của nhóm quá tải trước khi giao thêm việc.")
+    if idle:
+        actions.append("Kiểm tra kỹ năng của nhóm đang rảnh để cân bằng lại phân bổ công việc.")
+    if any(item.overdue_tasks > 0 for item in payload.employees):
+        actions.append("Ưu tiên follow-up các task quá hạn và yêu cầu cập nhật ETA.")
+    if not actions:
+        actions.append("Tiếp tục theo dõi workload định kỳ và cập nhật task/report đầy đủ.")
+    return actions
+
+
+def _delay_risk_summary(risks: list[DelayRisk]) -> str:
+    if not risks:
+        return "Chưa phát hiện task có tín hiệu trễ hạn rõ ràng từ dữ liệu hiện tại."
+    high = sum(1 for item in risks if item.risk_level == "HIGH")
+    medium = sum(1 for item in risks if item.risk_level == "MEDIUM")
+    return f"Có {len(risks)} task cần owner kiểm tra, gồm {high} rủi ro cao và {medium} rủi ro trung bình."
+
+
+def _action_summary(suggestions: list[ActionSuggestion]) -> str:
+    if not suggestions:
+        return "Chưa có hành động khẩn cấp; owner nên tiếp tục theo dõi workload, deadline và daily report."
+    top = suggestions[0]
+    return f"Có {len(suggestions)} khuyến nghị hành động; ưu tiên trước: {top.title}."
 
 
 def _recommendation_explanation_json(payload: RecommendationExplanationRequest, expected_type: str) -> dict[str, Any]:

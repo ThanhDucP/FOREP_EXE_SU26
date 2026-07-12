@@ -56,6 +56,8 @@ class WorkloadSummaryResponse(StrictModel):
     overloaded_employees: list[str] = Field(alias="overloadedEmployees")
     idle_employees: list[str] = Field(alias="idleEmployees")
     overdue_employees: list[str] = Field(alias="overdueEmployees")
+    workload_insights: list[str] = Field(default_factory=list, alias="workloadInsights")
+    recommended_actions: list[str] = Field(default_factory=list, alias="recommendedActions")
 
 
 class DelayRiskTask(StrictModel):
@@ -65,6 +67,8 @@ class DelayRiskTask(StrictModel):
     deadline: str
     progress_percent: int = Field(alias="progressPercent")
     overdue: bool
+    status: Optional[str] = None
+    priority: Optional[str] = None
 
 
 class DelayRiskRequest(StrictModel):
@@ -77,6 +81,12 @@ class DelayRisk(StrictModel):
     risk_level: str = Field(alias="riskLevel")
     reason: str
     recommended_action: str = Field(alias="recommendedAction")
+
+
+class DelayRiskResponse(StrictModel):
+    summary: str
+    risks: list[DelayRisk]
+    recommended_actions: list[str] = Field(default_factory=list, alias="recommendedActions")
 
 
 class DailySummaryRequest(StrictModel):
@@ -292,6 +302,7 @@ class ActionSuggestion(StrictModel):
 
 class ActionSuggestionsResponse(StrictModel):
     suggestions: list[ActionSuggestion]
+    summary: str = ""
 
 
 Difficulty = Literal["EASY", "MEDIUM", "HARD", "CRITICAL"]

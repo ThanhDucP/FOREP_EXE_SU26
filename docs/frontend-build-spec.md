@@ -1,13 +1,14 @@
 # Dac Ta Xay Front-End FOREP EXE
 
-Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai tai base URL `http://localhost:8080/api/v1`.
+Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai. Dung `http://localhost:8080` lam API origin; cac module authenticated cu dung prefix `/api/v1`, public registration/payment dung prefix `/api/public`, payment provider callbacks dung `/api/payment-callbacks`, va admin platform moi dung `/api/admin`.
 
 Cap nhat moi cho module HR, giao task ca nhan/nhom, attachment, recommendation va workload thang nam trong `docs/FE.md`. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh.
 
 ## 1. Nguyen tac tich hop API
 
 - Front-end chi goi Backend API, khong goi truc tiep AI Service.
-- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, `GET /subscription-plans`, `GET /subscription-plans/active`, `POST /workspace-registrations`, `GET /workspace-registrations/{id}`, `PATCH /workspace-registrations/{id}/select-plan`, `POST /workspace-registrations/{id}/payments`, `GET /payments/{paymentId}`, `POST /payments/momo/callback`, `POST /payments/bank-transfer/callback`, can header `Authorization: Bearer <token>`.
+- Tat ca endpoint, tru `GET /health`, `POST /auth/login`, cac endpoint `/api/public/**`, va provider callback `/api/payment-callbacks/**`, can header `Authorization: Bearer <token>`.
+- FE khong duoc goi legacy public registration/payment qua `/api/v1/workspace-registrations/**` hoac `/api/v1/payments/**`; cac route nay duoc backend siết thanh admin-only. Public registration/payment bat buoc dung `/api/public/**` kem `registrationToken`.
 - Moi response chuan co dang:
 
 ```json
@@ -312,6 +313,7 @@ type PaymentTransaction = {
   paymentMethod: 'MOMO' | 'BANK_TRANSFER';
   amount: number;
   currency: 'VND';
+  paymentCode: string;
   orderCode: string;
   requestId: string;
   providerTransactionId: string | null;
@@ -323,7 +325,31 @@ type PaymentTransaction = {
   bankAccountNumber: string | null;
   bankAccountName: string | null;
   transferContent: string | null;
-  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  status: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'CANCELLED' | 'REFUNDED' | 'MANUAL_REVIEW';
+  paidAt: string | null;
+  expiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PublicPaymentStatus = {
+  workspaceRegistrationId: string;
+  workspaceId: string | null;
+  registrationPaymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
+  registrationStatus: string;
+  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
+  amount: number;
+  currency: 'VND';
+  paymentCode: string;
+  providerPaymentUrl: string | null;
+  providerDeeplink: string | null;
+  providerQrCodeUrl: string | null;
+  bankCode: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
+  transferContent: string | null;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'CANCELLED' | 'REFUNDED' | 'MANUAL_REVIEW';
   paidAt: string | null;
   expiredAt: string | null;
   createdAt: string;
@@ -358,12 +384,12 @@ type PaymentTransaction = {
 
 | Chuc nang | Method | Path | Body | Quyen |
 |---|---|---|---|---|
-| Danh sach goi dang ky active | GET | `/subscription-plans/active` | none | public |
-| Gui thong tin dang ky workspace | POST | `/workspace-registrations` | `{ businessName, workspaceName, contactEmail, contactPhone, businessAddress, representativeFullName, representativeEmail, representativePhone }` | public |
-| Xem ho so dang ky | GET | `/workspace-registrations/{id}` | none | public |
-| Chon goi dang ky | PATCH | `/workspace-registrations/{id}/select-plan` | `{ subscriptionPlanId }` | public |
-| Tao giao dich thanh toan | POST | `/workspace-registrations/{id}/payments` | `{ paymentMethod: 'MOMO' \| 'BANK_TRANSFER' }` | public |
-| Xem payment | GET | `/payments/{paymentId}` | none | public |
+| Danh sach goi dang ky active | GET | `/api/public/subscription-plans` | none | public |
+| Gui thong tin dang ky workspace | POST | `/api/public/workspace-registrations` | `{ businessName, workspaceName, contactEmail, contactPhone, businessAddress, representativeFullName, representativeEmail, representativePhone }` | public |
+| Xem ho so dang ky | GET | `/api/public/workspace-registrations/{id}?token={registrationToken}` | none | public |
+| Chon goi dang ky | PATCH | `/api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` | `{ subscriptionPlanId }` | public |
+| Tao giao dich thanh toan | POST | `/api/public/workspace-registrations/{id}/payments?token={registrationToken}` | `{ paymentMethod: 'MOMO' \| 'BANK_TRANSFER' }` | public |
+| Xem payment public | GET | `/api/public/payments/{paymentCode}/status?token={registrationToken}` | none | public |
 | Xem workspace | GET | `/workspaces/current` | none | OWNER |
 | Sua workspace | PUT | `/workspaces/current` | `{ name, shortCode, logo, address }` | OWNER |
 
@@ -371,16 +397,30 @@ Khong dung `/workspaces/register` cho user public nua. Endpoint nay da bi chan d
 
 Flow dang ky workspace public:
 
-1. Trang workspace registration nhap thong tin doanh nghiep va nguoi dai dien, goi `POST /workspace-registrations`, sau do chuyen sang trang chon goi bang `registrationId`.
-2. Trang chon goi goi `GET /subscription-plans/active`, hien thi name, description, price, duration, `maxOwnerAccounts`, `maxEmployeeAccounts`, full features va nut chon goi.
-3. Khi user chon goi, UI goi `PATCH /workspace-registrations/{id}/select-plan` roi chuyen sang trang chon phuong thuc thanh toan.
-4. Trang chon payment method bat buoc user chon `MOMO` hoac `BANK_TRANSFER`, sau do goi `POST /workspace-registrations/{id}/payments`.
-5. Trang payment instruction hien thi theo `PaymentTransaction`: MoMo QR/payUrl/deeplink hoac VietQR bank info, amount, orderCode, status.
-6. UI poll `GET /payments/{paymentId}` moi 3-5 giay den khi status la `SUCCESS`, `FAILED` hoac `EXPIRED`.
-7. Trang ket qua goi them `GET /workspace-registrations/{id}` de hien thi payment result va workspace activation status.
+1. Trang workspace registration nhap thong tin doanh nghiep va nguoi dai dien, goi `POST /api/public/workspace-registrations`, sau do chuyen sang trang chon goi bang `registrationId` va `registrationToken`.
+2. Trang chon goi goi `GET /api/public/subscription-plans`, hien thi name, description, price, duration, `maxOwnerAccounts`, `maxEmployeeAccounts`, full features va nut chon goi.
+3. Khi user chon goi, UI goi `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` roi chuyen sang trang chon phuong thuc thanh toan.
+4. Trang chon payment method bat buoc user chon `MOMO` hoac `BANK_TRANSFER`, sau do goi `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`.
+5. Trang payment instruction hien thi theo `PublicPaymentStatus`: MoMo QR/payUrl/deeplink hoac VietQR bank info, amount, paymentCode, status. Khong phu thuoc `orderCode`, `requestId`, `providerTransactionId` o UI public. Neu backend tra ve payment pending con han da ton tai, UI dung lai `paymentCode` do va khong tao them instruction moi.
+6. UI poll `GET /api/public/payments/{paymentCode}/status?token={registrationToken}` moi 3-5 giay den khi status la `SUCCESS`, `FAILED` hoac `EXPIRED`.
+7. Trang ket qua goi them `GET /api/public/workspace-registrations/{id}?token={registrationToken}` de hien thi payment result va workspace activation status.
 8. UI khong cho login owner khi payment chua `SUCCESS`; frontend khong tu tin payment success tu query string/callback client.
 
 Neu khong thanh toan, user public khong tao duoc workspace/account. Chi System Admin moi duoc tao workspace truc tiep bang API admin.
+
+Production payment note: MoMo callback can xac thuc signature bang `MOMO_SECRET_KEY`. Neu chua co secret, backend chi chap nhan callback khi `MOMO_SANDBOX_MODE=true`; production phai de `false`.
+
+FE implementation requirements cho registration/payment:
+
+- Sau `POST /api/public/workspace-registrations`, FE phai luu `registrationId` va `registrationToken` trong state/session storage cua flow. Neu mat token, hien thong bao het phien dang ky va yeu cau user bat dau lai hoac lien he admin; khong thu goi API public thieu token.
+- Tat ca buoc sau dang ky gom xem ho so, chon goi, tao payment va poll payment deu phai truyen `?token={registrationToken}`.
+- Payment instruction/result dung `paymentCode` lam route param. Khong dung `paymentId`, `orderCode`, `requestId`, `providerTransactionId` trong UI public.
+- Khi submit tao payment ma backend tra ve `PublicPaymentStatus` co `paymentCode` trung voi payment dang hien thi hoac status `PENDING/PROCESSING`, FE reuse instruction hien tai va tiep tuc polling; khong hien thong bao loi "da ton tai payment".
+- Khi status `EXPIRED`, FE dung polling, hien nut tao giao dich moi. Khi user tao lai, goi lai endpoint create payment; backend se tao payment moi neu payment cu da het han.
+- Khi status `FAILED`, FE dung polling, hien nut thu lai thanh toan va thong tin lien he ho tro.
+- Khi status `SUCCESS`, FE dung polling va goi `GET /api/public/workspace-registrations/{registrationId}?token={registrationToken}` de lay `workspaceId/registrationStatus`, sau do hien CTA dang nhap.
+- FE khong tu xac nhan thanh toan tu query string redirect cua MoMo hoac trang return URL. Chi coi thanh toan thanh cong khi backend public status tra `SUCCESS`.
+- Trang public khong hien cac truong noi bo cua admin payment nhu `orderCode`, `requestId`, `providerTransactionId`, raw provider payload.
 
 ### System Admin
 
@@ -398,6 +438,9 @@ Tat ca endpoint duoi day chi danh cho `SYSTEM_ADMIN`.
 | Tao Business Owner | POST | `/admin/workspaces/{id}/business-owners` | `{ fullName, email, username, temporaryPassword, phone, status }` |
 | Reset password owner | PATCH | `/admin/business-owners/{id}/reset-password` | none |
 | Doi status owner | PATCH | `/admin/business-owners/{id}/status?status=ACTIVE` | query `status` |
+| Danh sach payment | GET | `/admin/payments` | none |
+| Chi tiet payment | GET | `/admin/payments/{paymentId}` | none |
+| Xem audit log | GET | `/admin/audit-logs` | none |
 | Danh sach goi | GET | `/admin/subscription-plans` | none |
 | Tao goi | POST | `/admin/subscription-plans` | `{ name, description, price, durationDays, durationInMonths, maxUsers, maxOwnerAccounts, maxEmployeeAccounts, hasFullFeatures, maxWorkspaces, aiUsageLimit, features, status }` |
 | Sua goi | PUT | `/admin/subscription-plans/{id}` | `{ name, description, price, durationDays, durationInMonths, maxUsers, maxOwnerAccounts, maxEmployeeAccounts, hasFullFeatures, maxWorkspaces, aiUsageLimit, features, status }` |
@@ -619,14 +662,14 @@ Fields:
 - Email nguoi dai dien: required, email.
 - So dien thoai nguoi dai dien: optional.
 
-Submit `POST /workspace-registrations`. Khi thanh cong, lay `data.id` va dieu huong den `/workspace-registration/{registrationId}/plans`.
+Submit `POST /api/public/workspace-registrations`. Khi thanh cong, lay `data.id` va `data.registrationToken`, luu token trong session/local state cua flow va dieu huong den `/workspace-registration/{registrationId}/plans`.
 
 #### Plan selection
 
 API:
 
-- `GET /subscription-plans/active`
-- `PATCH /workspace-registrations/{id}/select-plan`
+- `GET /api/public/subscription-plans`
+- `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}`
 
 Card goi can hien:
 
@@ -643,20 +686,21 @@ Fields:
 - Radio/card `MOMO`.
 - Radio/card `BANK_TRANSFER`.
 
-Submit `POST /workspace-registrations/{id}/payments`, sau do dieu huong den trang instruction bang `paymentId`.
+Submit `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`, sau do dieu huong den trang instruction bang `paymentCode`. Neu backend tra ve payment pending con han, dung lai `paymentCode` duoc tra ve va khong tao them payment client-side.
 
 #### Payment instruction
 
 API:
 
-- `GET /payments/{paymentId}` poll moi 3-5 giay.
+- `GET /api/public/payments/{paymentCode}/status?token={registrationToken}` poll moi 3-5 giay.
+- Stop polling khi status thuoc `SUCCESS`, `FAILED`, `EXPIRED`, `CANCELLED`; tiep tuc polling khi `PENDING` hoac `PROCESSING`.
 
 MoMo UI:
 
 - Hien `providerQrCodeUrl` neu co.
 - Hien nut mo `providerPaymentUrl` neu co.
 - Hien deeplink neu co.
-- Hien amount, orderCode, status.
+- Hien amount, paymentCode, status.
 
 Bank/VietQR UI:
 
@@ -669,21 +713,23 @@ Bank/VietQR UI:
 
 API:
 
-- `GET /payments/{paymentId}`.
-- `GET /workspace-registrations/{registrationId}`.
+- `GET /api/public/payments/{paymentCode}/status?token={registrationToken}`.
+- `GET /api/public/workspace-registrations/{registrationId}?token={registrationToken}`.
 
 States:
 
 - `SUCCESS`: hien thanh toan thanh cong, workspace dang kich hoat/da kich hoat.
 - `FAILED`: hien that bai va nut tao giao dich moi.
 - `EXPIRED`: hien het han va nut tao giao dich moi.
-- `PENDING`: tiep tuc hien instruction/polling.
+- `PENDING`/`PROCESSING`: tiep tuc hien instruction/polling.
+
+Backend tu chuyen payment pending qua `EXPIRED` khi qua `expiredAt`; public poll cung co the nhan `EXPIRED` ngay sau khi qua han. Khi user bam thu lai thanh toan, neu van con payment pending chua het han backend se tra lai payment do thay vi tao payment moi.
 
 Buttons:
 
-- `Gui thong tin`: submit `POST /workspace-registrations`.
-- `Chon goi`: submit `PATCH /workspace-registrations/{id}/select-plan`.
-- `Tiep tuc thanh toan`: submit `POST /workspace-registrations/{id}/payments`.
+- `Gui thong tin`: submit `POST /api/public/workspace-registrations`.
+- `Chon goi`: submit `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}`.
+- `Tiep tuc thanh toan`: submit `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`.
 - `Thu lai thanh toan`: tao payment transaction moi.
 - `Da co tai khoan`: chuyen login.
 
@@ -942,11 +988,11 @@ Buttons:
 | Button | Man hinh | Role | API | Disabled khi |
 |---|---|---|---|---|
 | Dang nhap | Login | Public | `POST /auth/login` | form invalid/loading |
-| Gui thong tin dang ky | Registration information | Public | `POST /workspace-registrations` | form invalid/loading |
-| Chon goi dang ky | Plan selection | Public | `PATCH /workspace-registrations/{id}/select-plan` | no plan selected/loading |
-| Tiep tuc thanh toan | Payment method | Public | `POST /workspace-registrations/{id}/payments` | no payment method selected/loading |
+| Gui thong tin dang ky | Registration information | Public | `POST /api/public/workspace-registrations` | form invalid/loading |
+| Chon goi dang ky | Plan selection | Public | `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` | no plan selected/loading |
+| Tiep tuc thanh toan | Payment method | Public | `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}` | no payment method selected/loading |
 | Mo trang MoMo | Payment instruction | Public | external `providerPaymentUrl` | no providerPaymentUrl |
-| Thu lai thanh toan | Payment result | Public | `POST /workspace-registrations/{id}/payments` | loading |
+| Thu lai thanh toan | Payment result | Public | `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}` | loading |
 | Dang xuat | User menu | Authenticated | `POST /auth/logout` | loading |
 | Doi mat khau | Profile/User menu | Authenticated | `PATCH /auth/change-password` | form invalid/loading |
 | Them nhan vien | Employees | OWNER | none, mo modal | none |

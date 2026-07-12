@@ -87,6 +87,8 @@ public class AiServiceClient {
                         "assigneeName", employeeNames.getOrDefault(task.assigneeId(), "Chưa rõ"),
                         "deadline", task.deadline().toString(),
                         "progressPercent", task.progressPercent(),
+                        "status", task.status().name(),
+                        "priority", task.priority().name(),
                         "overdue", task.deadline().isBefore(OffsetDateTime.now()) && task.completedAt() == null
                 ))
                 .toList();
