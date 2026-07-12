@@ -30,6 +30,7 @@ import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
+import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
@@ -318,6 +319,11 @@ public class ForepController {
     @PutMapping("/tasks/{id}")
     ApiResponse<?> updateTask(@PathVariable UUID id, @RequestBody @Valid UpdateTaskRequest request) {
         return ApiResponse.ok(service.updateTask(id, request));
+    }
+
+    @PatchMapping("/tasks/{id}/customer-info")
+    ApiResponse<?> updateTaskCustomerInfo(@PathVariable UUID id, @RequestBody @Valid UpdateTaskCustomerInfoRequest request) {
+        return ApiResponse.ok(service.updateTaskCustomerInfo(id, request));
     }
 
     @PatchMapping("/tasks/{id}/assign")

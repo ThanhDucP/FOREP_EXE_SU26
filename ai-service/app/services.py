@@ -264,6 +264,8 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
             "Never infer missing skills, seniority, job role, or experience from employee name. "
             "If professional profile fields are missing, say the recommendation is based on workload and risk data only. "
             "Explain score using scoreComponents, workloadLevel, openTasks, overdueTasks, blockedTasks, estimatedWorkload, profile fields, deadline, and estimatedHours. "
+            "When the provided candidate data includes leadershipScore, teamMemberScore, leadTaskCount, leadCompletionRate, similarTaskCount, or domainMatchScore, use these fields explicitly to justify team leader or team member suitability. "
+            "For team leader suitability, prioritize leadershipScore, lead history, completion rate as leader, domain match, and workload availability. For team member suitability, prioritize skill/domain match, teamMemberScore, similar task experience, and workload availability. "
             "Prefer lower workload levels in this order: NO_WORK, LOW, NORMAL, HIGH, OVERLOADED. "
             "Avoid OVERLOADED unless every candidate is OVERLOADED. "
             "Do not rank severe overdue candidates above cleaner suitable candidates. "

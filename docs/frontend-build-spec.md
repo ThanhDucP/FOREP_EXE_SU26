@@ -161,16 +161,51 @@ type Task = {
   title: string;
   requirements: string;
   description: string | null;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  customerDescription: string | null;
+  assignmentType: 'INDIVIDUAL' | 'TEAM';
   assigneeId: string;
   creatorId: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   deadline: string;
+  startDate: string | null;
   estimatedHours: number;
+  difficulty: 1 | 2 | 3 | 4 | 5 | null;
+  requiredSkills: string | null;
+  requiredJobPositionId: string | null;
+  taskDomain: string | null;
+  projectId: string | null;
+  departmentId: string | null;
+  participants: TaskAssignee[];
+  attachments: TaskAttachment[];
   progressPercent: number;
   status: 'ASSIGNED' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED' | 'CANCELLED';
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+};
+
+type TaskAssignee = {
+  id: string;
+  taskId: string;
+  employeeId: string;
+  participantRole: 'ASSIGNEE' | 'LEADER' | 'MEMBER';
+  leader: boolean;
+  allocatedHours: number;
+  createdAt: string;
+};
+
+type TaskAttachment = {
+  id: string;
+  taskId: string;
+  fileName: string;
+  fileUrl: string;
+  contentType: string | null;
+  fileSize: number | null;
+  attachmentType: 'REQUIREMENT' | 'REFERENCE' | 'RESULT' | 'OTHER' | null;
+  uploadedBy: string;
+  createdAt: string;
 };
 
 type TaskUpdate = {
@@ -480,10 +515,13 @@ Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; 
 | Chuc nang | Method | Path | Body |
 |---|---|---|---|
 | Danh sach task | GET | `/tasks` | none |
-| Tao task | POST | `/tasks` | `{ title, requirements, description, assigneeId, priority, deadline, estimatedHours }` |
+| Tao task | POST | `/tasks` | `{ title, requirements, description, customerPhone, customerEmail, customerDescription, assignmentType, assigneeId, teamLeaderId, teamMemberIds, priority, deadline, startDate, estimatedHours, difficulty, requiredSkills, requiredJobPositionId, taskDomain, projectId, departmentId, attachments }` |
 | Chi tiet task | GET | `/tasks/{id}` | none |
-| Sua task | PUT | `/tasks/{id}` | `{ title, requirements, description, assigneeId, priority, deadline, estimatedHours }` |
+| Sua task | PUT | `/tasks/{id}` | same body voi tao task |
+| Sua thong tin khach hang | PATCH | `/tasks/{id}/customer-info` | `{ customerPhone, customerEmail, customerDescription }` |
 | Giao lai task | PATCH | `/tasks/{id}/assign` | `{ assigneeId }` |
+| Giao ca nhan | PATCH | `/tasks/{id}/assign-individual` | `{ employeeId }` |
+| Giao nhom | PATCH | `/tasks/{id}/assign-team` | `{ teamLeaderId, teamMemberIds }` |
 | Doi status | PATCH | `/tasks/{id}/status` | `{ status }` |
 | Cap nhat tien do | PATCH | `/tasks/{id}/progress` | `{ progressPercent, content, updateType, attachment }` |
 | Lich su cap nhat | GET | `/tasks/{id}/updates` | none |
@@ -493,8 +531,13 @@ Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; 
 Quyen:
 
 - OWNER xem tat ca task trong workspace, tao/sua/giao lai/huy task.
+- MANAGER xem tat ca task trong workspace, tao/sua/giao lai task theo API workspace.
 - EMPLOYEE chi xem task duoc giao.
 - OWNER hoac assignee co the doi status/cap nhat tien do.
+- Sua thong tin khach hang:
+  - Task ca nhan: OWNER/MANAGER hoac nhan vien duoc giao duoc sua.
+  - Task nhom: OWNER/MANAGER hoac team leader duoc sua.
+  - Team member thuong chi xem, khong hien nut sua.
 
 Luat UI:
 
@@ -515,11 +558,13 @@ Tat ca analytics chi danh cho OWNER.
 
 ### AI
 
-Tat ca endpoint AI chi danh cho OWNER.
+Phan lon endpoint AI danh cho OWNER. Rieng cac endpoint goi y giao viec (`recommend-assignee`, `recommend-team-leaders`, `recommend-team-members`) danh cho OWNER/MANAGER vi day la workflow tao/giao task.
 
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
 | Goi y nguoi nhan | POST | `/ai/recommend-assignee` | `{ title, requirements, deadline, estimatedHours }` |
+| Goi y team lead | POST | `/ai/recommend-team-leaders` | `{ title, requirements, deadline, estimatedHours }` |
+| Goi y thanh vien nhom | POST | `/ai/recommend-team-members` | `{ title, requirements, deadline, estimatedHours }` |
 | Tom tat workload | GET | `/ai/workload-summary` | none |
 | Rui ro tre han | GET | `/ai/delay-risks` | none |
 | Phan tich daily reports | GET | `/ai/daily-reports/insights` | none |
@@ -535,6 +580,12 @@ Tat ca endpoint AI chi danh cho OWNER.
 | Tom tat thang | GET | `/ai/business-summary/monthly` | none |
 
 `outputData` va `inputData` cua AI suggestion la string JSON. Front-end nen parse an toan bang try/catch.
+
+AI team recommendation note:
+
+- `recommend-team-leaders` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_LEADER`. Backend score dua tren leadershipScore, lich su lam leader, lead completion rate, domain match, similar task count va workload.
+- `recommend-team-members` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_MEMBER`. Backend score dua tren teamMemberScore, skill/domain match, similar task count va workload.
+- FE hien reason/risk de manager/owner hieu tai sao AI de xuat, nhung khong auto assign. User phai bam chon lead/member.
 
 `aiRecommendations` tren owner dashboard la cache tu `ai_suggestions`, khong phai LLM call moi moi lan refresh. Moi item co `{ suggestionId, type, source, outputData, createdAt }`; `source` hien tai la `CACHE`.
 
@@ -842,22 +893,32 @@ Fields:
 - Title: required.
 - Requirements: required.
 - Description: optional.
-- Assignee: required, select tu active employees.
+- Customer phone: optional.
+- Customer gmail/email: optional, validate email format neu co.
+- Customer description: optional, multiline.
+- Assignment type: `INDIVIDUAL` hoac `TEAM`.
+- Neu `INDIVIDUAL`: Assignee required, select tu active employees.
+- Neu `TEAM`: Team leader required, team members optional/multi-select, leader khong bi duplicate trong members.
 - Priority: select `LOW | MEDIUM | HIGH | CRITICAL`, default `MEDIUM`.
 - Deadline: required date-time.
-- Estimated hours: optional number, default `0`.
+- Start date: optional date-time.
+- Estimated hours: required number >= 1.
+- Difficulty: optional 1-5.
+- Required skills, job position, task domain: optional nhung nen co de AI recommend chinh xac.
 
 Buttons:
 
 - `Luu task`: create/update.
 - `Goi y nguoi nhan`: goi `POST /ai/recommend-assignee`, chi OWNER.
+- `Goi y team lead`: goi `POST /ai/recommend-team-leaders`, chi OWNER/MANAGER neu form dang la TEAM.
+- `Goi y thanh vien`: goi `POST /ai/recommend-team-members`, chi OWNER/MANAGER neu form dang la TEAM.
 - `Huy`: quay lai list.
 
 AI recommendation panel:
 
 - Hien thi score, workloadLevel, reason, risk.
 - Neu response co `requiredRole`, `roleFit`, `roleFitReason`, hien thi de owner thay AI da doi chieu vai tro chuyen mon voi task.
-- Nut `Chon nguoi nay` set `assigneeId`.
+- Nut `Chon nguoi nay` set `assigneeId` neu task ca nhan, set `teamLeaderId` neu `requiredRole = TEAM_LEADER`, hoac them vao `teamMemberIds` neu `requiredRole = TEAM_MEMBER`.
 - Khong auto-submit task khi chon goi y.
 
 ### Task detail
@@ -865,11 +926,13 @@ AI recommendation panel:
 APIs:
 
 - `GET /tasks/{id}`
+- `PATCH /tasks/{id}/customer-info`
 - `GET /tasks/{id}/updates`
 
 Sections:
 
 - Thong tin task.
+- Thong tin khach hang: customerPhone, customerEmail, customerDescription.
 - Progress/status.
 - Timeline updates.
 - Panel action.
@@ -879,7 +942,22 @@ Buttons:
 - `Cap nhat tien do`: mo form update.
 - `Bao blocker`: preset `updateType=BLOCKER`.
 - `Hoan thanh`: preset `updateType=COMPLETION`.
+- `Sua thong tin khach hang`: hien khi user co quyen sua customer info.
 - OWNER: `Sua task`, `Giao lai`, `Huy task`.
+
+Quyen hien nut `Sua thong tin khach hang`:
+
+- OWNER/MANAGER: hien voi moi task trong workspace.
+- EMPLOYEE voi task `INDIVIDUAL`: hien neu `assigneeId` la user hien tai.
+- EMPLOYEE voi task `TEAM`: hien neu user hien tai la participant co `leader = true` hoac `participantRole = LEADER`.
+- Khong hien cho team member thuong.
+
+Customer info form:
+
+- customerPhone optional.
+- customerEmail optional, validate email format neu co.
+- customerDescription optional multiline.
+- Submit `PATCH /tasks/{id}/customer-info`, sau do refetch task detail.
 
 Progress update form:
 
@@ -1003,12 +1081,15 @@ Buttons:
 | Tao task | Tasks/Dashboard | OWNER | none, route create | no active employee |
 | Luu task | Task form | OWNER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
 | Goi y nguoi nhan | Task form | OWNER | `POST /ai/recommend-assignee` | thieu title/requirements/deadline/loading |
+| Goi y team lead | Task form | OWNER/MANAGER | `POST /ai/recommend-team-leaders` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
+| Goi y thanh vien nhom | Task form | OWNER/MANAGER | `POST /ai/recommend-team-members` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
 | Chon nguoi nay | AI recommendation | OWNER | none, set assignee | employee inactive neu co data |
 | Tao task bang AI | AI center | OWNER | `POST /ai/tasks/extract` | text empty/loading |
 | Chia nho task | Task detail | OWNER | `POST /ai/tasks/{id}/split` | loading |
 | De xuat deadline/priority | Task detail | OWNER | `POST /ai/tasks/{id}/adjust` | loading |
 | Xem action AI | AI center | OWNER | `GET /ai/action-suggestions` | loading |
 | Giao lai | Task detail | OWNER | `PATCH /tasks/{id}/assign` | no assignee/loading |
+| Sua thong tin khach hang | Task detail | OWNER/MANAGER/assignee/leader | `PATCH /tasks/{id}/customer-info` | no permission/loading |
 | Huy task | Task detail | OWNER | `PATCH /tasks/{id}/cancel` | status CANCELLED/COMPLETED/loading |
 | Doi trang thai | Task detail | OWNER/assignee | `PATCH /tasks/{id}/status` | no status/loading |
 | Cap nhat tien do | Task detail | OWNER/assignee | `PATCH /tasks/{id}/progress` | content empty/loading |

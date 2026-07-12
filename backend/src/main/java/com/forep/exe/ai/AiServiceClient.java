@@ -297,6 +297,7 @@ public class AiServiceClient {
             String employeeId,
             String fullName,
             long openTasks,
+            long completedTasks,
             long overdueTasks,
             long blockedTasks,
             double estimatedWorkload,
@@ -308,6 +309,13 @@ public class AiServiceClient {
             Integer yearsOfExperience,
             String skills,
             int candidateScore,
+            int leadershipScore,
+            int teamMemberScore,
+            long leadTaskCount,
+            long leadCompletedTasks,
+            double leadCompletionRate,
+            int similarTaskCount,
+            int domainMatchScore,
             Map<String, Object> scoreComponents
     ) {
         public static AiEmployeeWorkload from(WorkloadView item) {
@@ -315,6 +323,7 @@ public class AiServiceClient {
                     item.employeeId().toString(),
                     item.fullName(),
                     item.openTasks(),
+                    item.completedTasks(),
                     item.overdueTasks(),
                     item.blockedTasks(),
                     item.estimatedWorkload().doubleValue(),
@@ -325,6 +334,13 @@ public class AiServiceClient {
                     null,
                     null,
                     null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
                     0,
                     Map.of()
             );

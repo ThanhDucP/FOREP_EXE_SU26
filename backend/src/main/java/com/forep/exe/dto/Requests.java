@@ -115,6 +115,9 @@ public final class Requests {
             @NotBlank String title,
             @NotBlank String requirements,
             String description,
+            String customerPhone,
+            @Email String customerEmail,
+            String customerDescription,
             UUID assigneeId,
             AssignmentType assignmentType,
             UUID teamLeaderId,
@@ -137,6 +140,9 @@ public final class Requests {
             @NotBlank String title,
             @NotBlank String requirements,
             String description,
+            String customerPhone,
+            @Email String customerEmail,
+            String customerDescription,
             UUID assigneeId,
             AssignmentType assignmentType,
             UUID teamLeaderId,
@@ -162,6 +168,13 @@ public final class Requests {
     }
 
     public record AssignTeamRequest(@NotNull UUID teamLeaderId, List<UUID> teamMemberIds) {
+    }
+
+    public record UpdateTaskCustomerInfoRequest(
+            String customerPhone,
+            @Email String customerEmail,
+            String customerDescription
+    ) {
     }
 
     public record TaskAttachmentRequest(

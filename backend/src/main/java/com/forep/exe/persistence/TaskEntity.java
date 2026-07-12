@@ -24,6 +24,10 @@ public class TaskEntity extends BaseEntity {
     private String requirements;
     @Column(columnDefinition = "text")
     private String description;
+    private String customerPhone;
+    private String customerEmail;
+    @Column(columnDefinition = "text")
+    private String customerDescription;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private AssignmentType assignmentType;
@@ -64,6 +68,12 @@ public class TaskEntity extends BaseEntity {
     public void setRequirements(String requirements) { this.requirements = requirements; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public String getCustomerPhone() { return customerPhone; }
+    public void setCustomerPhone(String customerPhone) { this.customerPhone = customerPhone; }
+    public String getCustomerEmail() { return customerEmail; }
+    public void setCustomerEmail(String customerEmail) { this.customerEmail = customerEmail; }
+    public String getCustomerDescription() { return customerDescription; }
+    public void setCustomerDescription(String customerDescription) { this.customerDescription = customerDescription; }
     public AssignmentType getAssignmentType() { return assignmentType; }
     public void setAssignmentType(AssignmentType assignmentType) { this.assignmentType = assignmentType; }
     public UUID getAssigneeId() { return assigneeId; }

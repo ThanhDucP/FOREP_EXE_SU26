@@ -13,6 +13,7 @@ class EmployeeWorkload(StrictModel):
     employee_id: str = Field(alias="employeeId")
     full_name: str = Field(alias="fullName")
     open_tasks: int = Field(alias="openTasks")
+    completed_tasks: int = Field(default=0, alias="completedTasks")
     overdue_tasks: int = Field(alias="overdueTasks")
     blocked_tasks: int = Field(default=0, alias="blockedTasks")
     estimated_workload: float = Field(alias="estimatedWorkload")
@@ -24,6 +25,13 @@ class EmployeeWorkload(StrictModel):
     years_of_experience: Optional[int] = Field(default=None, alias="yearsOfExperience", ge=0)
     skills: Optional[str] = None
     candidate_score: Optional[int] = Field(default=None, alias="candidateScore")
+    leadership_score: Optional[int] = Field(default=None, alias="leadershipScore")
+    team_member_score: Optional[int] = Field(default=None, alias="teamMemberScore")
+    lead_task_count: int = Field(default=0, alias="leadTaskCount")
+    lead_completed_tasks: int = Field(default=0, alias="leadCompletedTasks")
+    lead_completion_rate: float = Field(default=0, alias="leadCompletionRate")
+    similar_task_count: int = Field(default=0, alias="similarTaskCount")
+    domain_match_score: int = Field(default=0, alias="domainMatchScore")
     score_components: dict[str, Any] = Field(default_factory=dict, alias="scoreComponents")
 
 

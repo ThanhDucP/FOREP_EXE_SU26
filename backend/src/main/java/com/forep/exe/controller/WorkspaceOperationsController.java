@@ -8,6 +8,7 @@ import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
+import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
@@ -42,6 +43,11 @@ public class WorkspaceOperationsController {
     @PutMapping("/tasks/{id}")
     ApiResponse<?> updateTask(@PathVariable UUID id, @RequestBody @Valid UpdateTaskRequest request) {
         return ApiResponse.ok(service.updateTask(id, request));
+    }
+
+    @PatchMapping("/tasks/{id}/customer-info")
+    ApiResponse<?> updateTaskCustomerInfo(@PathVariable UUID id, @RequestBody @Valid UpdateTaskCustomerInfoRequest request) {
+        return ApiResponse.ok(service.updateTaskCustomerInfo(id, request));
     }
 
     @PatchMapping("/tasks/{id}/assign-individual")
