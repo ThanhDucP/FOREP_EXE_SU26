@@ -1,9 +1,11 @@
 package com.forep.exe.controller;
 
 import com.forep.exe.domain.Enums.JobPositionStatus;
+import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.AssignIndividualRequest;
 import com.forep.exe.dto.Requests.AssignTeamRequest;
+import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
@@ -80,6 +82,36 @@ public class WorkspaceOperationsController {
         return ApiResponse.ok(service.createJobPosition(request));
     }
 
+    @GetMapping("/hr/business-positions")
+    ApiResponse<?> businessPositions() {
+        return ApiResponse.ok(service.businessPositions());
+    }
+
+    @PostMapping("/hr/business-positions")
+    ApiResponse<?> createBusinessPosition(@RequestBody @Valid BusinessPositionRequest request) {
+        return ApiResponse.ok(service.createBusinessPosition(request));
+    }
+
+    @GetMapping("/hr/business-positions/{id}")
+    ApiResponse<?> businessPosition(@PathVariable UUID id) {
+        return ApiResponse.ok(service.businessPosition(id));
+    }
+
+    @PutMapping("/hr/business-positions/{id}")
+    ApiResponse<?> updateBusinessPosition(@PathVariable UUID id, @RequestBody @Valid BusinessPositionRequest request) {
+        return ApiResponse.ok(service.updateBusinessPosition(id, request));
+    }
+
+    @PatchMapping("/hr/business-positions/{id}/activate")
+    ApiResponse<?> activateBusinessPosition(@PathVariable UUID id) {
+        return ApiResponse.ok(service.updateBusinessPositionStatus(id, JobPositionStatus.ACTIVE));
+    }
+
+    @PatchMapping("/hr/business-positions/{id}/deactivate")
+    ApiResponse<?> deactivateBusinessPosition(@PathVariable UUID id) {
+        return ApiResponse.ok(service.updateBusinessPositionStatus(id, JobPositionStatus.INACTIVE));
+    }
+
     @PutMapping("/hr/job-positions/{id}")
     ApiResponse<?> updateJobPosition(@PathVariable UUID id, @RequestBody @Valid JobPositionRequest request) {
         return ApiResponse.ok(service.updateJobPosition(id, request));
@@ -103,6 +135,11 @@ public class WorkspaceOperationsController {
     @PostMapping("/ai/recommendations/team-members")
     ApiResponse<?> recommendTeamMembers(@RequestBody @Valid RecommendAssigneeRequest request) {
         return ApiResponse.ok(service.recommendTeamMembers(request));
+    }
+
+    @GetMapping("/ai-history")
+    ApiResponse<?> aiHistory() {
+        return ApiResponse.ok(service.aiHistory());
     }
 
     @GetMapping("/workload/monthly")

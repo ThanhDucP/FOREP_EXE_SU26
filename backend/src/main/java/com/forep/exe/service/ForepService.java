@@ -7,6 +7,7 @@ import com.forep.exe.ai.AiServiceClient.AiEmployeeWorkload;
 import com.forep.exe.ai.AiServiceClient.AiRecommendAssigneeInput;
 import com.forep.exe.domain.Enums.AssignmentType;
 import com.forep.exe.domain.Enums.AttachmentType;
+import com.forep.exe.domain.Enums.AiHistoryStatus;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.AiSuggestionType;
 import com.forep.exe.domain.Enums.EmployeeLevel;
@@ -17,6 +18,7 @@ import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.PaymentStatus;
 import com.forep.exe.domain.Enums.PaymentTransactionStatus;
 import com.forep.exe.domain.Enums.RegistrationStatus;
+import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.domain.Enums.Role;
 import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
@@ -34,6 +36,7 @@ import com.forep.exe.dto.Requests.AssignIndividualRequest;
 import com.forep.exe.dto.Requests.AssignTaskRequest;
 import com.forep.exe.dto.Requests.AssignTeamRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
+import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
@@ -62,6 +65,8 @@ import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.persistence.AiSuggestionEntity;
 import com.forep.exe.persistence.AiSuggestionRepository;
+import com.forep.exe.persistence.AiHistoryEntity;
+import com.forep.exe.persistence.AiHistoryRepository;
 import com.forep.exe.persistence.AuditLogEntity;
 import com.forep.exe.persistence.AuditLogRepository;
 import com.forep.exe.persistence.BusinessFeedbackEntity;
@@ -134,6 +139,7 @@ public class ForepService {
     private final DailyReportRepository reports;
     private final NotificationRepository notifications;
     private final AiSuggestionRepository aiSuggestions;
+    private final AiHistoryRepository aiHistory;
     private final SubscriptionPlanRepository subscriptionPlans;
     private final WorkspaceRegistrationRepository workspaceRegistrations;
     private final PaymentTransactionRepository paymentTransactions;
@@ -157,6 +163,7 @@ public class ForepService {
                         DailyReportRepository reports,
                         NotificationRepository notifications,
                         AiSuggestionRepository aiSuggestions,
+                        AiHistoryRepository aiHistory,
                         SubscriptionPlanRepository subscriptionPlans,
                         WorkspaceRegistrationRepository workspaceRegistrations,
                         PaymentTransactionRepository paymentTransactions,
@@ -179,6 +186,7 @@ public class ForepService {
         this.reports = reports;
         this.notifications = notifications;
         this.aiSuggestions = aiSuggestions;
+        this.aiHistory = aiHistory;
         this.subscriptionPlans = subscriptionPlans;
         this.workspaceRegistrations = workspaceRegistrations;
         this.paymentTransactions = paymentTransactions;
@@ -232,6 +240,7 @@ public class ForepService {
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         user.setInitialPassword(null);
+        user.setMustChangePassword(false);
         user.setUpdatedAt(OffsetDateTime.now());
         user = users.save(user);
         audit(user.getWorkspaceId(), "CHANGE_PASSWORD", "USER", user.getId(), null, Map.of("role", user.getRole().name()));
@@ -352,6 +361,11 @@ public class ForepService {
                 ? tasks.findByWorkspaceIdOrderByCreatedAtDesc(user.workspaceId())
                 : visibleTasksForEmployee(user);
         return scoped.stream().map(this::toTaskView).toList();
+    }
+
+    public List<AiHistoryView> aiHistory() {
+        requireOwnerOrHrOrManager();
+        return aiHistory.findByWorkspaceIdOrderByCalledAtDesc(currentUser().workspaceId()).stream().map(this::toAiHistoryView).toList();
     }
 
     public TaskView createTask(CreateTaskRequest request) {
@@ -542,42 +556,60 @@ public class ForepService {
     }
 
     public JobPositionView createJobPosition(JobPositionRequest request) {
-        requireOwnerOrHr();
-        UUID workspaceId = currentUser().workspaceId();
-        if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCase(workspaceId, request.title())) {
-            throw new IllegalArgumentException("Vị trí công việc đã tồn tại.");
-        }
-        OffsetDateTime now = OffsetDateTime.now();
-        JobPositionEntity item = new JobPositionEntity();
-        item.setWorkspaceId(workspaceId);
-        item.setTitle(request.title());
-        item.setDepartmentName(request.departmentName());
-        item.setDescription(request.description());
-        item.setRequiredSkills(request.requiredSkills());
-        item.setStatus(request.status() == null ? JobPositionStatus.ACTIVE : request.status());
-        item.setCreatedAt(now);
-        item.setUpdatedAt(now);
+        requireHr();
+        JobPositionEntity item = legacyBusinessPosition(null, request.title(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
         return toJobPositionView(jobPositions.save(item));
     }
 
     public JobPositionView updateJobPosition(UUID id, JobPositionRequest request) {
-        requireOwnerOrHr();
+        requireHr();
         JobPositionEntity item = requireJobPosition(id);
-        item.setTitle(request.title());
-        item.setDepartmentName(request.departmentName());
-        item.setDescription(request.description());
-        item.setRequiredSkills(request.requiredSkills());
-        item.setStatus(request.status() == null ? item.getStatus() : request.status());
-        item.setUpdatedAt(OffsetDateTime.now());
+        item = legacyBusinessPosition(item, request.title(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
         return toJobPositionView(jobPositions.save(item));
     }
 
     public JobPositionView updateJobPositionStatus(UUID id, JobPositionStatus status) {
-        requireOwnerOrHr();
+        requireHr();
         JobPositionEntity item = requireJobPosition(id);
         item.setStatus(status);
         item.setUpdatedAt(OffsetDateTime.now());
         return toJobPositionView(jobPositions.save(item));
+    }
+
+    public List<BusinessPositionView> businessPositions() {
+        requireOwnerOrHr();
+        return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream().map(this::toBusinessPositionView).toList();
+    }
+
+    public BusinessPositionView businessPosition(UUID id) {
+        requireOwnerOrHr();
+        return toBusinessPositionView(requireJobPosition(id));
+    }
+
+    public BusinessPositionView createBusinessPosition(BusinessPositionRequest request) {
+        requireHr();
+        JobPositionEntity item = new JobPositionEntity();
+        applyBusinessPositionRequest(item, request);
+        OffsetDateTime now = OffsetDateTime.now();
+        item.setCreatedAt(now);
+        item.setUpdatedAt(now);
+        return toBusinessPositionView(jobPositions.save(item));
+    }
+
+    public BusinessPositionView updateBusinessPosition(UUID id, BusinessPositionRequest request) {
+        requireHr();
+        JobPositionEntity item = requireJobPosition(id);
+        applyBusinessPositionRequest(item, request);
+        item.setUpdatedAt(OffsetDateTime.now());
+        return toBusinessPositionView(jobPositions.save(item));
+    }
+
+    public BusinessPositionView updateBusinessPositionStatus(UUID id, JobPositionStatus status) {
+        requireHr();
+        JobPositionEntity item = requireJobPosition(id);
+        item.setStatus(status);
+        item.setUpdatedAt(OffsetDateTime.now());
+        return toBusinessPositionView(jobPositions.save(item));
     }
 
     public List<AssigneeRecommendationView> recommendTeamLeaders(RecommendAssigneeRequest request) {
@@ -701,6 +733,8 @@ public class ForepService {
                     request.requirements(),
                     request.deadline().toString(),
                     request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
+                    request.departmentId(),
+                    request.requiredJobPositionId(),
                     candidates
             ));
             normalized = normalizeRecommendations(recommendations, candidates);
@@ -947,6 +981,7 @@ public class ForepService {
         workspace.setName(request.workspaceName());
         workspace.setBusinessName(request.businessName());
         workspace.setShortCode(shortCode);
+        workspace.setOrganizationAbbreviation(shortCode);
         workspace.setContactEmail(request.contactEmail());
         workspace.setContactPhone(request.contactPhone());
         workspace.setAddress(request.businessAddress());
@@ -960,8 +995,18 @@ public class ForepService {
         workspace.setExpiresAt(request.expirationDate());
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
-        audit(workspace.getId(), "ADMIN_CREATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace));
-        return toPlatformWorkspaceView(workspace);
+        List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
+        if (workspace.getStatus() == WorkspaceStatus.ACTIVE || workspace.getActivatedAt() != null) {
+            generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, now);
+            workspace.setOwnerAccountProvisionedAt(now);
+            workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
+            if (!generatedOwnerAccounts.isEmpty()) {
+                workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
+            }
+            workspace = workspaces.save(workspace);
+        }
+        audit(workspace.getId(), "ADMIN_CREATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace, generatedOwnerAccounts));
+        return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
     }
 
     public PlatformWorkspaceView adminUpdateWorkspace(UUID workspaceId, AdminUpdateWorkspaceRequest request) {
@@ -1002,13 +1047,23 @@ public class ForepService {
     public PlatformWorkspaceView adminUpdateWorkspaceStatus(UUID workspaceId, WorkspaceStatus status) {
         requireSystemAdmin();
         WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
         workspace.setStatus(status);
         if (status == WorkspaceStatus.ACTIVE && workspace.getActivatedAt() == null) {
             workspace.setActivatedAt(OffsetDateTime.now());
         }
+        if (status == WorkspaceStatus.ACTIVE && workspace.getOwnerAccountProvisionedAt() == null && workspace.getSubscriptionPlanId() != null) {
+            SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
+            generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, OffsetDateTime.now());
+            workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
+            workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
+            if (!generatedOwnerAccounts.isEmpty() && workspace.getOwnerId() == null) {
+                workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
+            }
+        }
         workspace = workspaces.save(workspace);
         audit(workspace.getId(), "ADMIN_UPDATE_WORKSPACE_STATUS", "WORKSPACE", workspace.getId(), null, Map.of("status", status.name()));
-        return toPlatformWorkspaceView(workspace);
+        return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
     }
 
     public UserView adminCreateBusinessOwner(UUID workspaceId, CreateBusinessOwnerRequest request) {
@@ -1026,9 +1081,10 @@ public class ForepService {
         owner.setEmail(request.email());
         owner.setPhone(request.phone());
         owner.setUsername(hasText(request.username()) ? request.username().trim().toLowerCase(Locale.ROOT) : null);
-        owner.setInitialPassword(temporaryPassword);
         owner.setPasswordHash(passwordEncoder.encode(temporaryPassword));
-        owner.setRole(Role.OWNER);
+        owner.setMustChangePassword(true);
+        owner.setInitialAccountGenerated(false);
+        owner.setRole(Role.BUSINESS_OWNER);
         owner.setStatus(request.status() == null ? UserStatus.ACTIVE : request.status());
         owner.setCreatedAt(now);
         owner.setUpdatedAt(now);
@@ -1044,16 +1100,17 @@ public class ForepService {
     public List<UserView> adminBusinessOwners(UUID workspaceId) {
         requireSystemAdmin();
         requireWorkspace(workspaceId);
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.OWNER).stream().map(this::toUserView).toList();
+        return users.findByWorkspaceIdAndRoleInOrderByFullNameAsc(workspaceId, List.of(Role.BUSINESS_OWNER, Role.OWNER)).stream().map(this::toUserView).toList();
     }
 
     public UserView adminResetOwnerPassword(UUID ownerId) {
         requireSystemAdmin();
         UserEntity owner = users.findById(ownerId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy Business Owner."));
         if (!isBusinessOwnerRole(owner.getRole())) throw new IllegalArgumentException("Tài khoản không phải Business Owner.");
-        String temporaryPassword = temporaryPassword(requireWorkspace(owner.getWorkspaceId()));
-        owner.setInitialPassword(temporaryPassword);
+        String temporaryPassword = "123456";
         owner.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        owner.setMustChangePassword(true);
+        owner.setInitialAccountGenerated(true);
         owner.setUpdatedAt(OffsetDateTime.now());
         owner = users.save(owner);
         audit(owner.getWorkspaceId(), "ADMIN_RESET_OWNER_PASSWORD", "USER", owner.getId(), null, Map.of("email", owner.getEmail()));
@@ -1405,8 +1462,8 @@ public class ForepService {
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        activateWorkspaceForRegistration(registration, request == null ? null : request.note());
-        return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId));
+        List<GeneratedOwnerAccountView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note());
+        return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId), generatedOwnerAccounts);
     }
 
     public WorkspaceRegistrationView rejectWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
@@ -1558,16 +1615,21 @@ public class ForepService {
         int skillRatingPenalty = skillRatingPenalty(employee.getSkillRating());
         int experiencePenalty = experiencePenalty(employee.getYearsOfExperience());
         int profilePenalty = seniorityPenalty + skillRatingPenalty + experiencePenalty;
+        int departmentMatchScore = departmentMatchScore(request, employee);
+        int jobPositionMatchScore = jobPositionMatchScore(request, employee);
         int taskProfileMatchScore = taskProfileMatchScore(request, employee);
         boolean taskNeedsProfileFit = request != null && hasText(request.title() + " " + request.requirements());
         boolean employeeHasProfile = hasText(employee.getJobTitle()) || hasText(employee.getSkills());
         int profileMismatchPenalty = taskNeedsProfileFit && employeeHasProfile && taskProfileMatchScore == 0 ? 55 : 0;
         int missingProfilePenalty = taskNeedsProfileFit && !employeeHasProfile ? 35 : 0;
+        int departmentMismatchPenalty = request != null && request.departmentId() != null && departmentMatchScore == 0 ? 30 : 0;
+        int jobPositionMismatchPenalty = request != null && request.requiredJobPositionId() != null && jobPositionMatchScore == 0 ? 45 : 0;
         double openPenalty = workload.openTasks() * 6.0;
         double overduePenalty = workload.overdueTasks() * 18.0;
         double blockedPenalty = workload.blockedTasks() * 12.0;
         double workloadPenalty = workload.estimatedWorkload().doubleValue() / 2.0;
-        int candidateScore = (int) Math.max(0, Math.min(100, Math.round(100 - openPenalty - overduePenalty - blockedPenalty - workloadPenalty - levelPenalty - profilePenalty - profileMismatchPenalty - missingProfilePenalty + taskProfileMatchScore)));
+        int structuralFitBonus = departmentMatchScore + jobPositionMatchScore;
+        int candidateScore = (int) Math.max(0, Math.min(100, Math.round(100 - openPenalty - overduePenalty - blockedPenalty - workloadPenalty - levelPenalty - profilePenalty - profileMismatchPenalty - missingProfilePenalty - departmentMismatchPenalty - jobPositionMismatchPenalty + taskProfileMatchScore + structuralFitBonus)));
         if (profileMismatchPenalty > 0) {
             candidateScore = Math.min(candidateScore, 30);
         } else if (missingProfilePenalty > 0) {
@@ -1579,6 +1641,10 @@ public class ForepService {
         components.put("employeeHasProfile", employeeHasProfile);
         components.put("profileMismatchPenalty", profileMismatchPenalty);
         components.put("missingProfilePenalty", missingProfilePenalty);
+        components.put("departmentMatchScore", departmentMatchScore);
+        components.put("jobPositionMatchScore", jobPositionMatchScore);
+        components.put("departmentMismatchPenalty", departmentMismatchPenalty);
+        components.put("jobPositionMismatchPenalty", jobPositionMismatchPenalty);
         components.put("openTasksPenalty", openPenalty);
         components.put("overdueTasksPenalty", overduePenalty);
         components.put("blockedTasksPenalty", blockedPenalty);
@@ -1601,10 +1667,13 @@ public class ForepService {
         int leadHistoryScore = (int) Math.min(25, ledTasks.size() * 5);
         int completionScore = (int) Math.round(completionRate * 25);
         int domainScore = domainMatchScore(request, employee);
+        int departmentScore = numberComponent(scoreComponents, "departmentMatchScore");
+        int jobPositionScore = numberComponent(scoreComponents, "jobPositionMatchScore");
         int profileMatchScore = numberComponent(scoreComponents, "taskProfileMatchScore");
         int workloadPenalty = numberComponent(scoreComponents, "workloadLevelPenalty") + (int) Math.round(numberComponent(scoreComponents, "estimatedWorkloadPenalty") / 2.0);
         int overduePenalty = (int) Math.min(25, overdueLedTasks * 8 + numberComponent(scoreComponents, "overdueTasksPenalty") / 2);
-        return clampScore(profileScore / 2 + leadHistoryScore + completionScore + domainScore + profileMatchScore - workloadPenalty - overduePenalty);
+        int structuralScore = departmentScore + jobPositionScore;
+        return clampScore(profileScore / 2 + leadHistoryScore + completionScore + domainScore + profileMatchScore + structuralScore - workloadPenalty - overduePenalty);
     }
 
     private int teamMemberScore(UserEntity employee, List<TaskEntity> scopedTasks, RecommendAssigneeRequest request, Map<String, Object> scoreComponents) {
@@ -1613,7 +1682,24 @@ public class ForepService {
         int similarScore = Math.min(15, similarTaskCount(employee, scopedTasks, request) * 3);
         int profileMismatchPenalty = numberComponent(scoreComponents, "profileMismatchPenalty");
         int missingProfilePenalty = numberComponent(scoreComponents, "missingProfilePenalty");
-        return clampScore(base + domainScore + similarScore - profileMismatchPenalty / 2 - missingProfilePenalty / 3);
+        int departmentScore = numberComponent(scoreComponents, "departmentMatchScore");
+        int jobPositionScore = numberComponent(scoreComponents, "jobPositionMatchScore");
+        int structuralScore = departmentScore + jobPositionScore;
+        return clampScore(base + structuralScore + domainScore + similarScore - profileMismatchPenalty / 2 - missingProfilePenalty / 3);
+    }
+
+    private int departmentMatchScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.departmentId() == null) {
+            return 0;
+        }
+        return request.departmentId().equals(employee.getDepartmentId()) ? 20 : 0;
+    }
+
+    private int jobPositionMatchScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.requiredJobPositionId() == null) {
+            return 0;
+        }
+        return request.requiredJobPositionId().equals(employee.getJobPositionId()) ? 30 : 0;
     }
 
     private List<TaskEntity> leadTasks(UserEntity employee, List<TaskEntity> scopedTasks) {
@@ -1729,8 +1815,12 @@ public class ForepService {
     }
 
     private AssigneeRecommendationView teamLeaderRecommendation(AiEmployeeWorkload candidate) {
+        int departmentScore = numberComponent(candidate, "departmentMatchScore");
+        int jobPositionScore = numberComponent(candidate, "jobPositionMatchScore");
         String reason = displayText(candidate.fullName()) + " đạt " + candidate.leadershipScore()
-                + " điểm lead: từng làm leader " + candidate.leadTaskCount()
+            + " điểm lead: khớp phòng ban +" + departmentScore
+            + ", khớp business position +" + jobPositionScore
+            + ", từng làm leader " + candidate.leadTaskCount()
                 + " task, hoàn thành " + candidate.leadCompletedTasks()
                 + " task lead, tỉ lệ hoàn thành lead " + Math.round(candidate.leadCompletionRate() * 100)
                 + "%, domain match +" + candidate.domainMatchScore()
@@ -1754,8 +1844,12 @@ public class ForepService {
     }
 
     private AssigneeRecommendationView teamMemberRecommendation(AiEmployeeWorkload candidate) {
+        int departmentScore = numberComponent(candidate, "departmentMatchScore");
+        int jobPositionScore = numberComponent(candidate, "jobPositionMatchScore");
         String reason = displayText(candidate.fullName()) + " đạt " + candidate.teamMemberScore()
-                + " điểm member: score cá nhân " + candidate.candidateScore()
+            + " điểm member: khớp phòng ban +" + departmentScore
+            + ", khớp business position +" + jobPositionScore
+            + ", score cá nhân " + candidate.candidateScore()
                 + ", domain match +" + candidate.domainMatchScore()
                 + ", similar tasks " + candidate.similarTaskCount()
                 + ", mức tải " + vietnameseWorkloadLevel(candidate.workloadLevel()) + ".";
@@ -1781,6 +1875,8 @@ public class ForepService {
 
     private String fallbackAssigneeReason(AiEmployeeWorkload candidate) {
         Object taskProfileMatchScore = candidate.scoreComponents().getOrDefault("taskProfileMatchScore", 0);
+        Object departmentMatchScore = candidate.scoreComponents().getOrDefault("departmentMatchScore", 0);
+        Object jobPositionMatchScore = candidate.scoreComponents().getOrDefault("jobPositionMatchScore", 0);
         int profileMismatchPenalty = numberComponent(candidate, "profileMismatchPenalty");
         int missingProfilePenalty = numberComponent(candidate, "missingProfilePenalty");
         String profileNote = profileMismatchPenalty > 0
@@ -1793,21 +1889,28 @@ public class ForepService {
                 + " điểm: " + candidate.openTasks() + " task đang mở, "
                 + candidate.overdueTasks() + " task quá hạn, "
                 + candidate.blockedTasks() + " task có vướng mắc, mức tải "
-                + vietnameseWorkloadLevel(candidate.workloadLevel()) + ", độ khớp hồ sơ +" + taskProfileMatchScore + "."
+                + vietnameseWorkloadLevel(candidate.workloadLevel()) + ", khớp phòng ban +" + departmentMatchScore
+                + ", khớp business position +" + jobPositionMatchScore + ", độ khớp hồ sơ +" + taskProfileMatchScore + "."
                 + profileNote;
     }
 
     private String roleFitLabel(AiEmployeeWorkload candidate) {
+        if (numberComponent(candidate, "departmentMatchScore") > 0 || numberComponent(candidate, "jobPositionMatchScore") > 0) {
+            return "STRONG";
+        }
         if (numberComponent(candidate, "profileMismatchPenalty") > 0) {
             return "UNCERTAIN";
         }
         if (numberComponent(candidate, "missingProfilePenalty") > 0) {
             return "UNCERTAIN";
         }
-        return numberComponent(candidate, "taskProfileMatchScore") >= 10 ? "STRONG" : "PARTIAL";
+        return numberComponent(candidate, "taskProfileMatchScore") >= 10 ? "PARTIAL" : "UNCERTAIN";
     }
 
     private String fallbackRoleFitReason(AiEmployeeWorkload candidate) {
+        if (numberComponent(candidate, "departmentMatchScore") > 0 || numberComponent(candidate, "jobPositionMatchScore") > 0) {
+            return "Ứng viên khớp trực tiếp phòng ban hoặc business position được yêu cầu nên hệ thống ưu tiên cao hơn các tín hiệu khác.";
+        }
         if (numberComponent(candidate, "profileMismatchPenalty") > 0) {
             return "Hồ sơ hiện chưa có tín hiệu chuyên môn khớp với nội dung task; cần owner kiểm tra lại trước khi giao.";
         }
@@ -2914,6 +3017,7 @@ public class ForepService {
             suggestion.setCreatedBy(currentUser().userId());
             suggestion.setCreatedAt(OffsetDateTime.now());
             aiSuggestions.save(suggestion);
+            saveAiHistory(type.name(), AiHistoryStatus.SUCCESS);
         } catch (Exception exception) {
             throw new IllegalStateException("Không lưu được AI suggestion.", exception);
         }
@@ -3015,9 +3119,9 @@ public class ForepService {
         return toPaymentTransactionView(payment);
     }
 
-    private void activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote) {
+    private List<GeneratedOwnerAccountView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote) {
         if (registration.getWorkspaceId() != null) {
-            return;
+            return List.of();
         }
         if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED && registration.getRegistrationStatus() != RegistrationStatus.PAYMENT_CONFIRMED) {
             throw new IllegalArgumentException("Workspace can only be activated after confirmed payment.");
@@ -3028,6 +3132,7 @@ public class ForepService {
         workspace.setName(registration.getWorkspaceName());
         workspace.setBusinessName(registration.getBusinessName());
         workspace.setShortCode(registration.getWorkspaceIdentifier());
+        workspace.setOrganizationAbbreviation(registration.getWorkspaceIdentifier());
         workspace.setContactEmail(registration.getContactEmail());
         workspace.setContactPhone(registration.getContactPhone());
         workspace.setAddress(registration.getBusinessAddress());
@@ -3042,11 +3147,13 @@ public class ForepService {
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
 
-        List<UserEntity> owners = createInitialOwners(registration, workspace, plan, now);
+        List<GeneratedOwnerAccountView> owners = provisionOwnerAccounts(workspace, plan, now);
+        workspace.setOwnerAccountProvisionedAt(now);
+        workspace.setOwnerAccountCount(owners.size());
         if (!owners.isEmpty()) {
-            workspace.setOwnerId(owners.getFirst().getId());
-            workspaces.save(workspace);
+            workspace.setOwnerId(owners.getFirst().userId());
         }
+        workspace = workspaces.save(workspace);
         registration.setWorkspaceId(workspace.getId());
         registration.setPaymentStatus(PaymentStatus.CONFIRMED);
         registration.setRegistrationStatus(RegistrationStatus.APPROVED);
@@ -3056,43 +3163,48 @@ public class ForepService {
         registration.setUpdatedAt(now);
         workspaceRegistrations.save(registration);
         audit(workspace.getId(), "ACTIVATE_WORKSPACE_AFTER_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
+        return owners;
     }
 
-    private List<UserEntity> createInitialOwners(WorkspaceRegistrationEntity registration, WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
-        if (users.findFirstByEmailIgnoreCase(registration.getOwnerEmail()).isPresent()) {
-            throw new IllegalArgumentException("Owner email already exists.");
+    public List<GeneratedOwnerAccountView> provisionOwnerAccounts(UUID workspaceId) {
+        requireSystemAdmin();
+        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
+        List<GeneratedOwnerAccountView> generated = provisionOwnerAccounts(workspace, plan, OffsetDateTime.now());
+        workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
+        workspace.setOwnerAccountCount(generated.size());
+        if (!generated.isEmpty() && workspace.getOwnerId() == null) {
+            workspace.setOwnerId(generated.getFirst().userId());
         }
-        List<UserEntity> created = new ArrayList<>();
+        workspaces.save(workspace);
+        return generated;
+    }
+
+    private List<GeneratedOwnerAccountView> provisionOwnerAccounts(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
+        List<GeneratedOwnerAccountView> generated = new ArrayList<>();
+        String abbreviation = workspaceOwnerAbbreviation(workspace);
+        int sequence = 1;
         for (int index = 1; index <= plan.getMaxOwnerAccounts(); index++) {
+            String username = uniqueOwnerUsername(abbreviation, sequence);
+            sequence = Integer.parseInt(username.substring(username.length() - 4)) + 1;
+            String password = "123456";
             UserEntity owner = new UserEntity();
             owner.setWorkspaceId(workspace.getId());
-            owner.setFullName(index == 1 ? registration.getOwnerFullName() : registration.getOwnerFullName() + " " + index);
-            owner.setEmail(index == 1 ? registration.getOwnerEmail() : ownerAliasEmail(registration.getOwnerEmail(), index));
-            owner.setPhone(registration.getOwnerPhone());
-            String temporaryPassword = secureTemporaryPassword();
-            owner.setInitialPassword(temporaryPassword);
-            owner.setPasswordHash(hasText(registration.getOwnerPasswordHash()) && index == 1 ? registration.getOwnerPasswordHash() : passwordEncoder.encode(temporaryPassword));
-            owner.setRole(Role.OWNER);
+            owner.setFullName((hasText(workspace.getBusinessName()) ? workspace.getBusinessName() : workspace.getName()) + " Owner " + index);
+            owner.setEmail(username + "@workspace.local");
+            owner.setPhone(workspace.getContactPhone());
+            owner.setUsername(username);
+            owner.setPasswordHash(passwordEncoder.encode(password));
+            owner.setMustChangePassword(true);
+            owner.setInitialAccountGenerated(true);
+            owner.setRole(Role.BUSINESS_OWNER);
             owner.setStatus(UserStatus.ACTIVE);
             owner.setCreatedAt(now);
             owner.setUpdatedAt(now);
-            created.add(users.save(owner));
+            owner = users.save(owner);
+            generated.add(new GeneratedOwnerAccountView(owner.getId(), owner.getUsername(), password, owner.getFullName()));
         }
-        return created;
-    }
-
-    private String ownerAliasEmail(String email, int index) {
-        int at = email.indexOf('@');
-        if (at <= 0) {
-            return "owner" + index + "-" + UUID.randomUUID() + "@workspace.local";
-        }
-        return email.substring(0, at) + "+owner" + index + email.substring(at);
-    }
-
-    private String secureTemporaryPassword() {
-        byte[] bytes = new byte[12];
-        SECURE_RANDOM.nextBytes(bytes);
-        return "Ow!" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        return generated;
     }
 
     private void validatePlanValues(BigDecimal price, Integer maxOwnerAccounts, Integer maxEmployeeAccounts) {
@@ -3262,6 +3374,8 @@ public class ForepService {
     private AuthenticatedUser currentUser() { return securityContext.currentUser(); }
     private void requireOwner() { if (!isBusinessOwnerRole(currentUser().role())) throw new IllegalArgumentException("Chỉ OWNER được sử dụng chức năng này."); }
     private void requireOwnerOrHr() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ Business Owner hoặc HR được sử dụng chức năng này."); }
+    private void requireHr() { if (currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ HR được sử dụng chức năng này."); }
+    private void requireOwnerOrHrOrManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR && currentUser().role() != Role.MANAGER) throw new IllegalArgumentException("Chỉ Business Owner, HR hoặc Manager được sử dụng chức năng này."); }
     private void requireTaskManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER) throw new IllegalArgumentException("Chỉ Business Owner hoặc Manager được sử dụng chức năng này."); }
     private void requireSystemAdmin() { if (!isPlatformAdminRole(currentUser().role())) throw new IllegalArgumentException("Chỉ System Admin được sử dụng chức năng này."); }
     private boolean isPlatformAdminRole(Role role) { return role == Role.PLATFORM_ADMIN || role == Role.SYSTEM_ADMIN || role == Role.SYSTEM; }
@@ -3336,6 +3450,93 @@ public class ForepService {
         return shortCode;
     }
 
+    private String workspaceOwnerAbbreviation(WorkspaceEntity workspace) {
+        if (hasText(workspace.getOrganizationAbbreviation())) {
+            return normalizeOwnerAbbreviation(workspace.getOrganizationAbbreviation());
+        }
+        if (hasText(workspace.getShortCode())) {
+            return normalizeOwnerAbbreviation(workspace.getShortCode());
+        }
+        return normalizeOwnerAbbreviation(nextAvailableShortCode(workspace.getName()));
+    }
+
+    private String normalizeOwnerAbbreviation(String value) {
+        String normalized = normalizeAccountText(value).replaceAll("[^a-z0-9]", "").toUpperCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            return "XX";
+        }
+        if (normalized.length() == 1) {
+            return (normalized + normalized).substring(0, 2);
+        }
+        return normalized.substring(0, 2);
+    }
+
+    private String uniqueOwnerUsername(String abbreviation, int sequence) {
+        int candidateSequence = Math.max(1, sequence);
+        while (candidateSequence < 10000) {
+            String username = String.format("admin%s%04d", abbreviation, candidateSequence).toLowerCase(Locale.ROOT);
+            if (!users.existsByUsernameIgnoreCase(username)) {
+                return username;
+            }
+            candidateSequence++;
+        }
+        throw new IllegalArgumentException("Không thể tạo username Business Owner duy nhất.");
+    }
+
+    private JobPositionEntity legacyBusinessPosition(JobPositionEntity item, String title, String departmentName, String description, String requiredSkills, JobPositionStatus status) {
+        OffsetDateTime now = OffsetDateTime.now();
+        if (item == null) {
+            item = new JobPositionEntity();
+            item.setWorkspaceId(currentUser().workspaceId());
+            item.setPermissionGroup(PermissionGroup.EMPLOYEE);
+            item.setDepartmentId(UUID.randomUUID());
+            item.setCreatedAt(now);
+        }
+        item.setTitle(title);
+        item.setDepartmentName(departmentName);
+        item.setDescription(description);
+        item.setRequiredSkills(requiredSkills);
+        if (status != null) {
+            item.setStatus(status);
+        } else if (item.getStatus() == null) {
+            item.setStatus(JobPositionStatus.ACTIVE);
+        }
+        item.setUpdatedAt(now);
+        return item;
+    }
+
+    private void applyBusinessPositionRequest(JobPositionEntity entity, BusinessPositionRequest request) {
+        UUID workspaceId = currentUser().workspaceId();
+        String normalizedName = request.name().trim();
+        String normalizedCode = hasText(request.code()) ? request.code().trim().toUpperCase(Locale.ROOT) : null;
+        if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(workspaceId, normalizedName, request.departmentId()) && !normalizedName.equalsIgnoreCase(entity.getTitle())) {
+            throw new IllegalArgumentException("Tên vị trí đã tồn tại trong workspace và phòng ban.");
+        }
+        if (hasText(normalizedCode) && jobPositions.existsByWorkspaceIdAndCodeIgnoreCase(workspaceId, normalizedCode) && !normalizedCode.equalsIgnoreCase(entity.getCode())) {
+            throw new IllegalArgumentException("Mã vị trí đã tồn tại trong workspace.");
+        }
+        entity.setWorkspaceId(workspaceId);
+        entity.setTitle(normalizedName);
+        entity.setCode(normalizedCode);
+        entity.setPermissionGroup(request.permissionGroup());
+        entity.setDepartmentId(request.departmentId());
+        entity.setDescription(request.description());
+        entity.setStatus(request.status() == null ? JobPositionStatus.ACTIVE : request.status());
+    }
+
+    private void saveAiHistory(String functionName, AiHistoryStatus status) {
+        AiHistoryEntity history = new AiHistoryEntity();
+        history.setWorkspaceId(currentUser().workspaceId());
+        history.setCallerId(currentUser().userId());
+        history.setCallerName(currentUserEntity().getFullName());
+        history.setCallerRole(currentUser().role().name());
+        history.setFunctionName(functionName);
+        history.setStatus(status);
+        history.setCalledAt(OffsetDateTime.now());
+        history.setCreatedAt(OffsetDateTime.now());
+        aiHistory.save(history);
+    }
+
     private String nextEmployeeCode(WorkspaceEntity workspace) {
         String shortCode = workspace.getShortCode();
         if (shortCode == null || shortCode.isBlank()) {
@@ -3378,18 +3579,22 @@ public class ForepService {
     }
 
     private WorkspaceView toWorkspaceView(WorkspaceEntity item) { return new WorkspaceView(item.getId(), item.getName(), item.getShortCode(), item.getLogo(), item.getAddress(), item.getOwnerId(), item.getCreatedAt()); }
-    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.isMustChangePassword(), item.isInitialAccountGenerated(), item.getCreatedAt(), item.getUpdatedAt()); }
     private TaskView toTaskView(TaskEntity item) { return new TaskView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getRequirements(), item.getDescription(), item.getCustomerPhone(), item.getCustomerEmail(), item.getCustomerDescription(), item.getAssignmentType(), item.getAssigneeId(), item.getCreatorId(), item.getPriority(), item.getDeadline(), item.getStartDate(), item.getEstimatedHours(), item.getDifficulty(), item.getRequiredSkills(), item.getRequiredJobPositionId(), item.getTaskDomain(), item.getProjectId(), item.getDepartmentId(), taskAssignees.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAssigneeView).toList(), taskAttachments.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAttachmentView).toList(), item.getProgressPercent(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt(), item.getCompletedAt()); }
     private TaskAssigneeView toTaskAssigneeView(TaskAssigneeEntity item) { return new TaskAssigneeView(item.getId(), item.getTaskId(), item.getEmployeeId(), item.getParticipantRole(), item.isLeader(), item.getAllocatedHours(), item.getCreatedAt()); }
     private TaskAttachmentView toTaskAttachmentView(TaskAttachmentEntity item) { return new TaskAttachmentView(item.getId(), item.getTaskId(), item.getFileName(), item.getFileUrl(), item.getContentType(), item.getFileSize(), item.getAttachmentType(), item.getUploadedBy(), item.getCreatedAt()); }
     private JobPositionView toJobPositionView(JobPositionEntity item) { return new JobPositionView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getDepartmentName(), item.getDescription(), item.getRequiredSkills(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private BusinessPositionView toBusinessPositionView(JobPositionEntity item) { return new BusinessPositionView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getCode(), item.getPermissionGroup(), item.getDepartmentId(), item.getDepartmentName(), item.getDescription(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private AiHistoryView toAiHistoryView(AiHistoryEntity item) { return new AiHistoryView(item.getId(), item.getCallerName(), item.getCallerRole(), item.getFunctionName(), item.getStatus(), item.getCalledAt()); }
     private TaskUpdateView toTaskUpdateView(TaskUpdateEntity item) { return new TaskUpdateView(item.getId(), item.getTaskId(), item.getUserId(), item.getProgressPercent(), item.getContent(), item.getAttachment(), item.getUpdateType(), item.getCreatedAt()); }
     private DailyReportView toDailyReportView(DailyReportEntity item) { return new DailyReportView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getReportDate(), item.getTodayCompleted(), item.getCurrentWork(), item.getBlockers(), item.getTomorrowPlan(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), item.getCreatedAt()); }
-    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerAccountCount(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), generatedOwnerAccounts, item.getCreatedAt()); }
+    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
+    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
     private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
@@ -3397,11 +3602,14 @@ public class ForepService {
     private AuditLogView toAuditLogView(AuditLogEntity item) { return new AuditLogView(item.getId(), item.getWorkspaceId(), item.getActorId(), item.getAction(), item.getEntityType(), item.getEntityId(), item.getOldValue(), item.getNewValue(), item.getCreatedAt()); }
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
-    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, String customerPhone, String customerEmail, String customerDescription, AssignmentType assignmentType, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, OffsetDateTime startDate, BigDecimal estimatedHours, Integer difficulty, String requiredSkills, UUID requiredJobPositionId, String taskDomain, UUID projectId, UUID departmentId, List<TaskAssigneeView> participants, List<TaskAttachmentView> attachments, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskAssigneeView(UUID id, UUID taskId, UUID employeeId, TaskParticipantRole participantRole, boolean leader, BigDecimal allocatedHours, OffsetDateTime createdAt) {}
     public record TaskAttachmentView(UUID id, UUID taskId, String fileName, String fileUrl, String contentType, Long fileSize, AttachmentType attachmentType, UUID uploadedBy, OffsetDateTime createdAt) {}
     public record JobPositionView(UUID id, UUID workspaceId, String title, String departmentName, String description, String requiredSkills, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record BusinessPositionView(UUID id, UUID workspaceId, String name, String code, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record GeneratedOwnerAccountView(UUID userId, String username, String initialPassword, String fullName) {}
+    public record AiHistoryView(UUID id, String callerName, String callerRole, String calledFunction, AiHistoryStatus status, OffsetDateTime calledAt) {}
     public record TaskUpdateView(UUID id, UUID taskId, UUID userId, int progressPercent, String content, String attachment, UpdateType updateType, OffsetDateTime createdAt) {}
     public record DailyReportView(UUID id, UUID workspaceId, UUID userId, LocalDate reportDate, String todayCompleted, String currentWork, String blockers, String tomorrowPlan, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record NotificationView(UUID id, UUID workspaceId, UUID userId, String type, String title, String message, String relatedEntityType, UUID relatedEntityId, boolean isRead, OffsetDateTime createdAt) {}
@@ -3414,8 +3622,8 @@ public class ForepService {
     public record LoginView(String token, UserView user) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, OffsetDateTime createdAt) {}
-    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
+    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

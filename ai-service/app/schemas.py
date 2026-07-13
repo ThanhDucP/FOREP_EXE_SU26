@@ -40,6 +40,8 @@ class RecommendAssigneeRequest(StrictModel):
     requirements: str
     deadline: str
     estimated_hours: float = Field(default=0, alias="estimatedHours")
+    department_id: Optional[str] = Field(default=None, alias="departmentId")
+    required_job_position_id: Optional[str] = Field(default=None, alias="requiredJobPositionId")
     employees: list[EmployeeWorkload]
 
 

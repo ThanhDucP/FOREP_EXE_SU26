@@ -5,6 +5,7 @@ import com.forep.exe.domain.Enums.AttachmentType;
 import com.forep.exe.domain.Enums.EmployeeLevel;
 import com.forep.exe.domain.Enums.EmploymentType;
 import com.forep.exe.domain.Enums.JobPositionStatus;
+import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.domain.Enums.Role;
 import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.SeniorityLevel;
@@ -195,6 +196,16 @@ public final class Requests {
     ) {
     }
 
+    public record BusinessPositionRequest(
+            @NotBlank String name,
+            String code,
+            @NotNull PermissionGroup permissionGroup,
+            @NotNull UUID departmentId,
+            String description,
+            JobPositionStatus status
+    ) {
+    }
+
     public record UpdateTaskStatusRequest(@NotNull TaskStatus status) {
     }
 
@@ -219,7 +230,11 @@ public final class Requests {
             @NotBlank String title,
             @NotBlank String requirements,
             @NotNull OffsetDateTime deadline,
-            BigDecimal estimatedHours
+            BigDecimal estimatedHours,
+            String taskDomain,
+            UUID departmentId,
+            UUID requiredJobPositionId,
+            String requiredSkills
     ) {
     }
 

@@ -9,6 +9,10 @@ public final class Enums {
         SYSTEM_ADMIN, OWNER
     }
 
+    public enum PermissionGroup {
+        EMPLOYEE, MANAGER, EXECUTIVE
+    }
+
     public enum UserStatus {
         ACTIVE, INACTIVE, INVITED
     }
@@ -76,6 +80,10 @@ public final class Enums {
 
     public enum AiSuggestionStatus {
         GENERATED, ACCEPTED, REJECTED
+    }
+
+    public enum AiHistoryStatus {
+        SUCCESS, FAILED, PROCESSING, CANCELLED
     }
 
     public enum WorkspaceStatus {

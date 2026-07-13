@@ -8,4 +8,6 @@ import java.util.UUID;
 public interface JobPositionRepository extends JpaRepository<JobPositionEntity, UUID> {
     List<JobPositionEntity> findByWorkspaceIdOrderByTitleAsc(UUID workspaceId);
     boolean existsByWorkspaceIdAndTitleIgnoreCase(UUID workspaceId, String title);
+    boolean existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(UUID workspaceId, String title, UUID departmentId);
+    boolean existsByWorkspaceIdAndCodeIgnoreCase(UUID workspaceId, String code);
 }

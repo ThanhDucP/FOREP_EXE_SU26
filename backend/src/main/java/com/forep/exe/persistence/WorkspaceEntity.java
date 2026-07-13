@@ -28,12 +28,16 @@ public class WorkspaceEntity extends BaseEntity {
     private String businessName;
     private String contactEmail;
     private String contactPhone;
+    private String organizationAbbreviation;
     @Column(nullable = false)
     private int maxUsers = 50;
     @Column(nullable = false)
     private int maxOwnerAccounts = 1;
     @Column(nullable = false)
     private int maxEmployeeAccounts = 49;
+    private OffsetDateTime ownerAccountProvisionedAt;
+    @Column(nullable = false)
+    private int ownerAccountCount = 0;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private WorkspaceStatus status = WorkspaceStatus.ACTIVE;
@@ -110,6 +114,10 @@ public class WorkspaceEntity extends BaseEntity {
 
     public void setContactPhone(String contactPhone) { this.contactPhone = contactPhone; }
 
+    public String getOrganizationAbbreviation() { return organizationAbbreviation; }
+
+    public void setOrganizationAbbreviation(String organizationAbbreviation) { this.organizationAbbreviation = organizationAbbreviation; }
+
     public int getMaxUsers() { return maxUsers; }
 
     public void setMaxUsers(int maxUsers) { this.maxUsers = maxUsers; }
@@ -121,6 +129,14 @@ public class WorkspaceEntity extends BaseEntity {
     public int getMaxEmployeeAccounts() { return maxEmployeeAccounts; }
 
     public void setMaxEmployeeAccounts(int maxEmployeeAccounts) { this.maxEmployeeAccounts = maxEmployeeAccounts; }
+
+    public OffsetDateTime getOwnerAccountProvisionedAt() { return ownerAccountProvisionedAt; }
+
+    public void setOwnerAccountProvisionedAt(OffsetDateTime ownerAccountProvisionedAt) { this.ownerAccountProvisionedAt = ownerAccountProvisionedAt; }
+
+    public int getOwnerAccountCount() { return ownerAccountCount; }
+
+    public void setOwnerAccountCount(int ownerAccountCount) { this.ownerAccountCount = ownerAccountCount; }
 
     public WorkspaceStatus getStatus() { return status; }
 

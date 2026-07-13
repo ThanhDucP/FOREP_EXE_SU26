@@ -289,6 +289,8 @@ public class AiServiceClient {
             String requirements,
             String deadline,
             double estimatedHours,
+            UUID departmentId,
+            UUID requiredJobPositionId,
             List<AiEmployeeWorkload> employees
     ) {
     }

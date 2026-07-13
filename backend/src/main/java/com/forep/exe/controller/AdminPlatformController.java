@@ -106,6 +106,11 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.adminUpdateWorkspaceStatus(id, WorkspaceStatus.ACTIVE));
     }
 
+    @PostMapping("/workspaces/{id}/provision-owner-accounts")
+    ApiResponse<?> provisionOwnerAccounts(@PathVariable UUID id) {
+        return ApiResponse.ok(service.provisionOwnerAccounts(id));
+    }
+
     @GetMapping("/business-feedback")
     ApiResponse<?> businessFeedback() {
         return ApiResponse.ok(service.adminBusinessFeedback());

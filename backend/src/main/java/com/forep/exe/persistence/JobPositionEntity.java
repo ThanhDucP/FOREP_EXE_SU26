@@ -1,6 +1,7 @@
 package com.forep.exe.persistence;
 
 import com.forep.exe.domain.Enums.JobPositionStatus;
+import com.forep.exe.domain.Enums.PermissionGroup;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -15,8 +16,14 @@ import java.util.UUID;
 public class JobPositionEntity extends BaseEntity {
     @Column(nullable = false)
     private UUID workspaceId;
+    @Column(name = "title", nullable = false)
+    private String name;
+    private String code;
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String title;
+    private PermissionGroup permissionGroup;
+    @Column(nullable = false)
+    private UUID departmentId;
     private String departmentName;
     @Column(columnDefinition = "text")
     private String description;
@@ -32,8 +39,16 @@ public class JobPositionEntity extends BaseEntity {
 
     public UUID getWorkspaceId() { return workspaceId; }
     public void setWorkspaceId(UUID workspaceId) { this.workspaceId = workspaceId; }
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getTitle() { return name; }
+    public void setTitle(String title) { this.name = title; }
+    public String getCode() { return code; }
+    public void setCode(String code) { this.code = code; }
+    public PermissionGroup getPermissionGroup() { return permissionGroup; }
+    public void setPermissionGroup(PermissionGroup permissionGroup) { this.permissionGroup = permissionGroup; }
+    public UUID getDepartmentId() { return departmentId; }
+    public void setDepartmentId(UUID departmentId) { this.departmentId = departmentId; }
     public String getDepartmentName() { return departmentName; }
     public void setDepartmentName(String departmentName) { this.departmentName = departmentName; }
     public String getDescription() { return description; }

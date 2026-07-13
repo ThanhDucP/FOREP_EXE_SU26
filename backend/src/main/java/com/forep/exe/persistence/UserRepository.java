@@ -14,5 +14,6 @@ public interface UserRepository extends JpaRepository<UserEntity, UUID> {
     boolean existsByWorkspaceIdAndEmailIgnoreCase(UUID workspaceId, String email);
     boolean existsByUsernameIgnoreCase(String username);
     List<UserEntity> findByWorkspaceIdAndRoleOrderByFullNameAsc(UUID workspaceId, Role role);
+    List<UserEntity> findByWorkspaceIdAndRoleInOrderByFullNameAsc(UUID workspaceId, List<Role> roles);
     List<UserEntity> findByWorkspaceId(UUID workspaceId);
 }

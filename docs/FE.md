@@ -2,11 +2,20 @@
 
 ## Roles
 
-- `PLATFORM_ADMIN`: manages plans, workspace registrations, payment review, platform dashboards.
-- `BUSINESS_OWNER`: manages workspace settings, employees, tasks, AI insights, reports, dashboards.
-- `HR`: manages employee profiles, job positions, employee import, documents, and profile completeness.
-- `MANAGER`: creates and manages tasks, assigns individual or team work, monitors workload.
+- `PLATFORM_ADMIN`: manages plans, workspace registrations, payment review, workspace activation, and owner account provisioning.
+- `BUSINESS_OWNER`: manages workspace settings, employees, tasks, AI insights, reports, and dashboard views.
+- `HR`: manages employee profiles, business positions, employee import, documents, and profile completeness.
+- `MANAGER`: creates and manages tasks, assigns individual or team work, monitors workload, and consumes recommendation views.
 - `EMPLOYEE`: views assigned individual tasks and team tasks where they are leader/member, updates progress, submits reports.
+
+## AI History
+
+AI history must be shown as a compact workspace-scoped list.
+
+- Show function name, caller name, caller role, status, and call time.
+- Sort newest first.
+- Do not expose system-wide history inside workspace screens.
+- Keep the action focused on the last executed AI function, not the raw prompt text.
 
 ## Workspace Task Creation
 
@@ -27,7 +36,7 @@ Expected task form fields:
 
 - Title, requirements, description.
 - Priority, start date, deadline, estimated working hours, difficulty.
-- Required skills, required job position, task domain, project, department.
+- Required skills, required business position, task domain, project, department.
 - Attachments with file name, URL, content type, size, and attachment type.
 
 Primary APIs:
@@ -56,25 +65,37 @@ Recommendation cards should show:
 - Role fit and role fit reason.
 - Risk notes.
 - Key matching skills and current estimated workload when available.
+- Department and business-position match when the API returns them.
+- For team leader and team member views, surface why department and business position were ranked before workload.
 
 Do not use mock employee lists. Use workspace employees and real task/workload data returned by the API.
+
+Recommendation logic should follow this order:
+
+- Department match.
+- Business-position match.
+- Role and skill match.
+- Similar task or leadership history.
+- Workload and overdue risk.
 
 ## HR Module
 
 HR navigation should include:
 
 - Employee list and employee profile.
-- Job position management.
+- Business position management.
 - Employee import from Excel.
 - Employee documents.
 - Profile completeness and missing profile data.
 
-Job position APIs:
+Business position APIs:
 
 - `GET /api/workspace/hr/job-positions`
 - `POST /api/workspace/hr/job-positions`
 - `PUT /api/workspace/hr/job-positions/{id}`
 - `PATCH /api/workspace/hr/job-positions/{id}/status`
+
+HR screens should treat `code`, `permissionGroup`, and `department` as first-class fields when creating or editing a business position.
 
 Employee profile fields:
 
@@ -91,11 +112,12 @@ Monthly workload API:
 
 - `GET /api/workspace/workload/monthly?year=2026&month=7`
 
-Frontend must display four levels:
+Frontend must display five levels:
 
-- `IDLE`: Rảnh rỗi.
-- `LIGHT`: Thong thả.
-- `FULL`: Đủ việc.
+- `NO_WORK`: Rảnh rỗi.
+- `LOW`: Thong thả.
+- `NORMAL`: Đủ việc.
+- `HIGH`: Cao tải.
 - `OVERLOADED`: Quá tải.
 
 Calculation expectations:
@@ -115,6 +137,8 @@ Business Owner dashboard should prioritize:
 - Overloaded employees and idle employees.
 - Recent tasks and AI recommendations based on real workspace data.
 
+Business Owner views should also expose the generated owner account count and when owner provisioning completed for each workspace.
+
 Platform Admin dashboard should prioritize:
 
 - Workspace registrations.
@@ -122,3 +146,4 @@ Platform Admin dashboard should prioritize:
 - Active/suspended/expired workspaces.
 - Subscription plan usage.
 - Operational feedback and review queue.
+- Workspace owner provisioning status and generated initial account credentials when applicable.

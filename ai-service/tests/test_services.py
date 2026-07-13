@@ -53,6 +53,24 @@ class AiServiceTests(unittest.TestCase):
 
         self.assertEqual(services.recommend_assignee(payload), [])
 
+    def test_recommend_assignee_prompt_prioritizes_department_and_job_position(self):
+        payload = RecommendAssigneeRequest(
+            title="Task",
+            requirements="Lam viec",
+            deadline="2026-07-01T10:00:00Z",
+            estimatedHours=2,
+            departmentId="11111111-1111-1111-1111-111111111111",
+            requiredJobPositionId="22222222-2222-2222-2222-222222222222",
+            employees=[employee("e1", "An", "LOW")],
+        )
+
+        with patch("app.services._ask_llm_json", return_value={"recommendations": []}) as mocked:
+            services.recommend_assignee(payload)
+
+        prompt = mocked.call_args.args[0]
+        self.assertIn("departmentId and requiredJobPositionId", prompt)
+        self.assertIn("After structural fit", prompt)
+
     def test_recommend_assignee_rejects_hallucinated_employee(self):
         payload = RecommendAssigneeRequest(
             title="Task",

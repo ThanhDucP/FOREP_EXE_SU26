@@ -33,6 +33,10 @@ public class UserEntity extends BaseEntity {
     private String initialPassword;
     @Column(nullable = false)
     private String passwordHash;
+    @Column(nullable = false)
+    private boolean mustChangePassword;
+    @Column(nullable = false)
+    private boolean initialAccountGenerated;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role;
@@ -135,6 +139,14 @@ public class UserEntity extends BaseEntity {
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
     }
+
+    public boolean isMustChangePassword() { return mustChangePassword; }
+
+    public void setMustChangePassword(boolean mustChangePassword) { this.mustChangePassword = mustChangePassword; }
+
+    public boolean isInitialAccountGenerated() { return initialAccountGenerated; }
+
+    public void setInitialAccountGenerated(boolean initialAccountGenerated) { this.initialAccountGenerated = initialAccountGenerated; }
 
     public Role getRole() {
         return role;
