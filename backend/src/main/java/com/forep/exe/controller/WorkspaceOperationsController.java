@@ -1,5 +1,7 @@
 package com.forep.exe.controller;
 
+import com.forep.exe.ai.AiProviderException;
+import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.AiHistoryStatus;
 import com.forep.exe.domain.Enums.DepartmentStatus;
@@ -10,14 +12,22 @@ import com.forep.exe.dto.Requests.AssignTeamRequest;
 import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DepartmentRequest;
+import com.forep.exe.dto.Requests.EmployeeReportAiRequest;
+import com.forep.exe.dto.Requests.EstimateHoursRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
+import com.forep.exe.dto.Requests.RecommendationExplanationRequest;
+import com.forep.exe.dto.Requests.RecommendationResultExplanationRequest;
+import com.forep.exe.dto.Requests.ReturnTaskRequest;
+import com.forep.exe.dto.Requests.SubmitTaskCompletionRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
+import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -65,6 +75,26 @@ public class WorkspaceOperationsController {
     @PatchMapping("/tasks/{id}/assign-team")
     ApiResponse<?> assignTeam(@PathVariable UUID id, @RequestBody @Valid AssignTeamRequest request) {
         return ApiResponse.ok(service.assignTeam(id, request));
+    }
+
+    @PatchMapping("/tasks/{id}/accept")
+    ApiResponse<?> acceptTask(@PathVariable UUID id) {
+        return ApiResponse.ok(service.acceptTask(id));
+    }
+
+    @PatchMapping("/tasks/{id}/submit-completion")
+    ApiResponse<?> submitTaskCompletion(@PathVariable UUID id, @RequestBody @Valid SubmitTaskCompletionRequest request) {
+        return ApiResponse.ok(service.submitTaskCompletion(id, request));
+    }
+
+    @PatchMapping("/tasks/{id}/approve-completion")
+    ApiResponse<?> approveTaskCompletion(@PathVariable UUID id) {
+        return ApiResponse.ok(service.approveTaskCompletion(id));
+    }
+
+    @PatchMapping("/tasks/{id}/return")
+    ApiResponse<?> returnTask(@PathVariable UUID id, @RequestBody @Valid ReturnTaskRequest request) {
+        return ApiResponse.ok(service.returnTask(id, request));
     }
 
     @GetMapping("/tasks/{id}/attachments")
@@ -180,6 +210,36 @@ public class WorkspaceOperationsController {
         return ApiResponse.ok(service.analyzeTaskDomain(request));
     }
 
+    @PostMapping("/ai/tasks/estimate-hours")
+    ApiResponse<?> estimateTaskHours(@RequestBody @Valid EstimateHoursRequest request) {
+        return ApiResponse.ok(service.estimateTaskHours(request));
+    }
+
+    @PostMapping("/ai/recommendations/explain")
+    ApiResponse<?> explainRecommendation(@RequestBody @Valid RecommendationExplanationRequest request) {
+        return ApiResponse.ok(service.explainRecommendation(request));
+    }
+
+    @PostMapping("/ai/recommendations/result/explain")
+    ApiResponse<?> explainRecommendationResult(@RequestBody @Valid RecommendationResultExplanationRequest request) {
+        return ApiResponse.ok(service.explainRecommendationResult(request));
+    }
+
+    @PostMapping("/ai/workload/risk")
+    ApiResponse<?> explainWorkloadRisk(@RequestBody @Valid WorkloadRiskExplanationRequest request) {
+        return ApiResponse.ok(service.explainWorkloadRisk(request));
+    }
+
+    @PostMapping("/ai/employee-report")
+    ApiResponse<?> generateEmployeeReport(@RequestBody @Valid EmployeeReportAiRequest request) {
+        return ApiResponse.ok(service.generateEmployeeReport(request));
+    }
+
+    @GetMapping("/ai/business-owner/operational-summary")
+    ApiResponse<?> businessOwnerOperationalSummary() {
+        return ApiResponse.ok(service.businessOwnerOperationalSummary());
+    }
+
     @GetMapping("/ai-history")
     ApiResponse<?> aiHistory(@RequestParam(required = false) String function,
                              @RequestParam(required = false) AiHistoryStatus status,
@@ -204,5 +264,17 @@ public class WorkspaceOperationsController {
     @ExceptionHandler(IllegalArgumentException.class)
     ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(AiRateLimitException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    ApiResponse<?> handleAiRateLimitError(AiRateLimitException exception) {
+        return ApiResponse.error("AI_RATE_LIMITED", "AI đang xử lý quá nhiều yêu cầu. Vui lòng thử lại sau " + exception.retryAfterSeconds() + " giây.", null);
+    }
+
+    @ExceptionHandler(AiProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleAiProviderError(AiProviderException exception) {
+        return ApiResponse.error("AI_PROVIDER_ERROR", "Không thể tạo phân tích AI ở thời điểm này. Vui lòng thử lại sau.", null);
     }
 }

@@ -85,9 +85,26 @@ Production rules:
 - PATCH `/tasks/{id}/assign`
 - PATCH `/tasks/{id}/status`
 - PATCH `/tasks/{id}/progress`
+- PATCH `/tasks/{id}/accept`
+- PATCH `/tasks/{id}/submit-completion`
+- PATCH `/tasks/{id}/approve-completion`
+- PATCH `/tasks/{id}/return`
 - GET `/tasks/{id}/updates`
 - POST `/tasks/{id}/updates`
 - PATCH `/tasks/{id}/cancel`
+
+Task workflow:
+
+- `ASSIGNED`: assigned but not accepted.
+- `ACCEPTED`: employee/participant accepted.
+- `IN_PROGRESS`: work in progress.
+- `BLOCKED`: employee reported blocker.
+- `SUBMITTED`: employee submitted completion, waiting for manager confirmation.
+- `RETURNED`: manager returned task for revision.
+- `COMPLETED`: manager/executive/business owner approved completion.
+- `CANCELLED`: business owner cancelled.
+
+Employees cannot directly finalize `COMPLETED`. Use `submit-completion`, then task manager uses `approve-completion` or `return`.
 
 ## Daily Reports
 
@@ -115,6 +132,12 @@ Backend-only integration. Frontend calls these backend endpoints; backend calls 
 - GET `/ai/daily-reports/missing`
 - POST `/ai/tasks/extract`
 - POST `/ai/tasks/analyze`
+- POST `/ai/tasks/estimate-hours`
+- POST `/ai/recommendations/explain`
+- POST `/ai/recommendations/result/explain`
+- POST `/ai/workload/risk`
+- POST `/ai/employee-report`
+- GET `/ai/business-owner/operational-summary`
 - POST `/ai/tasks/{id}/split`
 - POST `/ai/tasks/{id}/adjust`
 - GET `/ai/action-suggestions`
@@ -123,6 +146,7 @@ Backend-only integration. Frontend calls these backend endpoints; backend calls 
 - GET `/ai/business-summary/daily`
 - GET `/ai/business-summary/weekly`
 - GET `/ai/business-summary/monthly`
+- GET `/api/admin/ai/platform-summary`
 
 Current behavior:
 
@@ -130,6 +154,7 @@ Current behavior:
 - Weekly/monthly business summary call LLM through `/internal/ai/business-summary`; they are not internal rule summaries.
 - Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, co `candidateScore` va `scoreComponents`; AI tu nhan dien `requiredRole`, `roleFit`, `roleFitReason` tu title/requirements va profile ung vien, sau do backend validate lai employeeId/fullName/workload/score theo candidate input.
 - Task/domain analysis runs before recommendation when FE/backend lacks `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`. Backend sends only real active departments, active business positions, and workspace skills to AI, then maps AI text output back to real workspace IDs before scoring.
+- Estimate-hours, recommendation explanation, recommendation-result explanation, workload-risk explanation, employee-report draft, owner operational summary, and platform system summary are exposed through backend only. Backend enforces permission, AI quota, AI history, and suggestion persistence before calling AI Service.
 - Backend enforce `aiUsageLimit` theo goi subscription hien tai bang so luong record `ai_suggestions` trong ky kich hoat workspace. Khi het quota, backend chan truoc khi goi AI.
 - Backend protects AI providers with in-flight request dedupe, a global concurrency limiter, and a circuit breaker. Tunable env vars: `AI_SERVICE_MAX_CONCURRENT_REQUESTS`, `AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS`, `AI_SERVICE_DEDUPE_WAIT_MILLIS`, `AI_SERVICE_RETRY_AFTER_SECONDS`, `AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS`.
 - `POST /ai/recommend-assignee` returns deterministic top-3 fallback from backend `candidateScore` if AI providers timeout/fail. Response shape stays the same; fallback is marked in each item's `reason`/`risk`.

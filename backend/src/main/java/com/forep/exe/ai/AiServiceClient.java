@@ -121,6 +121,42 @@ public class AiServiceClient {
         return post("/internal/ai/tasks/analyze", payload, Map.class);
     }
 
+    public Map<String, Object> estimateHours(Map<String, Object> payload) {
+        return post("/internal/ai/tasks/estimate-hours", payload, Map.class);
+    }
+
+    public Map<String, Object> explainIndividualRecommendation(Map<String, Object> payload) {
+        return post("/internal/ai/recommendations/individual/explain", payload, Map.class);
+    }
+
+    public Map<String, Object> explainTeamLeaderRecommendation(Map<String, Object> payload) {
+        return post("/internal/ai/recommendations/team-leader/explain", payload, Map.class);
+    }
+
+    public Map<String, Object> explainTeamMemberRecommendation(Map<String, Object> payload) {
+        return post("/internal/ai/recommendations/team-member/explain", payload, Map.class);
+    }
+
+    public Map<String, Object> explainRecommendationResult(Map<String, Object> payload) {
+        return post("/internal/ai/recommendations/result/explain", payload, Map.class);
+    }
+
+    public Map<String, Object> workloadRisk(Map<String, Object> payload) {
+        return post("/internal/ai/workload-risk", payload, Map.class);
+    }
+
+    public Map<String, Object> employeeReport(Map<String, Object> payload) {
+        return post("/internal/ai/employee-report", payload, Map.class);
+    }
+
+    public Map<String, Object> businessOwnerOperationalSummary(Map<String, Object> payload) {
+        return post("/internal/ai/business-owner/summary", payload, Map.class);
+    }
+
+    public Map<String, Object> platformAdminSystemSummary(Map<String, Object> payload) {
+        return post("/internal/ai/platform-admin/summary", payload, Map.class);
+    }
+
     public Map<String, Object> splitTask(Map<String, Object> payload) {
         return post("/internal/ai/tasks/split", payload, Map.class);
     }

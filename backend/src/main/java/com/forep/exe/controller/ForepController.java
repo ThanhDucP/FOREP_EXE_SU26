@@ -17,15 +17,21 @@ import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
 import com.forep.exe.dto.Requests.DepartmentRequest;
+import com.forep.exe.dto.Requests.EmployeeReportAiRequest;
+import com.forep.exe.dto.Requests.EstimateHoursRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
 import com.forep.exe.dto.Requests.PaymentCallbackRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
+import com.forep.exe.dto.Requests.RecommendationExplanationRequest;
+import com.forep.exe.dto.Requests.RecommendationResultExplanationRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
+import com.forep.exe.dto.Requests.ReturnTaskRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
+import com.forep.exe.dto.Requests.SubmitTaskCompletionRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
@@ -36,6 +42,7 @@ import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
+import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.DepartmentStatus;
@@ -344,6 +351,26 @@ public class ForepController {
         return ApiResponse.ok(service.assignTeam(id, request));
     }
 
+    @PatchMapping("/tasks/{id}/accept")
+    ApiResponse<?> acceptTask(@PathVariable UUID id) {
+        return ApiResponse.ok(service.acceptTask(id));
+    }
+
+    @PatchMapping("/tasks/{id}/submit-completion")
+    ApiResponse<?> submitTaskCompletion(@PathVariable UUID id, @RequestBody @Valid SubmitTaskCompletionRequest request) {
+        return ApiResponse.ok(service.submitTaskCompletion(id, request));
+    }
+
+    @PatchMapping("/tasks/{id}/approve-completion")
+    ApiResponse<?> approveTaskCompletion(@PathVariable UUID id) {
+        return ApiResponse.ok(service.approveTaskCompletion(id));
+    }
+
+    @PatchMapping("/tasks/{id}/return")
+    ApiResponse<?> returnTask(@PathVariable UUID id, @RequestBody @Valid ReturnTaskRequest request) {
+        return ApiResponse.ok(service.returnTask(id, request));
+    }
+
     @GetMapping("/tasks/{id}/attachments")
     ApiResponse<?> taskAttachments(@PathVariable UUID id) {
         return ApiResponse.ok(service.taskAttachments(id));
@@ -442,6 +469,36 @@ public class ForepController {
     @PostMapping("/ai/tasks/analyze")
     ApiResponse<?> analyzeTaskDomain(@RequestBody @Valid TaskDomainAnalysisRequest request) {
         return ApiResponse.ok(service.analyzeTaskDomain(request));
+    }
+
+    @PostMapping("/ai/tasks/estimate-hours")
+    ApiResponse<?> estimateTaskHours(@RequestBody @Valid EstimateHoursRequest request) {
+        return ApiResponse.ok(service.estimateTaskHours(request));
+    }
+
+    @PostMapping("/ai/recommendations/explain")
+    ApiResponse<?> explainRecommendation(@RequestBody @Valid RecommendationExplanationRequest request) {
+        return ApiResponse.ok(service.explainRecommendation(request));
+    }
+
+    @PostMapping("/ai/recommendations/result/explain")
+    ApiResponse<?> explainRecommendationResult(@RequestBody @Valid RecommendationResultExplanationRequest request) {
+        return ApiResponse.ok(service.explainRecommendationResult(request));
+    }
+
+    @PostMapping("/ai/workload/risk")
+    ApiResponse<?> explainWorkloadRisk(@RequestBody @Valid WorkloadRiskExplanationRequest request) {
+        return ApiResponse.ok(service.explainWorkloadRisk(request));
+    }
+
+    @PostMapping("/ai/employee-report")
+    ApiResponse<?> generateEmployeeReport(@RequestBody @Valid EmployeeReportAiRequest request) {
+        return ApiResponse.ok(service.generateEmployeeReport(request));
+    }
+
+    @GetMapping("/ai/business-owner/operational-summary")
+    ApiResponse<?> businessOwnerOperationalSummary() {
+        return ApiResponse.ok(service.businessOwnerOperationalSummary());
     }
 
     @PostMapping("/ai/tasks/{id}/split")

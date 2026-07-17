@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public final class Requests {
@@ -228,6 +229,18 @@ public final class Requests {
     ) {
     }
 
+    public record SubmitTaskCompletionRequest(
+            @NotBlank String content,
+            String attachment
+    ) {
+    }
+
+    public record ReturnTaskRequest(
+            @NotBlank String reason,
+            String attachment
+    ) {
+    }
+
     public record DailyReportRequest(
             @NotNull LocalDate reportDate,
             @NotBlank String todayCompleted,
@@ -262,6 +275,52 @@ public final class Requests {
     public record ExtractTasksRequest(
             @NotBlank String text,
             OffsetDateTime defaultDeadline
+    ) {
+    }
+
+    public record EstimateHoursRequest(
+            @NotBlank String taskTitle,
+            String taskDescription,
+            String difficulty,
+            String taskType,
+            OffsetDateTime startDate,
+            OffsetDateTime deadline,
+            @Min(1) Integer backendWorkingDays,
+            @Min(1) BigDecimal backendDefaultHours
+    ) {
+    }
+
+    public record RecommendationExplanationRequest(
+            @NotBlank String recommendationType,
+            @NotNull Map<String, Object> task,
+            @NotNull List<Map<String, Object>> candidates
+    ) {
+    }
+
+    public record RecommendationResultExplanationRequest(
+            @NotNull Map<String, Object> task,
+            @NotNull Map<String, Object> selectedAssigneeOrTeam,
+            List<Map<String, Object>> rankingData,
+            List<Map<String, Object>> comparisonWithOtherCandidates,
+            Map<String, Object> workloadData,
+            Map<String, Object> performanceData
+    ) {
+    }
+
+    public record WorkloadRiskExplanationRequest(
+            @NotBlank String employeeName,
+            @NotNull @Min(1) BigDecimal monthlyCapacityHours,
+            @NotNull List<Map<String, Object>> monthlyWorkloadEvaluation,
+            String backendOverallRisk
+    ) {
+    }
+
+    public record EmployeeReportAiRequest(
+            @NotNull Map<String, Object> employee,
+            @NotNull Map<String, Object> period,
+            @NotNull Map<String, Object> metrics,
+            List<Map<String, Object>> notableTasks,
+            List<String> risks
     ) {
     }
 

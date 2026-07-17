@@ -1,5 +1,7 @@
 package com.forep.exe.controller;
 
+import com.forep.exe.ai.AiProviderException;
+import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
@@ -8,6 +10,7 @@ import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -124,5 +127,27 @@ public class AdminPlatformController {
     @GetMapping("/audit-logs")
     ApiResponse<?> auditLogs() {
         return ApiResponse.ok(service.adminAuditLogs());
+    }
+
+    @GetMapping("/ai/platform-summary")
+    ApiResponse<?> platformSummary() {
+        return ApiResponse.ok(service.platformAdminSystemSummary());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
+        return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(AiRateLimitException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    ApiResponse<?> handleAiRateLimitError(AiRateLimitException exception) {
+        return ApiResponse.error("AI_RATE_LIMITED", "AI đang xử lý quá nhiều yêu cầu. Vui lòng thử lại sau " + exception.retryAfterSeconds() + " giây.", null);
+    }
+
+    @ExceptionHandler(AiProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleAiProviderError(AiProviderException exception) {
+        return ApiResponse.error("AI_PROVIDER_ERROR", "Không thể tạo phân tích AI ở thời điểm này. Vui lòng thử lại sau.", null);
     }
 }

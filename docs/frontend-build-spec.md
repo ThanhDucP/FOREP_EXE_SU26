@@ -2,7 +2,7 @@
 
 Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai. Dung `http://localhost:8080` lam API origin; cac module authenticated cu dung prefix `/api/v1`, public registration/payment dung prefix `/api/public`, payment provider callbacks dung `/api/payment-callbacks`, va admin platform moi dung `/api/admin`.
 
-`docs/FE.md` la source of truth moi cho FE requirements chi tiet: permission matrix, role vs business position, HR master data, task workflow, AI analysis/recommendation, lifecycle rules va acceptance checklist. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh.
+`docs/FE.md` la source of truth moi cho FE requirements chi tiet: permission matrix, role vs business position, HR master data, task workflow, AI analysis/recommendation, lifecycle rules va acceptance checklist. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh. Doc nay co them section `18. FE Change Log / Production Delta` de doi FE track tat ca thay doi bat buoc sau khi BE/AI duoc chuan hoa production.
 
 ## 1. Nguyen tac tich hop API
 

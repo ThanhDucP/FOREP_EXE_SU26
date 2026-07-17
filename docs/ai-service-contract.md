@@ -258,6 +258,78 @@ Backend production rules:
 - Recommendation APIs may call this analysis automatically when FE omits `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`.
 - Backend maps `relatedDepartment` and `requiredJobPositions` back to real workspace IDs before scoring; AI never decides final ranking.
 
+## POST /internal/ai/tasks/estimate-hours
+
+Public backend endpoint: `POST /api/workspace/ai/tasks/estimate-hours`.
+
+Input fields:
+
+- `workspaceId`
+- `taskTitle`
+- `taskDescription`
+- `difficulty`
+- `taskType`
+- `startDate`
+- `deadline`
+- `backendWorkingDays`
+- `backendDefaultHours`
+
+Output fields:
+
+- `suggestedHours`
+- `workingDays`
+- `calculationBasis`
+- `confidence`
+- `userConfirmationRequired`
+
+AI estimate is advisory only. FE must require explicit user confirmation before applying suggested hours.
+
+## POST /internal/ai/recommendations/*/explain
+
+Public backend endpoint: `POST /api/workspace/ai/recommendations/explain`.
+
+Backend routes by `recommendationType`:
+
+- `INDIVIDUAL` -> `/internal/ai/recommendations/individual/explain`
+- `TEAM_LEADER` -> `/internal/ai/recommendations/team-leader/explain`
+- `TEAM_MEMBER` -> `/internal/ai/recommendations/team-member/explain`
+
+Rules:
+
+- Candidate order comes from backend ranking.
+- AI explains the backend order; it must not reorder or invent candidates.
+- Candidate IDs must come from backend output.
+
+## POST /internal/ai/recommendations/result/explain
+
+Public backend endpoint: `POST /api/workspace/ai/recommendations/result/explain`.
+
+Explains why the selected assignee/team was chosen compared with other backend-ranked candidates.
+
+## POST /internal/ai/workload-risk
+
+Public backend endpoint: `POST /api/workspace/ai/workload/risk`.
+
+AI explains backend monthly workload numbers. It must not invent workload or capacity.
+
+## POST /internal/ai/employee-report
+
+Public backend endpoint: `POST /api/workspace/ai/employee-report`.
+
+Creates an AI draft employee report from aggregated employee, period, metrics, notable tasks, and risks. Human review is required before official HR use.
+
+## POST /internal/ai/business-owner/summary
+
+Public backend endpoint: `GET /api/workspace/ai/business-owner/operational-summary`.
+
+Backend builds input from real workspace data: employees, tasks, workload, department workload, AI suggestion count, subscription status, plan limits, expiration date, and upgrade options.
+
+## POST /internal/ai/platform-admin/summary
+
+Public backend endpoint: `GET /api/admin/ai/platform-summary`.
+
+Backend builds input from platform data: workspaces, payment transactions, revenue buckets, payment success rate, feedback summary, and AI suggestion stats.
+
 ## POST /internal/ai/tasks/split
 
 Response:

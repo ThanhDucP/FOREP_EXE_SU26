@@ -46,15 +46,21 @@ import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
 import com.forep.exe.dto.Requests.DepartmentRequest;
+import com.forep.exe.dto.Requests.EmployeeReportAiRequest;
+import com.forep.exe.dto.Requests.EstimateHoursRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
 import com.forep.exe.dto.Requests.PaymentCallbackRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
+import com.forep.exe.dto.Requests.RecommendationExplanationRequest;
+import com.forep.exe.dto.Requests.RecommendationResultExplanationRequest;
 import com.forep.exe.dto.Requests.RegisterWorkspaceRequest;
+import com.forep.exe.dto.Requests.ReturnTaskRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
+import com.forep.exe.dto.Requests.SubmitTaskCompletionRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
@@ -65,6 +71,7 @@ import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
+import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.persistence.AiSuggestionEntity;
 import com.forep.exe.persistence.AiSuggestionRepository;
@@ -131,6 +138,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @Service
 @Transactional
@@ -516,6 +524,9 @@ public class ForepService {
 
     public TaskView updateStatus(UUID taskId, UpdateTaskStatusRequest request) {
         TaskEntity task = requireTask(taskId);
+        if (List.of(TaskStatus.ACCEPTED, TaskStatus.SUBMITTED, TaskStatus.RETURNED, TaskStatus.COMPLETED).contains(request.status())) {
+            throw new IllegalArgumentException("Vui lòng dùng endpoint workflow tương ứng: accept, submit-completion, approve-completion hoặc return.");
+        }
         requireOwnerOrAssignee(task);
         applyTaskStatus(task, request.status(), task.getProgressPercent());
         return toTaskView(tasks.save(task));
@@ -530,30 +541,80 @@ public class ForepService {
         return toTaskView(task);
     }
 
+    public TaskView acceptTask(UUID taskId) {
+        TaskEntity task = requireTask(taskId);
+        requireTaskParticipant(task);
+        if (!List.of(TaskStatus.ASSIGNED, TaskStatus.RETURNED).contains(task.getStatus())) {
+            throw new IllegalArgumentException("Chỉ task mới được giao hoặc bị trả lại mới có thể accept.");
+        }
+        applyTaskStatus(task, TaskStatus.ACCEPTED, task.getProgressPercent());
+        task = tasks.save(task);
+        saveTaskUpdate(task, task.getProgressPercent(), "Đã accept task.", null, UpdateType.ACCEPTANCE);
+        createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_ACCEPTED", "Nhân viên đã accept task", currentUserEntity().getFullName() + " đã accept task: " + task.getTitle(), "TASK", task.getId());
+        return toTaskView(task);
+    }
+
+    public TaskView submitTaskCompletion(UUID taskId, SubmitTaskCompletionRequest request) {
+        TaskEntity task = requireTask(taskId);
+        requireCompletionSubmitter(task);
+        if (List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus())) {
+            throw new IllegalArgumentException("Task đã đóng nên không thể submit completion.");
+        }
+        applyTaskStatus(task, TaskStatus.SUBMITTED, 100);
+        task = tasks.save(task);
+        saveTaskUpdate(task, task.getProgressPercent(), request.content(), request.attachment(), UpdateType.COMPLETION);
+        createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_COMPLETION_SUBMITTED", "Task chờ xác nhận hoàn thành", currentUserEntity().getFullName() + " đã gửi hoàn thành task: " + task.getTitle(), "TASK", task.getId());
+        return toTaskView(task);
+    }
+
+    public TaskView approveTaskCompletion(UUID taskId) {
+        requireTaskManager();
+        TaskEntity task = requireTask(taskId);
+        if (task.getStatus() != TaskStatus.SUBMITTED) {
+            throw new IllegalArgumentException("Chỉ task đang chờ xác nhận hoàn thành mới được approve.");
+        }
+        applyTaskStatus(task, TaskStatus.COMPLETED, 100);
+        task = tasks.save(task);
+        saveTaskUpdate(task, task.getProgressPercent(), "Manager đã xác nhận task hoàn thành.", null, UpdateType.COMPLETION_APPROVAL);
+        notifyParticipants(task, "TASK_COMPLETION_APPROVED", "Task đã được xác nhận hoàn thành", "Task đã được xác nhận hoàn thành: " + task.getTitle());
+        return toTaskView(task);
+    }
+
+    public TaskView returnTask(UUID taskId, ReturnTaskRequest request) {
+        requireTaskManager();
+        TaskEntity task = requireTask(taskId);
+        if (task.getStatus() != TaskStatus.SUBMITTED) {
+            throw new IllegalArgumentException("Chỉ task đang chờ xác nhận hoàn thành mới được return.");
+        }
+        applyTaskStatus(task, TaskStatus.RETURNED, Math.min(task.getProgressPercent(), 95));
+        task = tasks.save(task);
+        saveTaskUpdate(task, task.getProgressPercent(), request.reason(), request.attachment(), UpdateType.RETURN);
+        notifyParticipants(task, "TASK_RETURNED", "Task bị trả lại để chỉnh sửa", "Task cần chỉnh sửa thêm: " + task.getTitle() + ". Lý do: " + request.reason());
+        return toTaskView(task);
+    }
+
     public TaskUpdateView updateProgress(UUID taskId, UpdateProgressRequest request) {
         TaskEntity task = requireTask(taskId);
         requireOwnerOrAssignee(task);
+        if (List.of(UpdateType.ACCEPTANCE, UpdateType.COMPLETION_APPROVAL, UpdateType.RETURN).contains(request.updateType())) {
+            throw new IllegalArgumentException("Update type này chỉ được tạo bởi workflow endpoint tương ứng.");
+        }
         if (request.updateType() == UpdateType.BLOCKER && request.content().isBlank()) {
             throw new IllegalArgumentException("Task bị blocker phải có nội dung cập nhật.");
         }
         int nextProgress = request.updateType() == UpdateType.COMPLETION ? 100 : request.progressPercent();
         TaskStatus nextStatus = switch (request.updateType()) {
             case BLOCKER -> TaskStatus.BLOCKED;
-            case COMPLETION -> TaskStatus.COMPLETED;
-            case PROGRESS -> nextProgress >= 100 ? TaskStatus.COMPLETED : TaskStatus.IN_PROGRESS;
+            case COMPLETION -> TaskStatus.SUBMITTED;
+            case ACCEPTANCE -> TaskStatus.ACCEPTED;
+            case COMPLETION_APPROVAL -> TaskStatus.COMPLETED;
+            case RETURN -> TaskStatus.RETURNED;
+            case PROGRESS -> nextProgress >= 100 ? TaskStatus.SUBMITTED : TaskStatus.IN_PROGRESS;
         };
         applyTaskStatus(task, nextStatus, nextProgress);
         tasks.save(task);
 
-        TaskUpdateEntity update = new TaskUpdateEntity();
-        update.setTaskId(task.getId());
-        update.setUserId(currentUser().userId());
-        update.setProgressPercent(task.getProgressPercent());
-        update.setContent(request.content());
-        update.setAttachment(request.attachment());
-        update.setUpdateType(request.updateType());
-        update.setCreatedAt(OffsetDateTime.now());
-        update = taskUpdates.save(update);
+        TaskUpdateEntity update = saveTaskUpdate(task, task.getProgressPercent(), request.content(), request.attachment(), request.updateType());
         if (request.updateType() == UpdateType.BLOCKER) {
             String assigneeName = employeeNames().getOrDefault(task.getAssigneeId(), "Thành viên");
             createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_BLOCKED_OWNER", "Thành viên có vướng mắc về task", assigneeName + " có vướng mắc về task: " + task.getTitle(), "TASK", task.getId());
@@ -561,7 +622,7 @@ public class ForepService {
                 createNotification(task.getWorkspaceId(), task.getAssigneeId(), "TASK_BLOCKER_REQUESTED", "Bạn đã yêu cầu hỏi vướng mắc", "Bạn đã yêu cầu hỏi vướng mắc task " + task.getTitle() + ".", "TASK", task.getId());
             }
         } else if (request.updateType() == UpdateType.COMPLETION && currentUser().userId().equals(task.getAssigneeId())) {
-            createNotification(task.getWorkspaceId(), task.getAssigneeId(), "TASK_COMPLETED_EMPLOYEE", "Bạn đã hoàn thành task", "Bạn đã hoàn thành task: " + task.getTitle(), "TASK", task.getId());
+            createNotification(task.getWorkspaceId(), task.getCreatorId(), "TASK_COMPLETION_SUBMITTED", "Task chờ xác nhận hoàn thành", currentUserEntity().getFullName() + " đã gửi hoàn thành task: " + task.getTitle(), "TASK", task.getId());
         }
         return toTaskUpdateView(update);
     }
@@ -790,7 +851,7 @@ public class ForepService {
         requireOwner();
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
         long total = scopedTasks.size();
-        long active = scopedTasks.stream().filter(task -> List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED).contains(task.getStatus())).count();
+        long active = scopedTasks.stream().filter(task -> openTaskStatuses().contains(task.getStatus())).count();
         long completed = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
         long overdue = scopedTasks.stream().filter(this::isOverdue).count();
         List<WorkloadView> currentWorkload = workload();
@@ -934,6 +995,88 @@ public class ForepService {
             log.warn("AI task domain analysis failed; using rule-based fallback. message={}", fallbackReason(exception));
             return fallbackTaskDomainAnalysis(request, workspaceId, exception);
         }
+    }
+
+    public Map<String, Object> estimateTaskHours(EstimateHoursRequest request) {
+        requireTaskManager();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", currentUser().workspaceId().toString());
+        payload.put("taskTitle", request.taskTitle());
+        payload.put("taskDescription", request.taskDescription());
+        payload.put("difficulty", request.difficulty());
+        payload.put("taskType", request.taskType());
+        payload.put("startDate", request.startDate() == null ? null : request.startDate().toString());
+        payload.put("deadline", request.deadline() == null ? null : request.deadline().toString());
+        payload.put("backendWorkingDays", request.backendWorkingDays());
+        payload.put("backendDefaultHours", request.backendDefaultHours() == null ? null : request.backendDefaultHours().doubleValue());
+        return invokeAiMap("TASK_ESTIMATE_HOURS", AiSuggestionType.TASK_ESTIMATE_HOURS, payload, () -> aiServiceClient.estimateHours(payload));
+    }
+
+    public Map<String, Object> explainRecommendation(RecommendationExplanationRequest request) {
+        requireTaskManager();
+        String recommendationType = request.recommendationType().trim().toUpperCase(Locale.ROOT);
+        if (!List.of("INDIVIDUAL", "TEAM_LEADER", "TEAM_MEMBER").contains(recommendationType)) {
+            throw new IllegalArgumentException("recommendationType phải là INDIVIDUAL, TEAM_LEADER hoặc TEAM_MEMBER.");
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", currentUser().workspaceId().toString());
+        payload.put("recommendationType", recommendationType);
+        payload.put("task", request.task());
+        payload.put("candidates", request.candidates());
+        Supplier<Map<String, Object>> call = switch (recommendationType) {
+            case "TEAM_LEADER" -> () -> aiServiceClient.explainTeamLeaderRecommendation(payload);
+            case "TEAM_MEMBER" -> () -> aiServiceClient.explainTeamMemberRecommendation(payload);
+            default -> () -> aiServiceClient.explainIndividualRecommendation(payload);
+        };
+        return invokeAiMap("RECOMMENDATION_EXPLANATION_" + recommendationType, AiSuggestionType.RECOMMENDATION_EXPLANATION, payload, call);
+    }
+
+    public Map<String, Object> explainRecommendationResult(RecommendationResultExplanationRequest request) {
+        requireTaskManager();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", currentUser().workspaceId().toString());
+        payload.put("task", request.task());
+        payload.put("selectedAssigneeOrTeam", request.selectedAssigneeOrTeam());
+        payload.put("rankingData", request.rankingData() == null ? List.of() : request.rankingData());
+        payload.put("comparisonWithOtherCandidates", request.comparisonWithOtherCandidates() == null ? List.of() : request.comparisonWithOtherCandidates());
+        payload.put("workloadData", request.workloadData() == null ? Map.of() : request.workloadData());
+        payload.put("performanceData", request.performanceData() == null ? Map.of() : request.performanceData());
+        return invokeAiMap("RECOMMENDATION_RESULT_EXPLANATION", AiSuggestionType.RECOMMENDATION_RESULT_EXPLANATION, payload, () -> aiServiceClient.explainRecommendationResult(payload));
+    }
+
+    public Map<String, Object> explainWorkloadRisk(WorkloadRiskExplanationRequest request) {
+        requireTaskManager();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", currentUser().workspaceId().toString());
+        payload.put("employeeName", request.employeeName());
+        payload.put("monthlyCapacityHours", request.monthlyCapacityHours().doubleValue());
+        payload.put("monthlyWorkloadEvaluation", request.monthlyWorkloadEvaluation());
+        payload.put("backendOverallRisk", request.backendOverallRisk());
+        return invokeAiMap("WORKLOAD_RISK_EXPLANATION", AiSuggestionType.WORKLOAD_RISK, payload, () -> aiServiceClient.workloadRisk(payload));
+    }
+
+    public Map<String, Object> generateEmployeeReport(EmployeeReportAiRequest request) {
+        requireOwnerOrHrOrManager();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", currentUser().workspaceId().toString());
+        payload.put("employee", request.employee());
+        payload.put("period", request.period());
+        payload.put("metrics", request.metrics());
+        payload.put("notableTasks", request.notableTasks() == null ? List.of() : request.notableTasks());
+        payload.put("risks", request.risks() == null ? List.of() : request.risks());
+        return invokeAiMap("EMPLOYEE_REPORT", AiSuggestionType.EMPLOYEE_REPORT, payload, () -> aiServiceClient.employeeReport(payload));
+    }
+
+    public Map<String, Object> businessOwnerOperationalSummary() {
+        requireOwner();
+        Map<String, Object> payload = businessOwnerOperationalSummaryPayload();
+        return invokeAiMap("OWNER_OPERATIONAL_SUMMARY", AiSuggestionType.OWNER_OPERATIONAL_SUMMARY, payload, () -> aiServiceClient.businessOwnerOperationalSummary(payload));
+    }
+
+    public Map<String, Object> platformAdminSystemSummary() {
+        requireSystemAdmin();
+        Map<String, Object> payload = platformAdminSystemSummaryPayload();
+        return invokeAiMap("PLATFORM_SYSTEM_SUMMARY", AiSuggestionType.PLATFORM_SYSTEM_SUMMARY, payload, () -> aiServiceClient.platformAdminSystemSummary(payload));
     }
 
     public Map<String, Object> extractTasks(ExtractTasksRequest request) {
@@ -2934,7 +3077,7 @@ public class ForepService {
                 .filter(task -> isRelevantToPeriod(task, start))
                 .toList();
         long completedTasks = periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
-        long activeTasks = periodTasks.stream().filter(task -> List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED).contains(task.getStatus())).count();
+        long activeTasks = periodTasks.stream().filter(task -> openTaskStatuses().contains(task.getStatus())).count();
         long overdueTasks = periodTasks.stream().filter(this::isOverdue).count();
         long blockedTasks = periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.BLOCKED).count();
         long totalTracked = Math.max(1, periodTasks.size());
@@ -2954,6 +3097,111 @@ public class ForepService {
         payload.put("tasks", taskPayloads);
         payload.put("reports", reportPayloads);
         payload.put("workload", currentWorkload.stream().map(AiEmployeeWorkload::from).toList());
+        return payload;
+    }
+
+    private Map<String, Object> businessOwnerOperationalSummaryPayload() {
+        UUID workspaceId = currentUser().workspaceId();
+        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        List<UserEntity> workforce = workspaceEmployees(workspaceId);
+        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
+        List<WorkloadView> currentWorkload = workforce.stream()
+                .map(employee -> workloadForEmployee(employee, scopedTasks))
+                .toList();
+        long completedTasks = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
+        long overdueTasks = scopedTasks.stream().filter(this::isOverdue).count();
+        long totalTasks = scopedTasks.size();
+        Map<String, Object> workloadDistribution = new LinkedHashMap<>();
+        Arrays.stream(WorkloadLevel.values()).forEach(level -> workloadDistribution.put(level.name(), currentWorkload.stream().filter(item -> item.workloadLevel() == level).count()));
+        Map<UUID, DepartmentEntity> departmentById = departments.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
+                .collect(java.util.stream.Collectors.toMap(DepartmentEntity::getId, item -> item, (left, right) -> left));
+        List<Map<String, Object>> departmentWorkload = departmentById.values().stream()
+                .map(department -> {
+                    List<UserEntity> departmentEmployees = workforce.stream().filter(employee -> department.getId().equals(employee.getDepartmentId())).toList();
+                    Set<UUID> departmentEmployeeIds = departmentEmployees.stream().map(UserEntity::getId).collect(java.util.stream.Collectors.toSet());
+                    List<WorkloadView> departmentLoads = currentWorkload.stream().filter(load -> departmentEmployeeIds.contains(load.employeeId())).toList();
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("departmentId", department.getId().toString());
+                    item.put("departmentName", department.getName());
+                    item.put("employeeCount", departmentEmployees.size());
+                    item.put("overloadedEmployees", departmentLoads.stream().filter(load -> load.workloadLevel() == WorkloadLevel.OVERLOADED).count());
+                    item.put("allocatedHours", departmentLoads.stream().map(WorkloadView::estimatedWorkload).reduce(BigDecimal.ZERO, BigDecimal::add).doubleValue());
+                    return item;
+                })
+                .toList();
+        Map<String, Object> planLimitUsage = new LinkedHashMap<>();
+        planLimitUsage.put("maxUsers", workspace.getMaxUsers());
+        planLimitUsage.put("currentUsers", currentWorkspaceUserCount(workspaceId));
+        planLimitUsage.put("maxOwnerAccounts", workspace.getMaxOwnerAccounts());
+        planLimitUsage.put("ownerAccountCount", workspace.getOwnerAccountCount());
+        planLimitUsage.put("maxEmployeeAccounts", workspace.getMaxEmployeeAccounts());
+        planLimitUsage.put("employeeAccountCount", workforce.size());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", workspaceId.toString());
+        payload.put("totalEmployees", workforce.size());
+        payload.put("activeEmployees", workforce.stream().filter(employee -> employee.getStatus() == UserStatus.ACTIVE).count());
+        payload.put("totalTasks", totalTasks);
+        payload.put("completedTasks", completedTasks);
+        payload.put("overdueTasks", overdueTasks);
+        payload.put("completionRate", totalTasks == 0 ? 0 : completedTasks * 1.0 / totalTasks);
+        payload.put("overdueRate", totalTasks == 0 ? 0 : overdueTasks * 1.0 / totalTasks);
+        payload.put("workloadDistribution", workloadDistribution);
+        payload.put("departmentWorkload", departmentWorkload);
+        payload.put("aiRecommendationEffectiveness", Map.of("generatedSuggestions", aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).size()));
+        payload.put("subscriptionStatus", workspace.getPaymentStatus().name() + "/" + workspace.getStatus().name());
+        payload.put("planLimitUsage", planLimitUsage);
+        payload.put("expirationDate", workspace.getExpiresAt() == null ? null : workspace.getExpiresAt().toString());
+        payload.put("upgradeOptions", List.of("Increase max users", "Increase owner accounts", "Enable more AI usage"));
+        return payload;
+    }
+
+    private Map<String, Object> platformAdminSystemSummaryPayload() {
+        List<WorkspaceEntity> allWorkspaces = workspaces.findAll();
+        List<PaymentTransactionEntity> allPayments = paymentTransactions.findAll();
+        OffsetDateTime monthStart = OffsetDateTime.now().withDayOfMonth(1).toLocalDate().atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+        Map<String, Float> revenueByMonth = new LinkedHashMap<>();
+        Map<String, Float> revenueByQuarter = new LinkedHashMap<>();
+        Map<String, Float> revenueByYear = new LinkedHashMap<>();
+        Map<String, Float> revenueByPlan = new LinkedHashMap<>();
+        allPayments.stream()
+                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS)
+                .forEach(payment -> {
+                    OffsetDateTime paidAt = payment.getPaidAt() == null ? payment.getCreatedAt() : payment.getPaidAt();
+                    String monthKey = paidAt.getYear() + "-" + String.format("%02d", paidAt.getMonthValue());
+                    String quarterKey = paidAt.getYear() + "-Q" + ((paidAt.getMonthValue() - 1) / 3 + 1);
+                    String yearKey = String.valueOf(paidAt.getYear());
+                    String planKey = payment.getSubscriptionPlanId().toString();
+                    float amount = payment.getAmount().floatValue();
+                    revenueByMonth.merge(monthKey, amount, Float::sum);
+                    revenueByQuarter.merge(quarterKey, amount, Float::sum);
+                    revenueByYear.merge(yearKey, amount, Float::sum);
+                    revenueByPlan.merge(planKey, amount, Float::sum);
+                });
+        long successfulPayments = allPayments.stream().filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS).count();
+        long failedPayments = allPayments.stream().filter(payment -> List.of(PaymentTransactionStatus.FAILED, PaymentTransactionStatus.EXPIRED, PaymentTransactionStatus.CANCELLED).contains(payment.getStatus())).count();
+        long pendingManualPayments = allPayments.stream().filter(payment -> List.of(PaymentTransactionStatus.PENDING, PaymentTransactionStatus.PROCESSING, PaymentTransactionStatus.MANUAL_REVIEW).contains(payment.getStatus())).count();
+        long totalPaymentDecisions = Math.max(1, successfulPayments + failedPayments);
+        Map<String, Object> feedbackSummary = new LinkedHashMap<>();
+        feedbackSummary.put("totalFeedback", businessFeedback.count());
+        feedbackSummary.put("newFeedback", businessFeedback.findAllByOrderByCreatedAtDesc().stream().filter(item -> item.getStatus() == FeedbackStatus.NEW).count());
+        Map<String, Object> aiUsageStatistics = new LinkedHashMap<>();
+        aiUsageStatistics.put("totalSuggestions", aiSuggestions.findAll().size());
+        aiUsageStatistics.put("generatedSuggestions", aiSuggestions.findAll().stream().filter(item -> item.getStatus() == AiSuggestionStatus.GENERATED).count());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("totalWorkspaces", allWorkspaces.size());
+        payload.put("activeWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.ACTIVE).count());
+        payload.put("suspendedWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.SUSPENDED).count());
+        payload.put("expiredWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.EXPIRED).count());
+        payload.put("newWorkspacesThisMonth", allWorkspaces.stream().filter(workspace -> workspace.getCreatedAt() != null && !workspace.getCreatedAt().isBefore(monthStart)).count());
+        payload.put("revenueByMonth", revenueByMonth);
+        payload.put("revenueByQuarter", revenueByQuarter);
+        payload.put("revenueByYear", revenueByYear);
+        payload.put("revenueByPlan", revenueByPlan);
+        payload.put("paymentSuccessRate", successfulPayments * 1.0 / totalPaymentDecisions);
+        payload.put("failedPayments", failedPayments);
+        payload.put("pendingManualPayments", pendingManualPayments);
+        payload.put("businessFeedbackSummary", feedbackSummary);
+        payload.put("aiUsageStatistics", aiUsageStatistics);
         return payload;
     }
 
@@ -3055,7 +3303,7 @@ public class ForepService {
     private void applyTaskStatus(TaskEntity task, TaskStatus status, int progressPercent) {
         task.setStatus(status);
         task.setProgressPercent(status == TaskStatus.COMPLETED ? 100 : Math.max(0, Math.min(100, progressPercent)));
-        task.setCompletedAt(status == TaskStatus.COMPLETED ? OffsetDateTime.now() : task.getCompletedAt());
+        task.setCompletedAt(status == TaskStatus.COMPLETED ? OffsetDateTime.now() : null);
         task.setUpdatedAt(OffsetDateTime.now());
     }
 
@@ -3090,7 +3338,7 @@ public class ForepService {
         return !List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus());
     }
     private List<TaskStatus> openTaskStatuses() {
-        return List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED);
+        return List.of(TaskStatus.ASSIGNED, TaskStatus.ACCEPTED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.SUBMITTED, TaskStatus.RETURNED);
     }
 
     private List<TaskEntity> visibleTasksForEmployee(AuthenticatedUser user) {
@@ -3175,6 +3423,18 @@ public class ForepService {
         item.setUploadedBy(currentUser().userId());
         item.setCreatedAt(OffsetDateTime.now());
         return taskAttachments.save(item);
+    }
+
+    private TaskUpdateEntity saveTaskUpdate(TaskEntity task, int progressPercent, String content, String attachment, UpdateType updateType) {
+        TaskUpdateEntity update = new TaskUpdateEntity();
+        update.setTaskId(task.getId());
+        update.setUserId(currentUser().userId());
+        update.setProgressPercent(progressPercent);
+        update.setContent(content);
+        update.setAttachment(attachment);
+        update.setUpdateType(updateType);
+        update.setCreatedAt(OffsetDateTime.now());
+        return taskUpdates.save(update);
     }
 
     private BigDecimal validEstimatedHours(BigDecimal value) {
@@ -3845,6 +4105,15 @@ public class ForepService {
     private void requireOwnerOrAssignee(TaskEntity task) {
         if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role()) && !taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền cập nhật task này.");
     }
+    private void requireTaskParticipant(TaskEntity task) {
+        if (!taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Chỉ nhân viên được giao task mới được thực hiện thao tác này.");
+    }
+    private void requireCompletionSubmitter(TaskEntity task) {
+        if (task.getAssignmentType() == AssignmentType.INDIVIDUAL && currentUser().userId().equals(task.getAssigneeId())) return;
+        boolean isTeamLeader = taskAssignees.findByTaskIdOrderByCreatedAtAsc(task.getId()).stream()
+                .anyMatch(item -> currentUser().userId().equals(item.getEmployeeId()) && (item.isLeader() || item.getParticipantRole() == TaskParticipantRole.LEADER));
+        if (!isTeamLeader) throw new IllegalArgumentException("Chỉ assignee hoặc team leader được submit completion.");
+    }
 
     private String loginIdentifier(LoginRequest request) {
         String identifier = request.username();
@@ -3975,6 +4244,19 @@ public class ForepService {
         history.setCalledAt(OffsetDateTime.now());
         history.setCreatedAt(OffsetDateTime.now());
         aiHistory.save(history);
+    }
+
+    private Map<String, Object> invokeAiMap(String functionName, AiSuggestionType suggestionType, Object inputData, Supplier<Map<String, Object>> call) {
+        enforceAiUsageLimit();
+        try {
+            Map<String, Object> output = call.get();
+            saveAiSuggestion(suggestionType, inputData, output);
+            saveAiHistory(functionName, AiHistoryStatus.SUCCESS);
+            return output;
+        } catch (AiProviderException exception) {
+            saveAiHistory(functionName, AiHistoryStatus.FAILED);
+            throw exception;
+        }
     }
 
     private String nextEmployeeCode(WorkspaceEntity workspace) {
