@@ -2,7 +2,23 @@
 
 Base path: `/api/v1`
 
-Backend expose API MVP theo mo hinh Workspace + OWNER + EMPLOYEE. Du lieu duoc luu bang Spring Data JPA/PostgreSQL repository.
+Backend expose API theo mo hinh Workspace SaaS. Du lieu duoc luu bang Spring Data JPA/PostgreSQL repository.
+
+Workspace operation screens should prefer `/api/workspace/...` aliases. `/api/v1/...` remains available for compatibility where controllers expose both.
+
+## Authorization Model
+
+System roles are permission roles only:
+
+- `PLATFORM_ADMIN`: platform administration.
+- `BUSINESS_OWNER`: workspace owner/business owner.
+- `HR`: employee, department, and business position administration.
+- `EXECUTIVE`: executive workspace operations/AI/workload visibility.
+- `MANAGER`: task assignment, workload, and recommendation workflows.
+- `EMPLOYEE`: assigned work, progress updates, and reports.
+- `SYSTEM_ADMIN`, `OWNER`, `SYSTEM`: compatibility aliases for legacy rows.
+
+Business/job positions are workspace master data, not system roles. Examples: Backend Java Developer, Business Analyst, HR Staff, Tech Lead. A business position carries `permissionGroup = EMPLOYEE | MANAGER | EXECUTIVE`; it never creates `PLATFORM_ADMIN`, `BUSINESS_OWNER`, or `HR`.
 
 ## Auth
 
@@ -30,6 +46,35 @@ Workspace register bat buoc co `shortCode` gom 2 ky tu chu/so, vi day la tien to
 - PATCH `/employees/{id}/status?status=ACTIVE|INACTIVE|INVITED`
 
 Khi tao employee, backend tu sinh `employeeCode` dang `{shortCode}{0001..1000}`, `username`, `initialPassword`; moi workspace gioi han 1000 employee.
+
+Employee `role` is derived from the selected active business position's `permissionGroup`. If no business position is assigned, the employee defaults to `EMPLOYEE`.
+
+## Departments And Business Positions
+
+Use workspace aliases for new FE:
+
+- GET `/api/workspace/hr/departments`
+- POST `/api/workspace/hr/departments`
+- GET `/api/workspace/hr/departments/{id}`
+- PUT `/api/workspace/hr/departments/{id}`
+- PATCH `/api/workspace/hr/departments/{id}/activate`
+- PATCH `/api/workspace/hr/departments/{id}/deactivate`
+- GET `/api/workspace/hr/business-positions?search=&departmentId=&permissionGroup=&status=`
+- POST `/api/workspace/hr/business-positions`
+- GET `/api/workspace/hr/business-positions/{id}`
+- PUT `/api/workspace/hr/business-positions/{id}`
+- PATCH `/api/workspace/hr/business-positions/{id}/activate`
+- PATCH `/api/workspace/hr/business-positions/{id}/deactivate`
+
+Production rules:
+
+- Department name is unique per workspace; department code is unique per workspace when provided.
+- Business position name is unique per workspace and department; business position code is unique per workspace when provided.
+- Business positions, employee profiles, task requirement context, and AI mapping can only use active departments.
+- Employee profiles and task requirement context can only use active business positions.
+- Department deactivate is blocked while active business positions, active employees, or open tasks still reference it.
+- Business position deactivate is blocked while active employees or open tasks still reference it.
+- Legacy `/hr/job-positions` endpoints remain compatibility aliases; new UI should use `/hr/business-positions`.
 
 ## Tasks
 
@@ -69,6 +114,7 @@ Backend-only integration. Frontend calls these backend endpoints; backend calls 
 - GET `/ai/daily-reports/insights`
 - GET `/ai/daily-reports/missing`
 - POST `/ai/tasks/extract`
+- POST `/ai/tasks/analyze`
 - POST `/ai/tasks/{id}/split`
 - POST `/ai/tasks/{id}/adjust`
 - GET `/ai/action-suggestions`
@@ -83,6 +129,7 @@ Current behavior:
 - If `AI_SERVICE_URL` and `AI_SERVICE_TOKEN` are configured and AI service is reachable, backend calls AI service.
 - Weekly/monthly business summary call LLM through `/internal/ai/business-summary`; they are not internal rule summaries.
 - Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, co `candidateScore` va `scoreComponents`; AI tu nhan dien `requiredRole`, `roleFit`, `roleFitReason` tu title/requirements va profile ung vien, sau do backend validate lai employeeId/fullName/workload/score theo candidate input.
+- Task/domain analysis runs before recommendation when FE/backend lacks `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`. Backend sends only real active departments, active business positions, and workspace skills to AI, then maps AI text output back to real workspace IDs before scoring.
 - Backend enforce `aiUsageLimit` theo goi subscription hien tai bang so luong record `ai_suggestions` trong ky kich hoat workspace. Khi het quota, backend chan truoc khi goi AI.
 - Backend protects AI providers with in-flight request dedupe, a global concurrency limiter, and a circuit breaker. Tunable env vars: `AI_SERVICE_MAX_CONCURRENT_REQUESTS`, `AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS`, `AI_SERVICE_DEDUPE_WAIT_MILLIS`, `AI_SERVICE_RETRY_AFTER_SECONDS`, `AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS`.
 - `POST /ai/recommend-assignee` returns deterministic top-3 fallback from backend `candidateScore` if AI providers timeout/fail. Response shape stays the same; fallback is marked in each item's `reason`/`risk`.
@@ -155,7 +202,7 @@ Notifications are created for:
 
 ## Remaining Backend Work
 
-1. Add audit logs.
-2. Add Supabase Storage file upload integration.
-3. Add scheduled notification jobs for overdue/missing updates/missing reports.
-4. Add automated tests for AI endpoint contracts.
+1. Add Supabase Storage file upload integration.
+2. Add scheduled notification jobs for overdue/missing updates/missing reports.
+3. Add automated tests for AI endpoint contracts.
+4. Add broader integration tests for department/business-position lifecycle guards.

@@ -2,7 +2,7 @@
 
 Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai. Dung `http://localhost:8080` lam API origin; cac module authenticated cu dung prefix `/api/v1`, public registration/payment dung prefix `/api/public`, payment provider callbacks dung `/api/payment-callbacks`, va admin platform moi dung `/api/admin`.
 
-Cap nhat moi cho module HR, giao task ca nhan/nhom, attachment, recommendation va workload thang nam trong `docs/FE.md`. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh.
+`docs/FE.md` la source of truth moi cho FE requirements chi tiet: permission matrix, role vs business position, HR master data, task workflow, AI analysis/recommendation, lifecycle rules va acceptance checklist. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh.
 
 ## 1. Nguyen tac tich hop API
 
@@ -23,7 +23,8 @@ Cap nhat moi cho module HR, giao task ca nhan/nhom, attachment, recommendation v
 - Luu token sau login. Khuyen nghi dung memory state + `localStorage` neu can giu dang nhap sau reload.
 - Date-time gui len backend dung ISO 8601 offset, vi du `2026-06-29T17:00:00+07:00`.
 - Date cho daily report dung `YYYY-MM-DD`.
-- Backend phan quyen theo role `PLATFORM_ADMIN`, `BUSINESS_OWNER`, `HR`, `MANAGER`, `EMPLOYEE`, `SYSTEM`, kem alias cu `SYSTEM_ADMIN`, `OWNER`; UI phai an hanh dong khong dung role.
+- Backend phan quyen theo system role `PLATFORM_ADMIN`, `BUSINESS_OWNER`, `HR`, `EXECUTIVE`, `MANAGER`, `EMPLOYEE`, `SYSTEM`, kem alias cu `SYSTEM_ADMIN`, `OWNER`; UI phai an hanh dong khong dung role.
+- Khong goi Developer, BA, HR Staff, Tech Lead... la system role. Day la Business Position/Job Position trong workspace, khac voi system role.
 
 ## 2. Enum dung trong UI
 
@@ -32,9 +33,20 @@ Cap nhat moi cho module HR, giao task ca nhan/nhom, attachment, recommendation v
 - `PLATFORM_ADMIN`: quan tri nen tang, goi subscription, thanh toan, workspace va business owner account khoi tao.
 - `BUSINESS_OWNER`: chu workspace, quan ly nhan vien, task, analytics, AI.
 - `HR`: quan ly ho so nhan su, vi tri cong viec, import nhan vien, tai lieu nhan su.
+- `EXECUTIVE`: xem operation/workload/AI cap dieu hanh theo workspace policy.
 - `MANAGER`: tao va quan ly task, giao viec ca nhan/nhom, xem workload.
 - `EMPLOYEE`: nhan vien, xem task duoc giao, cap nhat tien do, gui daily report.
 - `SYSTEM_ADMIN`, `OWNER`: alias tuong thich nguoc cho du lieu cu.
+
+### PermissionGroup
+
+Dung cho Business Position, khong phai system role rieng:
+
+- `EMPLOYEE`
+- `MANAGER`
+- `EXECUTIVE`
+
+Khong hien `PLATFORM_ADMIN`, `BUSINESS_OWNER`, hoac `HR` trong dropdown permission group cua Business Position.
 
 ### WorkspaceStatus
 
@@ -143,7 +155,7 @@ type User = {
   username: string | null;
   employeeCode: string | null;
   initialPassword: string | null;
-  role: 'OWNER' | 'EMPLOYEE';
+  role: 'PLATFORM_ADMIN' | 'BUSINESS_OWNER' | 'HR' | 'EXECUTIVE' | 'MANAGER' | 'EMPLOYEE' | 'SYSTEM' | 'SYSTEM_ADMIN' | 'OWNER';
   avatar: string | null;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
   jobTitle: string | null;
@@ -425,8 +437,8 @@ type PublicPaymentStatus = {
 | Chon goi dang ky | PATCH | `/api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` | `{ subscriptionPlanId }` | public |
 | Tao giao dich thanh toan | POST | `/api/public/workspace-registrations/{id}/payments?token={registrationToken}` | `{ paymentMethod: 'MOMO' \| 'BANK_TRANSFER' }` | public |
 | Xem payment public | GET | `/api/public/payments/{paymentCode}/status?token={registrationToken}` | none | public |
-| Xem workspace | GET | `/workspaces/current` | none | OWNER |
-| Sua workspace | PUT | `/workspaces/current` | `{ name, shortCode, logo, address }` | OWNER |
+| Xem workspace | GET | `/workspaces/current` | none | BUSINESS_OWNER/HR/EXECUTIVE/MANAGER/EMPLOYEE |
+| Sua workspace | PUT | `/workspaces/current` | `{ name, shortCode, logo, address }` | BUSINESS_OWNER |
 
 Khong dung `/workspaces/register` cho user public nua. Endpoint nay da bi chan de tranh tao workspace/account khi chua thanh toan.
 
@@ -496,7 +508,7 @@ UI System Admin khong duoc hien task detail, task assignment, employee workload 
 
 ### Employees
 
-Tat ca endpoint employees chi danh cho OWNER.
+Employee endpoints danh cho `BUSINESS_OWNER` va `HR`. `OWNER` chi la alias tuong thich nguoc.
 
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
@@ -507,8 +519,8 @@ Tat ca endpoint employees chi danh cho OWNER.
 | Doi trang thai | PATCH | `/employees/{id}/status?status=ACTIVE` | query `status` |
 | Reset mat khau | PATCH | `/employees/{id}/reset-password` | none |
 
-Backend tu sinh `employeeCode` dang `SExxxx`, `username`, va `initialPassword` bang chinh `employeeCode`. UI can hien thi/lap danh sach credential nay cho OWNER sau khi tao nhan vien.
-Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; UI chi hien thi gia tri nay cho OWNER trong modal ket qua reset.
+Backend tu sinh `employeeCode` dang `SExxxx`, `username`, va `initialPassword` bang chinh `employeeCode`. UI can hien thi/lap danh sach credential nay cho `BUSINESS_OWNER/HR` sau khi tao nhan vien.
+Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; UI chi hien thi gia tri nay cho `BUSINESS_OWNER/HR` trong modal ket qua reset.
 
 ### Tasks
 
@@ -530,13 +542,12 @@ Khi reset mat khau employee thanh cong, backend tra lai `User.initialPassword`; 
 
 Quyen:
 
-- OWNER xem tat ca task trong workspace, tao/sua/giao lai/huy task.
-- MANAGER xem tat ca task trong workspace, tao/sua/giao lai task theo API workspace.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER xem tat ca task trong workspace, tao/sua/giao lai/huy task theo service rule.
 - EMPLOYEE chi xem task duoc giao.
-- OWNER hoac assignee co the doi status/cap nhat tien do.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER hoac assignee/participant co the cap nhat tien do theo backend rule.
 - Sua thong tin khach hang:
-  - Task ca nhan: OWNER/MANAGER hoac nhan vien duoc giao duoc sua.
-  - Task nhom: OWNER/MANAGER hoac team leader duoc sua.
+  - Task ca nhan: BUSINESS_OWNER/EXECUTIVE/MANAGER hoac nhan vien duoc giao duoc sua.
+  - Task nhom: BUSINESS_OWNER/EXECUTIVE/MANAGER hoac team leader duoc sua.
   - Team member thuong chi xem, khong hien nut sua.
 
 Luat UI:
@@ -548,7 +559,7 @@ Luat UI:
 
 ### Analytics
 
-Tat ca analytics chi danh cho OWNER.
+Analytics/workload danh cho `BUSINESS_OWNER`, `EXECUTIVE`, `MANAGER`, va `HR` theo backend policy; an action neu service tra business-rule error.
 
 | Man hinh | Method | Path | Data |
 |---|---|---|---|
@@ -558,11 +569,12 @@ Tat ca analytics chi danh cho OWNER.
 
 ### AI
 
-Phan lon endpoint AI danh cho OWNER. Rieng cac endpoint goi y giao viec (`recommend-assignee`, `recommend-team-leaders`, `recommend-team-members`) danh cho OWNER/MANAGER vi day la workflow tao/giao task.
+Phan lon endpoint AI danh cho BUSINESS_OWNER/EXECUTIVE/MANAGER/HR theo route policy. Cac endpoint phan tich/giao viec (`tasks/analyze`, `recommend-assignee`, `recommend-team-leaders`, `recommend-team-members`) danh cho workflow tao/giao task cua BUSINESS_OWNER/EXECUTIVE/MANAGER theo service rule.
 
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
-| Goi y nguoi nhan | POST | `/ai/recommend-assignee` | `{ title, requirements, deadline, estimatedHours }` |
+| Phan tich domain task | POST | `/ai/tasks/analyze` | `{ taskTitle, taskDescription, projectDescription, departmentName, startDate, deadline }` |
+| Goi y nguoi nhan | POST | `/ai/recommend-assignee` | `{ title, requirements, deadline, estimatedHours, departmentId, requiredJobPositionId, requiredSkills, taskDomain }` |
 | Goi y team lead | POST | `/ai/recommend-team-leaders` | `{ title, requirements, deadline, estimatedHours }` |
 | Goi y thanh vien nhom | POST | `/ai/recommend-team-members` | `{ title, requirements, deadline, estimatedHours }` |
 | Tom tat workload | GET | `/ai/workload-summary` | none |
@@ -596,12 +608,12 @@ AI team recommendation note:
 | Danh sach report | GET | `/daily-reports` | none |
 | Tao report | POST | `/daily-reports` | `{ reportDate, todayCompleted, currentWork, blockers, tomorrowPlan }` |
 | Chi tiet report | GET | `/daily-reports/{id}` | none |
-| Owner danh dau da review | PATCH | `/daily-reports/{id}/review` | none |
+| Business owner danh dau da review | PATCH | `/daily-reports/{id}/review` | none |
 
 Quyen:
 
 - EMPLOYEE xem/tao report cua chinh minh.
-- OWNER xem tat ca report va review.
+- BUSINESS_OWNER xem tat ca report va review.
 - Backend chan tao trung report theo ngay cho cung user.
 
 ### Notifications
@@ -630,7 +642,7 @@ Backend tu sinh thong bao van hanh khi goi danh sach notifications: task qua han
 - `/notifications`: danh sach thong bao.
 - `/profile`: thong tin tai khoan hien tai.
 
-### OWNER routes
+### BUSINESS_OWNER routes
 
 - `/owner/dashboard`: tong quan.
 - `/owner/employees`: CRUD nhan vien.
@@ -640,6 +652,17 @@ Backend tu sinh thong bao van hanh khi goi danh sach notifications: task qua han
 - `/owner/analytics/workload`: bang workload.
 - `/owner/ai`: goi y AI, delay risks, summaries.
 
+### HR routes
+
+- `/hr/employees`: CRUD ho so nhan su.
+- `/hr/departments`: department master data.
+- `/hr/business-positions`: business position master data.
+
+### MANAGER/EXECUTIVE routes
+
+- `/manager/tasks`: task/workload workspace.
+- `/manager/ai`: task analysis and recommendations.
+
 ### EMPLOYEE routes
 
 - `/employee/home`: task cua toi + report hom nay + thong bao.
@@ -648,7 +671,9 @@ Backend tu sinh thong bao van hanh khi goi danh sach notifications: task qua han
 
 Sau login, redirect theo role:
 
-- `OWNER` -> `/owner/dashboard`
+- `BUSINESS_OWNER` hoac legacy `OWNER` -> `/owner/dashboard`
+- `HR` -> `/hr/employees`
+- `EXECUTIVE` hoac `MANAGER` -> `/manager/tasks`
 - `EMPLOYEE` -> `/employee/home`
 
 ## 7. Layout va navigation
@@ -658,7 +683,7 @@ Sau login, redirect theo role:
 - User menu gom `Thong tin ca nhan`, `Doi mat khau` va `Dang xuat`.
 - Khi token het han, hien toast `Phien dang nhap da het han` roi chuyen ve `/login`.
 
-Navigation OWNER:
+Navigation BUSINESS_OWNER:
 
 - Dashboard
 - Task
@@ -863,13 +888,13 @@ Filters client-side:
 - Search title/requirements.
 - Status.
 - Priority.
-- Assignee, chi OWNER.
+- Assignee, chi BUSINESS_OWNER/EXECUTIVE/MANAGER.
 - Overdue: `deadline < now` va status khong thuoc `COMPLETED`, `CANCELLED`.
 
 Fields:
 
 - Title.
-- Assignee name, map tu `GET /employees` voi OWNER.
+- Assignee name, map tu `GET /employees` voi BUSINESS_OWNER/HR; manager/executive co the map tu task participants neu employee list bi service chan.
 - Priority badge.
 - Status badge.
 - Progress bar.
@@ -878,8 +903,8 @@ Fields:
 
 Buttons:
 
-- OWNER: `Tao task`, `Sua`, `Giao lai`, `Huy`.
-- OWNER/assignee: `Cap nhat tien do`, `Doi trang thai`.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER: `Tao task`, `Sua`, `Giao lai`, `Huy`.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee: `Cap nhat tien do`, `Doi trang thai`.
 - Shared: `Xem chi tiet`.
 
 ### Task create/edit
@@ -904,14 +929,15 @@ Fields:
 - Start date: optional date-time.
 - Estimated hours: required number >= 1.
 - Difficulty: optional 1-5.
-- Required skills, job position, task domain: optional nhung nen co de AI recommend chinh xac.
+- Required skills, required business position, task domain, department: optional nhung nen co de AI recommend chinh xac. Neu thieu, backend se goi AI task/domain analysis va map ve active department/business-position ID that.
 
 Buttons:
 
 - `Luu task`: create/update.
-- `Goi y nguoi nhan`: goi `POST /ai/recommend-assignee`, chi OWNER.
-- `Goi y team lead`: goi `POST /ai/recommend-team-leaders`, chi OWNER/MANAGER neu form dang la TEAM.
-- `Goi y thanh vien`: goi `POST /ai/recommend-team-members`, chi OWNER/MANAGER neu form dang la TEAM.
+- `Phan tich task`: goi `POST /ai/tasks/analyze` de prefill department, required business position, required skills, task domain.
+- `Goi y nguoi nhan`: goi `POST /ai/recommend-assignee`, chi BUSINESS_OWNER/EXECUTIVE/MANAGER.
+- `Goi y team lead`: goi `POST /ai/recommend-team-leaders`, chi BUSINESS_OWNER/EXECUTIVE/MANAGER neu form dang la TEAM.
+- `Goi y thanh vien`: goi `POST /ai/recommend-team-members`, chi BUSINESS_OWNER/EXECUTIVE/MANAGER neu form dang la TEAM.
 - `Huy`: quay lai list.
 
 AI recommendation panel:
@@ -943,11 +969,11 @@ Buttons:
 - `Bao blocker`: preset `updateType=BLOCKER`.
 - `Hoan thanh`: preset `updateType=COMPLETION`.
 - `Sua thong tin khach hang`: hien khi user co quyen sua customer info.
-- OWNER: `Sua task`, `Giao lai`, `Huy task`.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER: `Sua task`, `Giao lai`, `Huy task`.
 
 Quyen hien nut `Sua thong tin khach hang`:
 
-- OWNER/MANAGER: hien voi moi task trong workspace.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER: hien voi moi task trong workspace.
 - EMPLOYEE voi task `INDIVIDUAL`: hien neu `assigneeId` la user hien tai.
 - EMPLOYEE voi task `TEAM`: hien neu user hien tai la participant co `leader = true` hoac `participantRole = LEADER`.
 - Khong hien cho team member thuong.
@@ -982,7 +1008,7 @@ Review API: `PATCH /daily-reports/{id}/review`
 List fields:
 
 - reportDate.
-- user name, chi OWNER can map user.
+- user name, chi BUSINESS_OWNER/HR can map user qua employee list; role khac dung data co san neu backend tra ve.
 - todayCompleted.
 - currentWork.
 - blockers.
@@ -999,7 +1025,7 @@ Create form:
 Buttons:
 
 - `Gui bao cao`: submit create.
-- OWNER: `Da review`: call review API.
+- BUSINESS_OWNER: `Da review`: call review API.
 - `Xem chi tiet`: open detail.
 
 ### Notifications
@@ -1073,34 +1099,35 @@ Buttons:
 | Thu lai thanh toan | Payment result | Public | `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}` | loading |
 | Dang xuat | User menu | Authenticated | `POST /auth/logout` | loading |
 | Doi mat khau | Profile/User menu | Authenticated | `PATCH /auth/change-password` | form invalid/loading |
-| Them nhan vien | Employees | OWNER | none, mo modal | none |
-| Luu nhan vien | Employee modal | OWNER | `POST /employees` hoac `PUT /employees/{id}` | form invalid/loading |
-| Kich hoat | Employees | OWNER | `PATCH /employees/{id}/status?status=ACTIVE` | user already ACTIVE/loading |
-| Tam ngung | Employees | OWNER | `PATCH /employees/{id}/status?status=INACTIVE` | user already INACTIVE/loading |
-| Reset mat khau nhan vien | Employees | OWNER | `PATCH /employees/{id}/reset-password` | loading |
-| Tao task | Tasks/Dashboard | OWNER | none, route create | no active employee |
-| Luu task | Task form | OWNER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
-| Goi y nguoi nhan | Task form | OWNER | `POST /ai/recommend-assignee` | thieu title/requirements/deadline/loading |
-| Goi y team lead | Task form | OWNER/MANAGER | `POST /ai/recommend-team-leaders` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
-| Goi y thanh vien nhom | Task form | OWNER/MANAGER | `POST /ai/recommend-team-members` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
-| Chon nguoi nay | AI recommendation | OWNER | none, set assignee | employee inactive neu co data |
-| Tao task bang AI | AI center | OWNER | `POST /ai/tasks/extract` | text empty/loading |
-| Chia nho task | Task detail | OWNER | `POST /ai/tasks/{id}/split` | loading |
-| De xuat deadline/priority | Task detail | OWNER | `POST /ai/tasks/{id}/adjust` | loading |
-| Xem action AI | AI center | OWNER | `GET /ai/action-suggestions` | loading |
-| Giao lai | Task detail | OWNER | `PATCH /tasks/{id}/assign` | no assignee/loading |
-| Sua thong tin khach hang | Task detail | OWNER/MANAGER/assignee/leader | `PATCH /tasks/{id}/customer-info` | no permission/loading |
-| Huy task | Task detail | OWNER | `PATCH /tasks/{id}/cancel` | status CANCELLED/COMPLETED/loading |
-| Doi trang thai | Task detail | OWNER/assignee | `PATCH /tasks/{id}/status` | no status/loading |
-| Cap nhat tien do | Task detail | OWNER/assignee | `PATCH /tasks/{id}/progress` | content empty/loading |
-| Bao blocker | Task detail | OWNER/assignee | `PATCH /tasks/{id}/progress` | content empty/loading |
-| Hoan thanh | Task detail | OWNER/assignee | `PATCH /tasks/{id}/progress` | status COMPLETED/loading |
-| Gui bao cao | Daily report form | OWNER/EMPLOYEE | `POST /daily-reports` | form invalid/loading |
-| Da review | Daily report detail | OWNER | `PATCH /daily-reports/{id}/review` | already reviewed/loading |
-| Danh dau da doc | Notifications | OWNER/EMPLOYEE | `PATCH /notifications/{id}/read` | already read/loading |
-| Danh dau tat ca da doc | Notifications | OWNER/EMPLOYEE | `PATCH /notifications/read-all` | no unread/loading |
-| Chap nhan suggestion | AI center | OWNER | `PATCH /ai/suggestions/{id}/status?status=ACCEPTED` | status ACCEPTED/loading |
-| Tu choi suggestion | AI center | OWNER | `PATCH /ai/suggestions/{id}/status?status=REJECTED` | status REJECTED/loading |
+| Them nhan vien | Employees | BUSINESS_OWNER/HR | none, mo modal | none |
+| Luu nhan vien | Employee modal | BUSINESS_OWNER/HR | `POST /employees` hoac `PUT /employees/{id}` | form invalid/loading |
+| Kich hoat | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/status?status=ACTIVE` | user already ACTIVE/loading |
+| Tam ngung | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/status?status=INACTIVE` | user already INACTIVE/loading |
+| Reset mat khau nhan vien | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/reset-password` | loading |
+| Tao task | Tasks/Dashboard | BUSINESS_OWNER/EXECUTIVE/MANAGER | none, route create | no active employee |
+| Luu task | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
+| Phan tich task | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/analyze` | thieu title/description/loading |
+| Goi y nguoi nhan | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/recommend-assignee` | thieu title/requirements/deadline/loading |
+| Goi y team lead | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/recommend-team-leaders` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
+| Goi y thanh vien nhom | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/recommend-team-members` | assignmentType khac TEAM hoac thieu title/requirements/deadline/loading |
+| Chon nguoi nay | AI recommendation | BUSINESS_OWNER/EXECUTIVE/MANAGER | none, set assignee | employee inactive neu co data |
+| Tao task bang AI | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/extract` | text empty/loading |
+| Chia nho task | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/{id}/split` | loading |
+| De xuat deadline/priority | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/{id}/adjust` | loading |
+| Xem action AI | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER/HR | `GET /ai/action-suggestions` | loading |
+| Giao lai | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `PATCH /tasks/{id}/assign` | no assignee/loading |
+| Sua thong tin khach hang | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee/leader | `PATCH /tasks/{id}/customer-info` | no permission/loading |
+| Huy task | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `PATCH /tasks/{id}/cancel` | status CANCELLED/COMPLETED/loading |
+| Doi trang thai | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee | `PATCH /tasks/{id}/status` | no status/loading |
+| Cap nhat tien do | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee | `PATCH /tasks/{id}/progress` | content empty/loading |
+| Bao blocker | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee | `PATCH /tasks/{id}/progress` | content empty/loading |
+| Hoan thanh | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee | `PATCH /tasks/{id}/progress` | status COMPLETED/loading |
+| Gui bao cao | Daily report form | BUSINESS_OWNER/EMPLOYEE | `POST /daily-reports` | form invalid/loading |
+| Da review | Daily report detail | BUSINESS_OWNER | `PATCH /daily-reports/{id}/review` | already reviewed/loading |
+| Danh dau da doc | Notifications | BUSINESS_OWNER/EMPLOYEE | `PATCH /notifications/{id}/read` | already read/loading |
+| Danh dau tat ca da doc | Notifications | BUSINESS_OWNER/EMPLOYEE | `PATCH /notifications/read-all` | no unread/loading |
+| Chap nhan suggestion | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER/HR | `PATCH /ai/suggestions/{id}/status?status=ACCEPTED` | status ACCEPTED/loading |
+| Tu choi suggestion | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER/HR | `PATCH /ai/suggestions/{id}/status?status=REJECTED` | status REJECTED/loading |
 
 ## 10. Form validation
 
@@ -1215,14 +1242,14 @@ src/
 ## 16. Checklist nghiem thu front-end
 
 - Login/logout hoat dong.
-- Register workspace tao duoc workspace va owner.
-- OWNER xem dashboard duoc.
-- OWNER CRUD employee duoc.
-- OWNER tao/sua/giao/huy task duoc.
+- Register workspace tao duoc workspace va business owner.
+- BUSINESS_OWNER xem dashboard duoc.
+- BUSINESS_OWNER/HR CRUD employee duoc.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER tao/sua/giao/huy task duoc.
 - EMPLOYEE chi thay task duoc giao.
-- OWNER/EMPLOYEE cap nhat progress, blocker, completion duoc.
+- BUSINESS_OWNER/EXECUTIVE/MANAGER/EMPLOYEE cap nhat progress, blocker, completion dung quyen duoc.
 - Daily report tao duoc va khong tao trung cung ngay.
-- OWNER review daily report duoc.
+- BUSINESS_OWNER review daily report duoc.
 - Notifications doc duoc va mark read duoc.
 - AI recommendation chon duoc assignee nhung khong auto assign.
 - UI xu ly 401/403 ro rang.

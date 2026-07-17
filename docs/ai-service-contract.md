@@ -207,6 +207,57 @@ Response:
 }
 ```
 
+## POST /internal/ai/tasks/analyze
+
+AI phan tich domain task truoc khi backend goi recommendation. Backend phai truyen danh sach active departments, active business positions va skills that trong workspace; AI khong duoc bia department, business position, skill ngoai input.
+
+Request:
+
+```json
+{
+  "workspaceId": "uuid",
+  "taskTitle": "Build internal management web app",
+  "taskDescription": "Spring Boot API, React UI, PostgreSQL database.",
+  "projectDescription": "Internal operations platform",
+  "departmentName": null,
+  "availableTaskTypes": ["Web Development"],
+  "availableJobPositions": ["Tech Lead", "Backend Java Developer", "Frontend React Developer"],
+  "availableSkills": ["Java", "Spring Boot", "React", "TypeScript", "PostgreSQL"],
+  "availableDepartments": ["Technology", "Business Analysis"],
+  "startDate": "2026-07-17T09:00:00+07:00",
+  "deadline": "2026-07-30T17:00:00+07:00"
+}
+```
+
+Response:
+
+```json
+{
+  "taskType": "Web Development",
+  "taskDomain": "Web Development / Software Engineering",
+  "suggestedDifficulty": "HARD",
+  "suggestedEmployeeLevel": "SENIOR",
+  "requiredSkills": ["Java", "Spring Boot", "React", "TypeScript", "PostgreSQL"],
+  "requiredJobPositions": ["Tech Lead", "Backend Java Developer", "Frontend React Developer"],
+  "relatedDepartment": "Technology",
+  "estimatedWorkingHoursSuggestion": {
+    "value": 120,
+    "reason": "Full-stack internal system with API, UI, and database work.",
+    "confidence": 0.72
+  },
+  "missingInformation": [],
+  "clarifyingQuestions": [],
+  "summary": "Task belongs to web/software engineering and should prioritize Technology positions."
+}
+```
+
+Backend production rules:
+
+- `availableDepartments` comes from workspace `departments` master data with status `ACTIVE`.
+- `availableJobPositions` is a legacy field name for workspace business positions with status `ACTIVE`.
+- Recommendation APIs may call this analysis automatically when FE omits `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`.
+- Backend maps `relatedDepartment` and `requiredJobPositions` back to real workspace IDs before scoring; AI never decides final ranking.
+
 ## POST /internal/ai/tasks/split
 
 Response:

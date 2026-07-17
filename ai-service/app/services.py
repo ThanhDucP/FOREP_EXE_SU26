@@ -266,9 +266,11 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
             "Use jobTitle, seniorityLevel, skillRating, yearsOfExperience, and skills to judge professional fit only when those fields are present. "
             "Never infer missing skills, seniority, job role, or experience from employee name. "
             "If professional profile fields are missing, say the recommendation is based on workload and risk data only. "
-            "Explain score using scoreComponents, especially departmentMatchScore and jobPositionMatchScore first, then workloadLevel, openTasks, overdueTasks, blockedTasks, estimatedWorkload, profile fields, deadline, and estimatedHours. "
+            "Explain score using scoreComponents in this order: departmentSuitabilityScore, businessPositionSuitabilityScore, skillMatchScore or leadExperienceScore, domainExperienceScore/similarTaskExperienceScore, workloadAvailabilityScore, performanceScore. "
             "When the provided candidate data includes leadershipScore, teamMemberScore, leadTaskCount, leadCompletionRate, similarTaskCount, or domainMatchScore, use these fields explicitly to justify team leader or team member suitability. "
-            "For team leader suitability, prioritize department/job-position fit, leadershipScore, lead history, completion rate as leader, domain match, and workload availability. For team member suitability, prioritize department/job-position fit, skill/domain match, teamMemberScore, similar task experience, and workload availability. "
+            "For team leader suitability, explanation order must be department suitability, business position suitability, previous team leader experience, domain experience, skill match, workload/overload risk, then general performance. "
+            "For team member suitability, explanation order must be department suitability, business position suitability, skill match, similar task experience, workload/overload risk, then general performance. "
+            "The backend ranking is final; never reorder candidates or change scores. "
             "Prefer lower workload levels in this order: NO_WORK, LOW, NORMAL, HIGH, OVERLOADED. "
             "Avoid OVERLOADED unless every candidate is OVERLOADED. "
             "Do not rank severe overdue candidates above cleaner suitable candidates. "
@@ -1344,7 +1346,10 @@ def _recommendation_explanation_json(payload: RecommendationExplanationRequest, 
         task=(
             f"Explain backend-ranked {expected_type} recommendations. "
             "Backend already calculated metrics and ranking; do not change rank, candidate IDs, names, or numbers. "
-            "Department and business-position fit are primary ranking signals when present, followed by role fit and workload. "
+            "Department and business-position fit are primary ranking signals when present. "
+            "For TEAM_LEADER explanations, use this exact priority order: department suitability, business position suitability, previous team leader experience, domain experience, skill match, workload and overload risk, general performance. "
+            "For TEAM_MEMBER explanations, use this exact priority order: department suitability, business position suitability, skill match, similar task experience, workload and overload risk, general performance. "
+            "If no candidate has previous leader experience, clearly state that instead of inventing experience. "
             "Use only the task and candidates in the input. Do not recommend unavailable or outside-workspace employees. "
             "Do not claim experience if similarTaskCount is 0. Clearly say when data is insufficient. "
             "Return raw JSON in the exact schema for this recommendation type and no extra fields."
@@ -1416,6 +1421,7 @@ def _validate_member_candidates(items, payload: RecommendationExplanationRequest
 def _candidate_numbers(candidate, numbers):
     numbers.final_ranking_score = candidate.final_ranking_score
     numbers.skill_match_score = candidate.skill_match_score
+    numbers.department_suitability_score = candidate.department_suitability_score
     numbers.role_suitability_score = candidate.role_suitability_score
     numbers.job_position_suitability_score = candidate.job_position_suitability_score
     numbers.leadership_score = candidate.leadership_score

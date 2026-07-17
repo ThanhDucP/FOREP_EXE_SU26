@@ -16,6 +16,7 @@ import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
+import com.forep.exe.dto.Requests.DepartmentRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
@@ -27,6 +28,7 @@ import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
+import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
@@ -36,6 +38,7 @@ import com.forep.exe.dto.Requests.UpdateTaskRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
+import com.forep.exe.domain.Enums.DepartmentStatus;
 import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
@@ -436,6 +439,11 @@ public class ForepController {
         return ApiResponse.ok(service.extractTasks(request));
     }
 
+    @PostMapping("/ai/tasks/analyze")
+    ApiResponse<?> analyzeTaskDomain(@RequestBody @Valid TaskDomainAnalysisRequest request) {
+        return ApiResponse.ok(service.analyzeTaskDomain(request));
+    }
+
     @PostMapping("/ai/tasks/{id}/split")
     ApiResponse<?> splitTask(@PathVariable UUID id) {
         return ApiResponse.ok(service.splitTask(id));
@@ -479,6 +487,36 @@ public class ForepController {
     @GetMapping("/daily-reports")
     ApiResponse<?> reports() {
         return ApiResponse.ok(service.reports());
+    }
+
+    @GetMapping("/hr/departments")
+    ApiResponse<?> departments() {
+        return ApiResponse.ok(service.departments());
+    }
+
+    @GetMapping("/hr/departments/{id}")
+    ApiResponse<?> department(@PathVariable UUID id) {
+        return ApiResponse.ok(service.department(id));
+    }
+
+    @PostMapping("/hr/departments")
+    ApiResponse<?> createDepartment(@RequestBody @Valid DepartmentRequest request) {
+        return ApiResponse.ok(service.createDepartment(request));
+    }
+
+    @PutMapping("/hr/departments/{id}")
+    ApiResponse<?> updateDepartment(@PathVariable UUID id, @RequestBody @Valid DepartmentRequest request) {
+        return ApiResponse.ok(service.updateDepartment(id, request));
+    }
+
+    @PatchMapping("/hr/departments/{id}/activate")
+    ApiResponse<?> activateDepartment(@PathVariable UUID id) {
+        return ApiResponse.ok(service.updateDepartmentStatus(id, DepartmentStatus.ACTIVE));
+    }
+
+    @PatchMapping("/hr/departments/{id}/deactivate")
+    ApiResponse<?> deactivateDepartment(@PathVariable UUID id) {
+        return ApiResponse.ok(service.updateDepartmentStatus(id, DepartmentStatus.INACTIVE));
     }
 
     @GetMapping("/hr/job-positions")

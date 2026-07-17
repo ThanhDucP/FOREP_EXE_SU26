@@ -4,6 +4,7 @@ import com.forep.exe.domain.Enums.AssignmentType;
 import com.forep.exe.domain.Enums.AttachmentType;
 import com.forep.exe.domain.Enums.EmployeeLevel;
 import com.forep.exe.domain.Enums.EmploymentType;
+import com.forep.exe.domain.Enums.DepartmentStatus;
 import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.domain.Enums.Role;
@@ -189,6 +190,8 @@ public final class Requests {
 
     public record JobPositionRequest(
             @NotBlank String title,
+            @NotNull PermissionGroup permissionGroup,
+            @NotNull UUID departmentId,
             String departmentName,
             String description,
             String requiredSkills,
@@ -203,6 +206,14 @@ public final class Requests {
             @NotNull UUID departmentId,
             String description,
             JobPositionStatus status
+    ) {
+    }
+
+    public record DepartmentRequest(
+            @NotBlank String name,
+            String code,
+            String description,
+            DepartmentStatus status
     ) {
     }
 
@@ -235,6 +246,16 @@ public final class Requests {
             UUID departmentId,
             UUID requiredJobPositionId,
             String requiredSkills
+    ) {
+    }
+
+    public record TaskDomainAnalysisRequest(
+            @NotBlank String taskTitle,
+            @NotBlank String taskDescription,
+            String projectDescription,
+            String departmentName,
+            OffsetDateTime startDate,
+            OffsetDateTime deadline
     ) {
     }
 

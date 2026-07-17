@@ -24,6 +24,10 @@ class EmployeeWorkload(StrictModel):
     skill_rating: Optional[int] = Field(default=None, alias="skillRating", ge=1, le=5)
     years_of_experience: Optional[int] = Field(default=None, alias="yearsOfExperience", ge=0)
     skills: Optional[str] = None
+    department_id: Optional[str] = Field(default=None, alias="departmentId")
+    business_position_id: Optional[str] = Field(default=None, alias="businessPositionId")
+    business_position_name: Optional[str] = Field(default=None, alias="businessPositionName")
+    permission_group: Optional[Literal["EMPLOYEE", "MANAGER", "EXECUTIVE"]] = Field(default=None, alias="permissionGroup")
     candidate_score: Optional[int] = Field(default=None, alias="candidateScore")
     leadership_score: Optional[int] = Field(default=None, alias="leadershipScore")
     team_member_score: Optional[int] = Field(default=None, alias="teamMemberScore")
@@ -406,6 +410,7 @@ class RankedCandidate(StrictModel):
     department: Optional[str] = None
     employee_level: Optional[str] = Field(default=None, alias="employeeLevel")
     skill_match_score: float = Field(alias="skillMatchScore")
+    department_suitability_score: float = Field(default=0, alias="departmentSuitabilityScore")
     role_suitability_score: float = Field(alias="roleSuitabilityScore")
     job_position_suitability_score: float = Field(alias="jobPositionSuitabilityScore")
     similar_task_count: int = Field(default=0, alias="similarTaskCount")
@@ -436,6 +441,7 @@ class RecommendationExplanationRequest(WorkspaceScopedRequest):
 class CandidateNumbers(StrictModel):
     final_ranking_score: float = Field(alias="finalRankingScore")
     skill_match_score: Optional[float] = Field(default=None, alias="skillMatchScore")
+    department_suitability_score: Optional[float] = Field(default=None, alias="departmentSuitabilityScore")
     role_suitability_score: Optional[float] = Field(default=None, alias="roleSuitabilityScore")
     similar_task_count: Optional[int] = Field(default=None, alias="similarTaskCount")
     completion_rate: Optional[float] = Field(default=None, alias="completionRate")
@@ -632,4 +638,3 @@ class PlatformAdminSystemSummaryResponse(StrictModel):
     feedback_insights: list[str] = Field(alias="feedbackInsights")
     risks: list[str]
     recommended_actions: list[str] = Field(alias="recommendedActions")
-

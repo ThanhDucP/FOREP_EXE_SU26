@@ -5,7 +5,7 @@ public final class Enums {
     }
 
     public enum Role {
-        PLATFORM_ADMIN, BUSINESS_OWNER, HR, MANAGER, EMPLOYEE, SYSTEM,
+        PLATFORM_ADMIN, BUSINESS_OWNER, HR, EXECUTIVE, MANAGER, EMPLOYEE, SYSTEM,
         SYSTEM_ADMIN, OWNER
     }
 
@@ -62,6 +62,10 @@ public final class Enums {
     }
 
     public enum JobPositionStatus {
+        ACTIVE, INACTIVE
+    }
+
+    public enum DepartmentStatus {
         ACTIVE, INACTIVE
     }
 

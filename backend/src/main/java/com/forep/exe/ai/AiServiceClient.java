@@ -3,6 +3,7 @@ package com.forep.exe.ai;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.forep.exe.domain.Enums.SeniorityLevel;
+import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.domain.Enums.WorkloadLevel;
 import com.forep.exe.service.ForepService.AssigneeRecommendationView;
 import com.forep.exe.service.ForepService.BusinessSummaryView;
@@ -114,6 +115,10 @@ public class AiServiceClient {
 
     public Map<String, Object> extractTasks(Map<String, Object> payload) {
         return post("/internal/ai/tasks/extract", payload, Map.class);
+    }
+
+    public Map<String, Object> analyzeTaskDescription(Map<String, Object> payload) {
+        return post("/internal/ai/tasks/analyze", payload, Map.class);
     }
 
     public Map<String, Object> splitTask(Map<String, Object> payload) {
@@ -310,6 +315,10 @@ public class AiServiceClient {
             Integer skillRating,
             Integer yearsOfExperience,
             String skills,
+            UUID departmentId,
+            UUID businessPositionId,
+            String businessPositionName,
+            PermissionGroup permissionGroup,
             int candidateScore,
             int leadershipScore,
             int teamMemberScore,
@@ -331,6 +340,10 @@ public class AiServiceClient {
                     item.estimatedWorkload().doubleValue(),
                     item.workloadLevel(),
                     "ACTIVE",
+                    null,
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,

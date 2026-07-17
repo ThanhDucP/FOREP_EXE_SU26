@@ -12,6 +12,7 @@ import com.forep.exe.domain.Enums.AiSuggestionStatus;
 import com.forep.exe.domain.Enums.AiSuggestionType;
 import com.forep.exe.domain.Enums.EmployeeLevel;
 import com.forep.exe.domain.Enums.EmploymentType;
+import com.forep.exe.domain.Enums.DepartmentStatus;
 import com.forep.exe.domain.Enums.FeedbackStatus;
 import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.PaymentMethod;
@@ -44,6 +45,7 @@ import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
 import com.forep.exe.dto.Requests.DailyReportRequest;
+import com.forep.exe.dto.Requests.DepartmentRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
@@ -55,6 +57,7 @@ import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
+import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
@@ -73,6 +76,8 @@ import com.forep.exe.persistence.BusinessFeedbackEntity;
 import com.forep.exe.persistence.BusinessFeedbackRepository;
 import com.forep.exe.persistence.DailyReportEntity;
 import com.forep.exe.persistence.DailyReportRepository;
+import com.forep.exe.persistence.DepartmentEntity;
+import com.forep.exe.persistence.DepartmentRepository;
 import com.forep.exe.persistence.JobPositionEntity;
 import com.forep.exe.persistence.JobPositionRepository;
 import com.forep.exe.persistence.NotificationEntity;
@@ -101,6 +106,8 @@ import com.forep.exe.security.SecurityContext;
 import com.forep.exe.service.MomoPaymentService.ProviderPaymentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -146,6 +153,7 @@ public class ForepService {
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
     private final TaskAttachmentRepository taskAttachments;
+    private final DepartmentRepository departments;
     private final JobPositionRepository jobPositions;
     private final AuditLogRepository auditLogs;
     private final PasswordEncoder passwordEncoder;
@@ -170,6 +178,7 @@ public class ForepService {
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
                         TaskAttachmentRepository taskAttachments,
+                        DepartmentRepository departments,
                         JobPositionRepository jobPositions,
                         AuditLogRepository auditLogs,
                         PasswordEncoder passwordEncoder,
@@ -193,6 +202,7 @@ public class ForepService {
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
         this.taskAttachments = taskAttachments;
+        this.departments = departments;
         this.jobPositions = jobPositions;
         this.auditLogs = auditLogs;
         this.passwordEncoder = passwordEncoder;
@@ -272,7 +282,7 @@ public class ForepService {
 
     public List<UserView> employees() {
         requireOwnerOrHr();
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream().map(this::toUserView).toList();
+        return workspaceEmployees(currentUser().workspaceId()).stream().map(this::toUserView).toList();
     }
 
     public UserView createEmployee(CreateEmployeeRequest request) {
@@ -302,7 +312,7 @@ public class ForepService {
         employee.setSkills(request.skills());
         applyEmployeeProfile(employee, request.departmentId(), request.jobPositionId(), request.dateOfBirth(), request.gender(), request.address(), request.personalSummary(), request.employmentType(), request.workingStatus(), request.employeeLevel(), request.monthlyWorkingCapacityHours(), request.mainExpertise(), request.secondaryExpertise());
         employee.setPasswordHash(passwordEncoder.encode(initialPassword));
-        employee.setRole(Role.EMPLOYEE);
+        employee.setRole(roleForBusinessPosition(request.jobPositionId()));
         employee.setStatus(UserStatus.ACTIVE);
         employee.setCreatedAt(now);
         employee.setUpdatedAt(now);
@@ -331,6 +341,7 @@ public class ForepService {
         employee.setYearsOfExperience(request.yearsOfExperience());
         employee.setSkills(request.skills());
         applyEmployeeProfile(employee, request.departmentId(), request.jobPositionId(), request.dateOfBirth(), request.gender(), request.address(), request.personalSummary(), request.employmentType(), request.workingStatus(), request.employeeLevel(), request.monthlyWorkingCapacityHours(), request.mainExpertise(), request.secondaryExpertise());
+        employee.setRole(roleForBusinessPosition(request.jobPositionId()));
         employee.setUpdatedAt(OffsetDateTime.now());
         return toUserView(users.save(employee));
     }
@@ -357,15 +368,40 @@ public class ForepService {
 
     public List<TaskView> tasks() {
         AuthenticatedUser user = currentUser();
-        List<TaskEntity> scoped = isBusinessOwnerRole(user.role()) || user.role() == Role.MANAGER || user.role() == Role.HR
+        List<TaskEntity> scoped = isBusinessOwnerRole(user.role()) || isManagerOrExecutiveRole(user.role()) || user.role() == Role.HR
                 ? tasks.findByWorkspaceIdOrderByCreatedAtDesc(user.workspaceId())
                 : visibleTasksForEmployee(user);
         return scoped.stream().map(this::toTaskView).toList();
     }
 
-    public List<AiHistoryView> aiHistory() {
+    public List<AiHistoryView> aiHistory(String functionName, AiHistoryStatus status, OffsetDateTime from, OffsetDateTime to, String caller, Integer limit, Integer offset) {
         requireOwnerOrHrOrManager();
-        return aiHistory.findByWorkspaceIdOrderByCalledAtDesc(currentUser().workspaceId()).stream().map(this::toAiHistoryView).toList();
+        UUID workspaceId = currentUser().workspaceId();
+        Specification<AiHistoryEntity> spec = (root, query, builder) -> builder.equal(root.get("workspaceId"), workspaceId);
+        if (hasText(functionName)) {
+            String keyword = "%" + functionName.trim().toLowerCase(Locale.ROOT) + "%";
+            spec = spec.and((root, query, builder) -> builder.like(builder.lower(root.get("functionName")), keyword));
+        }
+        if (status != null) {
+            spec = spec.and((root, query, builder) -> builder.equal(root.get("status"), status));
+        }
+        if (from != null) {
+            spec = spec.and((root, query, builder) -> builder.greaterThanOrEqualTo(root.get("calledAt"), from));
+        }
+        if (to != null) {
+            spec = spec.and((root, query, builder) -> builder.lessThanOrEqualTo(root.get("calledAt"), to));
+        }
+        if (hasText(caller)) {
+            String keyword = "%" + caller.trim().toLowerCase(Locale.ROOT) + "%";
+            spec = spec.and((root, query, builder) -> builder.like(builder.lower(root.get("callerName")), keyword));
+        }
+        int safeLimit = Math.max(1, Math.min(limit == null ? 100 : limit, 500));
+        int safeOffset = Math.max(0, offset == null ? 0 : offset);
+        return aiHistory.findAll(spec, Sort.by(Sort.Direction.DESC, "calledAt")).stream()
+                .skip(safeOffset)
+                .limit(safeLimit)
+                .map(this::toAiHistoryView)
+                .toList();
     }
 
     public TaskView createTask(CreateTaskRequest request) {
@@ -387,10 +423,9 @@ public class ForepService {
         task.setEstimatedHours(validEstimatedHours(request.estimatedHours()));
         task.setDifficulty(request.difficulty());
         task.setRequiredSkills(request.requiredSkills());
-        task.setRequiredJobPositionId(request.requiredJobPositionId());
         task.setTaskDomain(request.taskDomain());
         task.setProjectId(request.projectId());
-        task.setDepartmentId(request.departmentId());
+        applyTaskRequirementContext(task, request.departmentId(), request.requiredJobPositionId());
         task.setProgressPercent(0);
         task.setStatus(TaskStatus.ASSIGNED);
         task.setCreatedAt(now);
@@ -427,10 +462,9 @@ public class ForepService {
         task.setEstimatedHours(validEstimatedHours(request.estimatedHours()));
         task.setDifficulty(request.difficulty());
         task.setRequiredSkills(request.requiredSkills());
-        task.setRequiredJobPositionId(request.requiredJobPositionId());
         task.setTaskDomain(request.taskDomain());
         task.setProjectId(request.projectId());
-        task.setDepartmentId(request.departmentId());
+        applyTaskRequirementContext(task, request.departmentId(), request.requiredJobPositionId());
         task.setUpdatedAt(OffsetDateTime.now());
         task = tasks.save(task);
         saveTaskParticipants(task, assignment);
@@ -550,6 +584,51 @@ public class ForepService {
         return toTaskAttachmentView(saveTaskAttachment(task, request));
     }
 
+    public List<DepartmentView> departments() {
+        requireOwnerOrHr();
+        return departments.findByWorkspaceIdOrderByNameAsc(currentUser().workspaceId()).stream().map(this::toDepartmentView).toList();
+    }
+
+    public DepartmentView department(UUID id) {
+        requireOwnerOrHr();
+        return toDepartmentView(requireDepartment(id));
+    }
+
+    public DepartmentView createDepartment(DepartmentRequest request) {
+        requireHr();
+        DepartmentEntity department = new DepartmentEntity();
+        applyDepartmentRequest(department, request);
+        OffsetDateTime now = OffsetDateTime.now();
+        department.setCreatedAt(now);
+        department.setUpdatedAt(now);
+        return toDepartmentView(departments.save(department));
+    }
+
+    public DepartmentView updateDepartment(UUID id, DepartmentRequest request) {
+        requireHr();
+        DepartmentEntity department = requireDepartment(id);
+        applyDepartmentRequest(department, request);
+        department.setUpdatedAt(OffsetDateTime.now());
+        return toDepartmentView(departments.save(department));
+    }
+
+    public DepartmentView updateDepartmentStatus(UUID id, DepartmentStatus status) {
+        requireHr();
+        DepartmentEntity department = requireDepartment(id);
+        if (status == DepartmentStatus.INACTIVE && jobPositions.existsByWorkspaceIdAndDepartmentIdAndStatus(department.getWorkspaceId(), department.getId(), JobPositionStatus.ACTIVE)) {
+            throw new IllegalArgumentException("Không thể deactivate phòng ban khi còn business position ACTIVE. Hãy deactivate các business position trước.");
+        }
+        if (status == DepartmentStatus.INACTIVE && users.existsByWorkspaceIdAndDepartmentIdAndStatus(department.getWorkspaceId(), department.getId(), UserStatus.ACTIVE)) {
+            throw new IllegalArgumentException("Không thể deactivate phòng ban khi còn nhân viên ACTIVE. Hãy chuyển nhân viên sang phòng ban khác trước.");
+        }
+        if (status == DepartmentStatus.INACTIVE && tasks.existsByWorkspaceIdAndDepartmentIdAndStatusIn(department.getWorkspaceId(), department.getId(), openTaskStatuses())) {
+            throw new IllegalArgumentException("Không thể deactivate phòng ban khi còn task chưa hoàn tất đang tham chiếu phòng ban này.");
+        }
+        department.setStatus(status);
+        department.setUpdatedAt(OffsetDateTime.now());
+        return toDepartmentView(departments.save(department));
+    }
+
     public List<JobPositionView> jobPositions() {
         requireOwnerOrHr();
         return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream().map(this::toJobPositionView).toList();
@@ -557,14 +636,14 @@ public class ForepService {
 
     public JobPositionView createJobPosition(JobPositionRequest request) {
         requireHr();
-        JobPositionEntity item = legacyBusinessPosition(null, request.title(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
+        JobPositionEntity item = legacyBusinessPosition(null, request.title(), request.permissionGroup(), request.departmentId(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
         return toJobPositionView(jobPositions.save(item));
     }
 
     public JobPositionView updateJobPosition(UUID id, JobPositionRequest request) {
         requireHr();
         JobPositionEntity item = requireJobPosition(id);
-        item = legacyBusinessPosition(item, request.title(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
+        item = legacyBusinessPosition(item, request.title(), request.permissionGroup(), request.departmentId(), request.departmentName(), request.description(), request.requiredSkills(), request.status());
         return toJobPositionView(jobPositions.save(item));
     }
 
@@ -576,9 +655,15 @@ public class ForepService {
         return toJobPositionView(jobPositions.save(item));
     }
 
-    public List<BusinessPositionView> businessPositions() {
+    public List<BusinessPositionView> businessPositions(String search, UUID departmentId, PermissionGroup permissionGroup, JobPositionStatus status) {
         requireOwnerOrHr();
-        return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream().map(this::toBusinessPositionView).toList();
+        return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream()
+                .filter(position -> !hasText(search) || normalizedSearchText(position.getTitle()).contains(normalizedSearchText(search)))
+                .filter(position -> departmentId == null || departmentId.equals(position.getDepartmentId()))
+                .filter(position -> permissionGroup == null || permissionGroup == position.getPermissionGroup())
+                .filter(position -> status == null || status == position.getStatus())
+                .map(this::toBusinessPositionView)
+                .toList();
     }
 
     public BusinessPositionView businessPosition(UUID id) {
@@ -607,6 +692,12 @@ public class ForepService {
     public BusinessPositionView updateBusinessPositionStatus(UUID id, JobPositionStatus status) {
         requireHr();
         JobPositionEntity item = requireJobPosition(id);
+        if (status == JobPositionStatus.INACTIVE && users.existsByWorkspaceIdAndJobPositionIdAndStatus(item.getWorkspaceId(), item.getId(), UserStatus.ACTIVE)) {
+            throw new IllegalArgumentException("Không thể deactivate business position khi còn nhân viên ACTIVE đang sử dụng vị trí này.");
+        }
+        if (status == JobPositionStatus.INACTIVE && tasks.existsByWorkspaceIdAndRequiredJobPositionIdAndStatusIn(item.getWorkspaceId(), item.getId(), openTaskStatuses())) {
+            throw new IllegalArgumentException("Không thể deactivate business position khi còn task chưa hoàn tất đang yêu cầu vị trí này.");
+        }
         item.setStatus(status);
         item.setUpdatedAt(OffsetDateTime.now());
         return toBusinessPositionView(jobPositions.save(item));
@@ -615,7 +706,8 @@ public class ForepService {
     public List<AssigneeRecommendationView> recommendTeamLeaders(RecommendAssigneeRequest request) {
         requireTaskManager();
         if (request == null) return List.of();
-        List<AiEmployeeWorkload> candidates = assigneeCandidates(request);
+        RecommendAssigneeRequest effectiveRequest = enrichRecommendationRequestWithDomainAnalysis(request);
+        List<AiEmployeeWorkload> candidates = assigneeCandidates(effectiveRequest);
         if (candidates.isEmpty()) return List.of();
         enforceAiUsageLimit();
         List<AssigneeRecommendationView> recommendations = candidates.stream()
@@ -623,14 +715,15 @@ public class ForepService {
                 .limit(3)
                 .map(this::teamLeaderRecommendation)
                 .toList();
-        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, Map.of("type", "TEAM_LEADER", "request", request), recommendations);
+        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, Map.of("type", "TEAM_LEADER", "request", effectiveRequest), recommendations);
         return recommendations;
     }
 
     public List<AssigneeRecommendationView> recommendTeamMembers(RecommendAssigneeRequest request) {
         requireTaskManager();
         if (request == null) return List.of();
-        List<AiEmployeeWorkload> candidates = assigneeCandidates(request);
+        RecommendAssigneeRequest effectiveRequest = enrichRecommendationRequestWithDomainAnalysis(request);
+        List<AiEmployeeWorkload> candidates = assigneeCandidates(effectiveRequest);
         if (candidates.isEmpty()) return List.of();
         enforceAiUsageLimit();
         List<AssigneeRecommendationView> recommendations = candidates.stream()
@@ -638,7 +731,7 @@ public class ForepService {
                 .limit(5)
                 .map(this::teamMemberRecommendation)
                 .toList();
-        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, Map.of("type", "TEAM_MEMBER", "request", request), recommendations);
+        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, Map.of("type", "TEAM_MEMBER", "request", effectiveRequest), recommendations);
         return recommendations;
     }
 
@@ -646,7 +739,7 @@ public class ForepService {
         requireTaskManager();
         YearMonth yearMonth = YearMonth.of(year, month);
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream()
+        return workspaceEmployees(currentUser().workspaceId()).stream()
                 .map(employee -> monthlyWorkloadForEmployee(employee, scopedTasks, yearMonth))
                 .toList();
     }
@@ -671,7 +764,7 @@ public class ForepService {
 
     public List<DailyReportView> reports() {
         AuthenticatedUser user = currentUser();
-        List<DailyReportEntity> scoped = isBusinessOwnerRole(user.role()) || user.role() == Role.MANAGER
+        List<DailyReportEntity> scoped = isBusinessOwnerRole(user.role()) || isManagerOrExecutiveRole(user.role())
                 ? reports.findByWorkspaceIdOrderByReportDateDesc(user.workspaceId())
                 : reports.findByWorkspaceIdAndUserIdOrderByReportDateDesc(user.workspaceId(), user.userId());
         return scoped.stream().map(this::toDailyReportView).toList();
@@ -679,7 +772,7 @@ public class ForepService {
 
     public DailyReportView report(UUID reportId) {
         DailyReportEntity report = requireReport(reportId);
-        if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER && !report.getUserId().equals(currentUser().userId())) {
+        if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role()) && !report.getUserId().equals(currentUser().userId())) {
             throw new IllegalArgumentException("Bạn không có quyền xem báo cáo này.");
         }
         return toDailyReportView(report);
@@ -714,7 +807,7 @@ public class ForepService {
         requireOwner();
         UUID workspaceId = currentUser().workspaceId();
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).stream()
+        return workspaceEmployees(workspaceId).stream()
                 .map(employee -> workloadForEmployee(employee, scopedTasks))
                 .sorted(Comparator.comparing(WorkloadView::workloadScore).reversed())
                 .toList();
@@ -723,18 +816,19 @@ public class ForepService {
     public List<AssigneeRecommendationView> recommendAssignee(RecommendAssigneeRequest request) {
         requireTaskManager();
         if (request == null) return List.of();
-        List<AiEmployeeWorkload> candidates = assigneeCandidates(request);
+        RecommendAssigneeRequest effectiveRequest = enrichRecommendationRequestWithDomainAnalysis(request);
+        List<AiEmployeeWorkload> candidates = assigneeCandidates(effectiveRequest);
         if (candidates.isEmpty()) return List.of();
         enforceAiUsageLimit();
         List<AssigneeRecommendationView> normalized;
         try {
             List<AssigneeRecommendationView> recommendations = aiServiceClient.recommendAssignee(new AiRecommendAssigneeInput(
-                    request.title(),
-                    request.requirements(),
-                    request.deadline().toString(),
-                    request.estimatedHours() == null ? 0 : request.estimatedHours().doubleValue(),
-                    request.departmentId(),
-                    request.requiredJobPositionId(),
+                    effectiveRequest.title(),
+                    effectiveRequest.requirements(),
+                    effectiveRequest.deadline().toString(),
+                    effectiveRequest.estimatedHours() == null ? 0 : effectiveRequest.estimatedHours().doubleValue(),
+                    effectiveRequest.departmentId(),
+                    effectiveRequest.requiredJobPositionId(),
                     candidates
             ));
             normalized = normalizeRecommendations(recommendations, candidates);
@@ -746,7 +840,7 @@ public class ForepService {
             log.warn("AI recommend assignee failed; using rule-based fallback. message={}", fallbackReason(exception));
             normalized = fallbackAssigneeRecommendations(candidates);
         }
-        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, request, normalized);
+        saveAiSuggestion(AiSuggestionType.ASSIGNEE_RECOMMENDATION, effectiveRequest, normalized);
         return normalized;
     }
 
@@ -825,6 +919,23 @@ public class ForepService {
         return output;
     }
 
+    public Map<String, Object> analyzeTaskDomain(TaskDomainAnalysisRequest request) {
+        requireTaskManager();
+        enforceAiUsageLimit();
+        UUID workspaceId = currentUser().workspaceId();
+        Map<String, Object> payload = taskDomainAnalysisPayload(request, workspaceId);
+        try {
+            Map<String, Object> output = aiServiceClient.analyzeTaskDescription(payload);
+            saveAiSuggestion(AiSuggestionType.TASK_EXTRACTION, payload, output);
+            saveAiHistory("TASK_DOMAIN_ANALYSIS", AiHistoryStatus.SUCCESS);
+            return output;
+        } catch (AiProviderException exception) {
+            saveAiHistory("TASK_DOMAIN_ANALYSIS", AiHistoryStatus.FAILED);
+            log.warn("AI task domain analysis failed; using rule-based fallback. message={}", fallbackReason(exception));
+            return fallbackTaskDomainAnalysis(request, workspaceId, exception);
+        }
+    }
+
     public Map<String, Object> extractTasks(ExtractTasksRequest request) {
         requireOwner();
         enforceAiUsageLimit();
@@ -868,7 +979,7 @@ public class ForepService {
                 .toList();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("reportDate", reportDate.toString());
-        payload.put("employees", users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream()
+        payload.put("employees", workspaceEmployees(currentUser().workspaceId()).stream()
                 .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
                 .filter(employee -> !submittedEmployeeIds.contains(employee.getId()))
                 .map(employee -> {
@@ -932,7 +1043,7 @@ public class ForepService {
 
     public NotificationView readNotification(UUID notificationId) {
         NotificationEntity notification = notifications.findById(notificationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy thông báo."));
-        if (!notification.getWorkspaceId().equals(currentUser().workspaceId()) || (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER && !notification.getUserId().equals(currentUser().userId()))) {
+        if (!notification.getWorkspaceId().equals(currentUser().workspaceId()) || (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role()) && !notification.getUserId().equals(currentUser().userId()))) {
             throw new IllegalArgumentException("Bạn không có quyền cập nhật thông báo này.");
         }
         notification.setRead(true);
@@ -1558,10 +1669,195 @@ public class ForepService {
         return assigneeCandidates(null);
     }
 
+    private Map<String, Object> taskDomainAnalysisPayload(TaskDomainAnalysisRequest request, UUID workspaceId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceId", workspaceId.toString());
+        payload.put("taskTitle", request.taskTitle());
+        payload.put("taskDescription", request.taskDescription());
+        payload.put("projectDescription", request.projectDescription());
+        payload.put("departmentName", request.departmentName());
+        payload.put("availableTaskTypes", availableTaskTypes(workspaceId));
+        payload.put("availableJobPositions", availableBusinessPositionNames(workspaceId));
+        payload.put("availableSkills", availableWorkspaceSkills(workspaceId));
+        payload.put("availableDepartments", availableDepartmentNames(workspaceId));
+        payload.put("startDate", request.startDate() == null ? null : request.startDate().toString());
+        payload.put("deadline", request.deadline() == null ? null : request.deadline().toString());
+        return payload;
+    }
+
+    private RecommendAssigneeRequest enrichRecommendationRequestWithDomainAnalysis(RecommendAssigneeRequest request) {
+        if (request == null || (request.departmentId() != null && request.requiredJobPositionId() != null && hasText(request.requiredSkills()) && hasText(request.taskDomain()))) {
+            return request;
+        }
+        UUID workspaceId = currentUser().workspaceId();
+        TaskDomainAnalysisRequest analysisRequest = new TaskDomainAnalysisRequest(
+                request.title(),
+                request.requirements(),
+                request.taskDomain(),
+                null,
+                null,
+                request.deadline()
+        );
+        Map<String, Object> analysis;
+        try {
+            enforceAiUsageLimit();
+            analysis = aiServiceClient.analyzeTaskDescription(taskDomainAnalysisPayload(analysisRequest, workspaceId));
+            saveAiHistory("TASK_DOMAIN_ANALYSIS_FOR_RECOMMENDATION", AiHistoryStatus.SUCCESS);
+        } catch (AiProviderException exception) {
+            saveAiHistory("TASK_DOMAIN_ANALYSIS_FOR_RECOMMENDATION", AiHistoryStatus.FAILED);
+            log.warn("AI task domain analysis before recommendation failed; using request as-is. message={}", fallbackReason(exception));
+            analysis = fallbackTaskDomainAnalysis(analysisRequest, workspaceId, exception);
+        }
+        UUID departmentId = request.departmentId() == null ? resolveDepartmentId(workspaceId, stringValue(analysis.get("relatedDepartment"))) : request.departmentId();
+        UUID jobPositionId = request.requiredJobPositionId() == null ? resolveBusinessPositionId(workspaceId, stringList(analysis.get("requiredJobPositions"))) : request.requiredJobPositionId();
+        String requiredSkills = hasText(request.requiredSkills()) ? request.requiredSkills() : String.join(", ", stringList(analysis.get("requiredSkills")));
+        String taskDomain = hasText(request.taskDomain()) ? request.taskDomain() : stringValue(analysis.get("taskDomain"));
+        return new RecommendAssigneeRequest(
+                request.title(),
+                request.requirements(),
+                request.deadline(),
+                request.estimatedHours(),
+                taskDomain,
+                departmentId,
+                jobPositionId,
+                requiredSkills
+        );
+    }
+
+    private UUID resolveDepartmentId(UUID workspaceId, String departmentName) {
+        if (!hasText(departmentName)) return null;
+        String normalized = normalizedSearchText(departmentName);
+        return departments.findByWorkspaceIdAndStatusOrderByNameAsc(workspaceId, DepartmentStatus.ACTIVE).stream()
+                .filter(department -> normalizedSearchText(department.getName()).equals(normalized))
+                .map(DepartmentEntity::getId)
+                .findFirst()
+                .orElseGet(() -> departments.findByWorkspaceIdAndStatusOrderByNameAsc(workspaceId, DepartmentStatus.ACTIVE).stream()
+                        .filter(department -> textOverlapCount(normalized, normalizedSearchText(department.getName())) > 0)
+                        .map(DepartmentEntity::getId)
+                        .findFirst()
+                        .orElse(null));
+    }
+
+    private UUID resolveBusinessPositionId(UUID workspaceId, List<String> positionNames) {
+        if (positionNames == null || positionNames.isEmpty()) return null;
+        List<JobPositionEntity> activePositions = jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).stream()
+                .filter(position -> position.getStatus() == JobPositionStatus.ACTIVE)
+                .toList();
+        for (String name : positionNames) {
+            String normalized = normalizedSearchText(name);
+            UUID exactMatch = activePositions.stream()
+                    .filter(position -> normalizedSearchText(position.getTitle()).equals(normalized))
+                    .map(JobPositionEntity::getId)
+                    .findFirst()
+                    .orElse(null);
+            if (exactMatch != null) return exactMatch;
+        }
+        for (String name : positionNames) {
+            String normalized = normalizedSearchText(name);
+            UUID fuzzyMatch = activePositions.stream()
+                    .filter(position -> textOverlapCount(normalized, normalizedSearchText(position.getTitle())) > 0)
+                    .map(JobPositionEntity::getId)
+                    .findFirst()
+                    .orElse(null);
+            if (fuzzyMatch != null) return fuzzyMatch;
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).filter(this::hasText).toList();
+        }
+        return hasText(stringValue(value)) ? List.of(stringValue(value)) : List.of();
+    }
+
+    private List<String> availableTaskTypes(UUID workspaceId) {
+        return tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
+                .map(TaskEntity::getTaskDomain)
+                .filter(this::hasText)
+                .map(String::trim)
+                .distinct()
+                .limit(50)
+                .toList();
+    }
+
+    private List<String> availableBusinessPositionNames(UUID workspaceId) {
+        return jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).stream()
+                .filter(position -> position.getStatus() == JobPositionStatus.ACTIVE)
+                .map(JobPositionEntity::getTitle)
+                .filter(this::hasText)
+                .map(String::trim)
+                .distinct()
+                .limit(100)
+                .toList();
+    }
+
+    private List<String> availableDepartmentNames(UUID workspaceId) {
+        return departments.findByWorkspaceIdAndStatusOrderByNameAsc(workspaceId, DepartmentStatus.ACTIVE).stream()
+                .map(DepartmentEntity::getName)
+                .limit(100)
+                .toList();
+    }
+
+    private List<String> availableWorkspaceSkills(UUID workspaceId) {
+        Set<String> skills = new LinkedHashSet<>();
+        workspaceEmployees(workspaceId).forEach(employee -> addDelimitedValues(skills, employee.getSkills()));
+        jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).forEach(position -> addDelimitedValues(skills, position.getRequiredSkills()));
+        return skills.stream().limit(150).toList();
+    }
+
+    private void addDelimitedValues(Set<String> values, String rawValue) {
+        if (!hasText(rawValue)) return;
+        Arrays.stream(rawValue.split("[,;\\n]"))
+                .map(String::trim)
+                .filter(this::hasText)
+                .forEach(values::add);
+    }
+
+    private Map<String, Object> fallbackTaskDomainAnalysis(TaskDomainAnalysisRequest request, UUID workspaceId, AiProviderException exception) {
+        List<String> positions = availableBusinessPositionNames(workspaceId);
+        List<String> departments = availableDepartmentNames(workspaceId);
+        List<String> skills = availableWorkspaceSkills(workspaceId);
+        String text = normalizedSearchText(request.taskTitle() + " " + request.taskDescription() + " " + (request.projectDescription() == null ? "" : request.projectDescription()));
+        List<String> matchingPositions = positions.stream()
+                .filter(position -> textOverlapCount(text, normalizedSearchText(position)) > 0)
+                .limit(8)
+                .toList();
+        List<String> matchingSkills = skills.stream()
+                .filter(skill -> textOverlapCount(text, normalizedSearchText(skill)) > 0)
+                .limit(12)
+                .toList();
+        String relatedDepartment = departments.stream()
+                .filter(department -> textOverlapCount(text, normalizedSearchText(department)) > 0)
+                .findFirst()
+                .orElse(departments.isEmpty() ? "UNKNOWN" : departments.getFirst());
+        Map<String, Object> hours = new LinkedHashMap<>();
+        hours.put("value", null);
+        hours.put("reason", "AI service unavailable; estimated hours require manual confirmation.");
+        hours.put("confidence", 0);
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("taskType", "UNKNOWN");
+        output.put("taskDomain", hasText(request.departmentName()) ? request.departmentName() : relatedDepartment);
+        output.put("suggestedDifficulty", "MEDIUM");
+        output.put("suggestedEmployeeLevel", "MIDDLE");
+        output.put("requiredSkills", matchingSkills);
+        output.put("requiredJobPositions", matchingPositions);
+        output.put("relatedDepartment", relatedDepartment);
+        output.put("estimatedWorkingHoursSuggestion", hours);
+        output.put("missingInformation", request.deadline() == null ? List.of("deadline") : List.of());
+        output.put("clarifyingQuestions", List.of("Please confirm task domain, required business positions, required skills, and estimated hours."));
+        output.put("summary", "Fallback analysis based only on existing workspace departments, business positions, and skills. Reason: " + fallbackReason(exception));
+        return output;
+    }
+
     private List<AiEmployeeWorkload> assigneeCandidates(RecommendAssigneeRequest request) {
         UUID workspaceId = currentUser().workspaceId();
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).stream()
+        return workspaceEmployees(workspaceId).stream()
                 .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
                 .map(employee -> {
                     WorkloadView workload = workloadForEmployee(employee, scopedTasks);
@@ -1573,6 +1869,9 @@ public class ForepService {
                     double leadCompletionRate = leadTaskCount == 0 ? 0 : leadCompletedTasks * 1.0 / leadTaskCount;
                     int similarTaskCount = similarTaskCount(employee, scopedTasks, request);
                     int domainMatchScore = domainMatchScore(request, employee);
+                    JobPositionEntity businessPosition = employee.getJobPositionId() == null ? null : jobPositions.findById(employee.getJobPositionId())
+                            .filter(position -> position.getWorkspaceId().equals(workspaceId))
+                            .orElse(null);
                     return new AiEmployeeWorkload(
                             workload.employeeId().toString(),
                             workload.fullName(),
@@ -1588,6 +1887,10 @@ public class ForepService {
                             employee.getSkillRating(),
                             employee.getYearsOfExperience(),
                             employee.getSkills(),
+                            employee.getDepartmentId(),
+                            employee.getJobPositionId(),
+                            businessPosition == null ? null : businessPosition.getTitle(),
+                            businessPosition == null ? null : businessPosition.getPermissionGroup(),
                             (int) scoreComponents.get("candidateScore"),
                             leadershipScore,
                             teamMemberScore,
@@ -1618,6 +1921,12 @@ public class ForepService {
         int departmentMatchScore = departmentMatchScore(request, employee);
         int jobPositionMatchScore = jobPositionMatchScore(request, employee);
         int taskProfileMatchScore = taskProfileMatchScore(request, employee);
+        int departmentSuitabilityScore = departmentSuitabilityScore(request, employee);
+        int businessPositionSuitabilityScore = businessPositionSuitabilityScore(request, employee);
+        int skillMatchScore = clampScore((int) Math.round(taskProfileMatchScore * 100.0 / 30.0));
+        int workloadAvailabilityScore = workloadAvailabilityScore(workload);
+        int performanceScore = performanceScore(workload);
+        int domainExperienceScore = clampScore(domainMatchScore(request, employee) * 5);
         boolean taskNeedsProfileFit = request != null && hasText(request.title() + " " + request.requirements());
         boolean employeeHasProfile = hasText(employee.getJobTitle()) || hasText(employee.getSkills());
         int profileMismatchPenalty = taskNeedsProfileFit && employeeHasProfile && taskProfileMatchScore == 0 ? 55 : 0;
@@ -1655,6 +1964,12 @@ public class ForepService {
         components.put("experiencePenalty", experiencePenalty);
         components.put("profilePenalty", profilePenalty);
         components.put("taskProfileMatchScore", taskProfileMatchScore);
+        components.put("departmentSuitabilityScore", departmentSuitabilityScore);
+        components.put("businessPositionSuitabilityScore", businessPositionSuitabilityScore);
+        components.put("skillMatchScore", skillMatchScore);
+        components.put("workloadAvailabilityScore", workloadAvailabilityScore);
+        components.put("performanceScore", performanceScore);
+        components.put("domainExperienceScore", domainExperienceScore);
         return components;
     }
 
@@ -1663,29 +1978,30 @@ public class ForepService {
         long completedLedTasks = ledTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
         long overdueLedTasks = ledTasks.stream().filter(this::isOverdue).count();
         double completionRate = ledTasks.isEmpty() ? 0 : completedLedTasks * 1.0 / ledTasks.size();
-        int profileScore = 100 - seniorityPenalty(employee.getSeniorityLevel()) - experiencePenalty(employee.getYearsOfExperience()) - skillRatingPenalty(employee.getSkillRating());
-        int leadHistoryScore = (int) Math.min(25, ledTasks.size() * 5);
-        int completionScore = (int) Math.round(completionRate * 25);
-        int domainScore = domainMatchScore(request, employee);
-        int departmentScore = numberComponent(scoreComponents, "departmentMatchScore");
-        int jobPositionScore = numberComponent(scoreComponents, "jobPositionMatchScore");
-        int profileMatchScore = numberComponent(scoreComponents, "taskProfileMatchScore");
-        int workloadPenalty = numberComponent(scoreComponents, "workloadLevelPenalty") + (int) Math.round(numberComponent(scoreComponents, "estimatedWorkloadPenalty") / 2.0);
-        int overduePenalty = (int) Math.min(25, overdueLedTasks * 8 + numberComponent(scoreComponents, "overdueTasksPenalty") / 2);
-        int structuralScore = departmentScore + jobPositionScore;
-        return clampScore(profileScore / 2 + leadHistoryScore + completionScore + domainScore + profileMatchScore + structuralScore - workloadPenalty - overduePenalty);
+        int leadExperienceScore = clampScore((int) Math.min(100, ledTasks.size() * 12 + Math.round(completionRate * 50) - overdueLedTasks * 10));
+        scoreComponents.put("leadExperienceScore", leadExperienceScore);
+        return weightedScore(
+                numberComponent(scoreComponents, "departmentSuitabilityScore"), 25,
+                numberComponent(scoreComponents, "businessPositionSuitabilityScore"), 25,
+                leadExperienceScore, 15,
+                numberComponent(scoreComponents, "domainExperienceScore"), 15,
+                numberComponent(scoreComponents, "skillMatchScore"), 10,
+                numberComponent(scoreComponents, "workloadAvailabilityScore"), 5,
+                numberComponent(scoreComponents, "performanceScore"), 5
+        );
     }
 
     private int teamMemberScore(UserEntity employee, List<TaskEntity> scopedTasks, RecommendAssigneeRequest request, Map<String, Object> scoreComponents) {
-        int base = numberComponent(scoreComponents, "candidateScore");
-        int domainScore = domainMatchScore(request, employee);
-        int similarScore = Math.min(15, similarTaskCount(employee, scopedTasks, request) * 3);
-        int profileMismatchPenalty = numberComponent(scoreComponents, "profileMismatchPenalty");
-        int missingProfilePenalty = numberComponent(scoreComponents, "missingProfilePenalty");
-        int departmentScore = numberComponent(scoreComponents, "departmentMatchScore");
-        int jobPositionScore = numberComponent(scoreComponents, "jobPositionMatchScore");
-        int structuralScore = departmentScore + jobPositionScore;
-        return clampScore(base + structuralScore + domainScore + similarScore - profileMismatchPenalty / 2 - missingProfilePenalty / 3);
+        int similarTaskExperienceScore = clampScore(Math.min(100, similarTaskCount(employee, scopedTasks, request) * 20));
+        scoreComponents.put("similarTaskExperienceScore", similarTaskExperienceScore);
+        return weightedScore(
+                numberComponent(scoreComponents, "departmentSuitabilityScore"), 25,
+                numberComponent(scoreComponents, "businessPositionSuitabilityScore"), 25,
+                numberComponent(scoreComponents, "skillMatchScore"), 20,
+                similarTaskExperienceScore, 10,
+                numberComponent(scoreComponents, "workloadAvailabilityScore"), 10,
+                numberComponent(scoreComponents, "performanceScore"), 10
+        );
     }
 
     private int departmentMatchScore(RecommendAssigneeRequest request, UserEntity employee) {
@@ -1700,6 +2016,35 @@ public class ForepService {
             return 0;
         }
         return request.requiredJobPositionId().equals(employee.getJobPositionId()) ? 30 : 0;
+    }
+
+    private int departmentSuitabilityScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.departmentId() == null) return 50;
+        return request.departmentId().equals(employee.getDepartmentId()) ? 100 : 0;
+    }
+
+    private int businessPositionSuitabilityScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.requiredJobPositionId() == null) return 50;
+        return request.requiredJobPositionId().equals(employee.getJobPositionId()) ? 100 : 0;
+    }
+
+    private int workloadAvailabilityScore(WorkloadView workload) {
+        int base = switch (workload.workloadLevel()) {
+            case NO_WORK -> 100;
+            case LOW -> 85;
+            case NORMAL -> 65;
+            case HIGH -> 35;
+            case OVERLOADED -> 0;
+        };
+        return clampScore((int) Math.round(base - workload.overdueTasks() * 12 - workload.blockedTasks() * 8));
+    }
+
+    private int performanceScore(WorkloadView workload) {
+        long total = workload.completedTasks() + workload.overdueTasks() + workload.blockedTasks();
+        if (total == 0) return 50;
+        double completionRate = workload.completedTasks() * 1.0 / total;
+        double riskRate = (workload.overdueTasks() + workload.blockedTasks()) * 1.0 / total;
+        return clampScore((int) Math.round(completionRate * 100 - riskRate * 40));
     }
 
     private List<TaskEntity> leadTasks(UserEntity employee, List<TaskEntity> scopedTasks) {
@@ -1752,6 +2097,22 @@ public class ForepService {
         return Math.max(0, Math.min(100, value));
     }
 
+    private int weightedScore(int scoreA, int weightA, int scoreB, int weightB, int scoreC, int weightC, int scoreD, int weightD, int scoreE, int weightE, int scoreF, int weightF, int scoreG, int weightG) {
+        return clampScore((int) Math.round((
+                scoreA * weightA
+                        + scoreB * weightB
+                        + scoreC * weightC
+                        + scoreD * weightD
+                        + scoreE * weightE
+                        + scoreF * weightF
+                        + scoreG * weightG
+        ) / 100.0));
+    }
+
+    private int weightedScore(int scoreA, int weightA, int scoreB, int weightB, int scoreC, int weightC, int scoreD, int weightD, int scoreE, int weightE, int scoreF, int weightF) {
+        return weightedScore(scoreA, weightA, scoreB, weightB, scoreC, weightC, scoreD, weightD, scoreE, weightE, scoreF, weightF, 0, 0);
+    }
+
     private int seniorityPenalty(SeniorityLevel seniorityLevel) {
         if (seniorityLevel == null) return 4;
         return switch (seniorityLevel) {
@@ -1800,17 +2161,7 @@ public class ForepService {
         return candidates.stream()
                 .sorted(Comparator.comparing(AiEmployeeWorkload::candidateScore).reversed())
                 .limit(3)
-                .map(candidate -> new AssigneeRecommendationView(
-                        UUID.fromString(candidate.employeeId()),
-                        displayText(candidate.fullName()),
-                        candidate.candidateScore(),
-                        candidate.workloadLevel(),
-                        null,
-                        roleFitLabel(candidate),
-                        fallbackRoleFitReason(candidate),
-                        fallbackAssigneeReason(candidate),
-                        fallbackAssigneeRisk(candidate)
-                ))
+                .map(candidate -> recommendationView(candidate, candidate.candidateScore(), null, roleFitLabel(candidate), fallbackRoleFitReason(candidate), fallbackAssigneeReason(candidate), fallbackAssigneeRisk(candidate)))
                 .toList();
     }
 
@@ -1830,17 +2181,7 @@ public class ForepService {
                 : candidate.overdueTasks() > 0
                 ? "Rủi ro trung bình: ứng viên leader còn task quá hạn."
                 : "Không có rủi ro lớn cho vai trò leader.";
-        return new AssigneeRecommendationView(
-                UUID.fromString(candidate.employeeId()),
-                displayText(candidate.fullName()),
-                candidate.leadershipScore(),
-                candidate.workloadLevel(),
-                "TEAM_LEADER",
-                roleFitLabel(candidate),
-                fallbackRoleFitReason(candidate),
-                reason,
-                risk
-        );
+        return recommendationView(candidate, candidate.leadershipScore(), "TEAM_LEADER", roleFitLabel(candidate), fallbackRoleFitReason(candidate), reason, risk);
     }
 
     private AssigneeRecommendationView teamMemberRecommendation(AiEmployeeWorkload candidate) {
@@ -1860,16 +2201,36 @@ public class ForepService {
                 : candidate.overdueTasks() > 0
                 ? "Rủi ro trung bình: thành viên còn task quá hạn."
                 : "Không có rủi ro lớn cho vai trò member.";
+        return recommendationView(candidate, candidate.teamMemberScore(), "TEAM_MEMBER", roleFitLabel(candidate), fallbackRoleFitReason(candidate), reason, risk);
+    }
+
+    private AssigneeRecommendationView recommendationView(AiEmployeeWorkload candidate, int score, String requiredRole, String roleFit, String roleFitReason, String reason, String risk) {
         return new AssigneeRecommendationView(
                 UUID.fromString(candidate.employeeId()),
                 displayText(candidate.fullName()),
-                candidate.teamMemberScore(),
+                score,
                 candidate.workloadLevel(),
-                "TEAM_MEMBER",
-                roleFitLabel(candidate),
-                fallbackRoleFitReason(candidate),
+                requiredRole,
+                roleFit,
+                roleFitReason,
                 reason,
-                risk
+                risk,
+                candidate.departmentId(),
+                candidate.businessPositionId(),
+                candidate.businessPositionName(),
+                candidate.permissionGroup(),
+                numberComponent(candidate, "departmentSuitabilityScore"),
+                numberComponent(candidate, "businessPositionSuitabilityScore"),
+                numberComponent(candidate, "leadExperienceScore"),
+                numberComponent(candidate, "domainExperienceScore"),
+                numberComponent(candidate, "skillMatchScore"),
+                numberComponent(candidate, "similarTaskExperienceScore"),
+                numberComponent(candidate, "workloadAvailabilityScore"),
+                numberComponent(candidate, "performanceScore"),
+                candidate.leadTaskCount(),
+                candidate.leadCompletionRate(),
+                candidate.similarTaskCount(),
+                candidate.scoreComponents()
         );
     }
 
@@ -2067,17 +2428,7 @@ public class ForepService {
                 .filter(item -> candidateById.containsKey(item.employeeId()))
                 .map(item -> {
                     AiEmployeeWorkload candidate = candidateById.get(item.employeeId());
-                    return new AssigneeRecommendationView(
-                            item.employeeId(),
-                            displayText(candidate.fullName()),
-                            candidate.candidateScore(),
-                            candidate.workloadLevel(),
-                            item.requiredRole(),
-                            item.roleFit(),
-                            item.roleFitReason(),
-                            item.reason(),
-                            item.risk()
-                    );
+                    return recommendationView(candidate, candidate.candidateScore(), item.requiredRole(), item.roleFit(), item.roleFitReason(), item.reason(), item.risk());
                 })
                 .limit(3)
                 .toList();
@@ -2404,7 +2755,7 @@ public class ForepService {
                 .filter(report -> report.getReportDate().equals(LocalDate.now()))
                 .map(DailyReportEntity::getUserId)
                 .collect(java.util.stream.Collectors.toSet());
-        for (UserEntity employee : users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).stream()
+        for (UserEntity employee : workspaceEmployees(workspaceId).stream()
                 .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
                 .filter(employee -> !submittedToday.contains(employee.getId()))
                 .toList()) {
@@ -2667,7 +3018,7 @@ public class ForepService {
                 .filter(report -> report.getReportDate().equals(reportDate))
                 .map(DailyReportEntity::getUserId)
                 .toList();
-        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.EMPLOYEE).stream()
+        return workspaceEmployees(currentUser().workspaceId()).stream()
                 .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
                 .filter(employee -> !submitted.contains(employee.getId()))
                 .count();
@@ -2737,6 +3088,9 @@ public class ForepService {
 
     private boolean isOpenTask(TaskEntity task) {
         return !List.of(TaskStatus.COMPLETED, TaskStatus.CANCELLED).contains(task.getStatus());
+    }
+    private List<TaskStatus> openTaskStatuses() {
+        return List.of(TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED);
     }
 
     private List<TaskEntity> visibleTasksForEmployee(AuthenticatedUser user) {
@@ -2831,8 +3185,18 @@ public class ForepService {
     }
 
     private void applyEmployeeProfile(UserEntity employee, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise) {
-        employee.setDepartmentId(departmentId);
-        employee.setJobPositionId(jobPositionId);
+        if (jobPositionId != null) {
+            JobPositionEntity position = requireActiveBusinessPosition(jobPositionId);
+            if (departmentId != null && !departmentId.equals(position.getDepartmentId())) {
+                throw new IllegalArgumentException("Phòng ban phải khớp với business position.");
+            }
+            employee.setDepartmentId(position.getDepartmentId());
+            employee.setJobPositionId(position.getId());
+        } else {
+            if (departmentId != null) requireActiveDepartment(departmentId);
+            employee.setDepartmentId(departmentId);
+            employee.setJobPositionId(null);
+        }
         employee.setDateOfBirth(dateOfBirth);
         employee.setGender(gender);
         employee.setAddress(address);
@@ -2843,6 +3207,21 @@ public class ForepService {
         employee.setMonthlyWorkingCapacityHours(monthlyWorkingCapacityHours == null ? 168 : monthlyWorkingCapacityHours);
         employee.setMainExpertise(mainExpertise);
         employee.setSecondaryExpertise(secondaryExpertise);
+    }
+
+    private void applyTaskRequirementContext(TaskEntity task, UUID departmentId, UUID requiredJobPositionId) {
+        if (requiredJobPositionId != null) {
+            JobPositionEntity position = requireActiveBusinessPosition(requiredJobPositionId);
+            if (departmentId != null && !departmentId.equals(position.getDepartmentId())) {
+                throw new IllegalArgumentException("Task department phải khớp với required business position.");
+            }
+            task.setDepartmentId(position.getDepartmentId());
+            task.setRequiredJobPositionId(position.getId());
+        } else {
+            if (departmentId != null) requireActiveDepartment(departmentId);
+            task.setDepartmentId(departmentId);
+            task.setRequiredJobPositionId(null);
+        }
     }
 
     private MonthlyWorkloadView monthlyWorkloadForEmployee(UserEntity employee, List<TaskEntity> scopedTasks, YearMonth month) {
@@ -2876,7 +3255,7 @@ public class ForepService {
 
     private void requireCanUpdateTaskCustomerInfo(TaskEntity task) {
         AuthenticatedUser user = currentUser();
-        if (isBusinessOwnerRole(user.role()) || user.role() == Role.MANAGER) {
+        if (isBusinessOwnerRole(user.role()) || isManagerOrExecutiveRole(user.role())) {
             return;
         }
         if (task.getAssignmentType() == AssignmentType.INDIVIDUAL && user.userId().equals(task.getAssigneeId())) {
@@ -2979,7 +3358,7 @@ public class ForepService {
                         createNotificationIfAbsent(task.getWorkspaceId(), task.getAssigneeId(), "DEADLINE_SOON", "Deadline sắp đến", "Task " + task.getTitle() + " sắp đến deadline.", "TASK", task.getId());
                     }
                 });
-        users.findByWorkspaceIdAndRoleOrderByFullNameAsc(workspaceId, Role.EMPLOYEE).forEach(employee -> {
+        workspaceEmployees(workspaceId).forEach(employee -> {
             if (reports.findByWorkspaceIdAndUserIdAndReportDate(workspaceId, employee.getId(), today).isEmpty()) {
                 createNotificationIfAbsent(workspaceId, employee.getId(), "DAILY_REPORT_MISSING_" + today, "Chưa gửi báo cáo hôm nay", "Bạn chưa gửi daily report cho ngày hôm nay.", "USER", employee.getId());
             }
@@ -3375,11 +3754,12 @@ public class ForepService {
     private void requireOwner() { if (!isBusinessOwnerRole(currentUser().role())) throw new IllegalArgumentException("Chỉ OWNER được sử dụng chức năng này."); }
     private void requireOwnerOrHr() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ Business Owner hoặc HR được sử dụng chức năng này."); }
     private void requireHr() { if (currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ HR được sử dụng chức năng này."); }
-    private void requireOwnerOrHrOrManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR && currentUser().role() != Role.MANAGER) throw new IllegalArgumentException("Chỉ Business Owner, HR hoặc Manager được sử dụng chức năng này."); }
-    private void requireTaskManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER) throw new IllegalArgumentException("Chỉ Business Owner hoặc Manager được sử dụng chức năng này."); }
+    private void requireOwnerOrHrOrManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR && !isManagerOrExecutiveRole(currentUser().role())) throw new IllegalArgumentException("Chỉ Business Owner, HR, Executive hoặc Manager được sử dụng chức năng này."); }
+    private void requireTaskManager() { if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role())) throw new IllegalArgumentException("Chỉ Business Owner, Executive hoặc Manager được sử dụng chức năng này."); }
     private void requireSystemAdmin() { if (!isPlatformAdminRole(currentUser().role())) throw new IllegalArgumentException("Chỉ System Admin được sử dụng chức năng này."); }
     private boolean isPlatformAdminRole(Role role) { return role == Role.PLATFORM_ADMIN || role == Role.SYSTEM_ADMIN || role == Role.SYSTEM; }
     private boolean isBusinessOwnerRole(Role role) { return role == Role.BUSINESS_OWNER || role == Role.OWNER; }
+    private boolean isManagerOrExecutiveRole(Role role) { return role == Role.MANAGER || role == Role.EXECUTIVE; }
     private UserEntity currentUserEntity() { return users.findById(currentUser().userId()).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy người dùng hiện tại.")); }
     private WorkspaceEntity requireWorkspace(UUID workspaceId) { return workspaces.findById(workspaceId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy workspace.")); }
     private SubscriptionPlanEntity requireSubscriptionPlan(UUID planId) { return subscriptionPlans.findById(planId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy gói subscription.")); }
@@ -3401,9 +3781,27 @@ public class ForepService {
     private String temporaryPassword(WorkspaceEntity workspace) {
         return (workspace.getShortCode() == null ? "OWNER" : workspace.getShortCode()) + "Owner" + String.format("%04d", currentWorkspaceUserCount(workspace.getId()) + 1);
     }
+    private List<Role> workforceRoles() {
+        return List.of(Role.EMPLOYEE, Role.MANAGER, Role.EXECUTIVE);
+    }
+    private List<UserEntity> workspaceEmployees(UUID workspaceId) {
+        return users.findByWorkspaceIdAndRoleInOrderByFullNameAsc(workspaceId, workforceRoles());
+    }
+    private boolean isWorkforceRole(Role role) {
+        return workforceRoles().contains(role);
+    }
+    private Role roleForBusinessPosition(UUID jobPositionId) {
+        if (jobPositionId == null) return Role.EMPLOYEE;
+        JobPositionEntity position = requireActiveBusinessPosition(jobPositionId);
+        return switch (position.getPermissionGroup()) {
+            case MANAGER -> Role.MANAGER;
+            case EXECUTIVE -> Role.EXECUTIVE;
+            case EMPLOYEE -> Role.EMPLOYEE;
+        };
+    }
     private UserEntity requireEmployee(UUID employeeId) {
         UserEntity user = users.findById(employeeId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy nhân viên."));
-        if (!user.getWorkspaceId().equals(currentUser().workspaceId()) || user.getRole() != Role.EMPLOYEE) throw new IllegalArgumentException("Không tìm thấy nhân viên trong workspace.");
+        if (!user.getWorkspaceId().equals(currentUser().workspaceId()) || !isWorkforceRole(user.getRole())) throw new IllegalArgumentException("Không tìm thấy nhân viên trong workspace.");
         return user;
     }
     private UserEntity requireActiveEmployee(UUID employeeId) {
@@ -3421,16 +3819,31 @@ public class ForepService {
         if (!item.getWorkspaceId().equals(currentUser().workspaceId())) throw new IllegalArgumentException("Vị trí công việc không thuộc workspace hiện tại.");
         return item;
     }
+    private DepartmentEntity requireDepartment(UUID id) {
+        DepartmentEntity department = departments.findById(id).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy phòng ban."));
+        if (!department.getWorkspaceId().equals(currentUser().workspaceId())) throw new IllegalArgumentException("Phòng ban không thuộc workspace hiện tại.");
+        return department;
+    }
+    private JobPositionEntity requireActiveBusinessPosition(UUID id) {
+        JobPositionEntity position = requireJobPosition(id);
+        if (position.getStatus() != JobPositionStatus.ACTIVE) throw new IllegalArgumentException("Business position không hoạt động.");
+        return position;
+    }
+    private DepartmentEntity requireActiveDepartment(UUID id) {
+        DepartmentEntity department = requireDepartment(id);
+        if (department.getStatus() != DepartmentStatus.ACTIVE) throw new IllegalArgumentException("Phòng ban không hoạt động.");
+        return department;
+    }
     private DailyReportEntity requireReport(UUID reportId) {
         DailyReportEntity report = reports.findById(reportId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy báo cáo."));
         if (!report.getWorkspaceId().equals(currentUser().workspaceId())) throw new IllegalArgumentException("Báo cáo không thuộc workspace hiện tại.");
         return report;
     }
     private void requireTaskVisible(TaskEntity task) {
-        if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER && currentUser().role() != Role.HR && !taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền xem task này.");
+        if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role()) && currentUser().role() != Role.HR && !taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền xem task này.");
     }
     private void requireOwnerOrAssignee(TaskEntity task) {
-        if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.MANAGER && !taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền cập nhật task này.");
+        if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role()) && !taskParticipants(task).contains(currentUser().userId())) throw new IllegalArgumentException("Bạn không có quyền cập nhật task này.");
     }
 
     private String loginIdentifier(LoginRequest request) {
@@ -3483,17 +3896,42 @@ public class ForepService {
         throw new IllegalArgumentException("Không thể tạo username Business Owner duy nhất.");
     }
 
-    private JobPositionEntity legacyBusinessPosition(JobPositionEntity item, String title, String departmentName, String description, String requiredSkills, JobPositionStatus status) {
+    private void applyDepartmentRequest(DepartmentEntity department, DepartmentRequest request) {
+        UUID workspaceId = currentUser().workspaceId();
+        String normalizedName = request.name().trim();
+        String normalizedCode = hasText(request.code()) ? request.code().trim().toUpperCase(Locale.ROOT) : null;
+        departments.findByWorkspaceIdAndNameIgnoreCase(workspaceId, normalizedName)
+                .filter(existing -> !existing.getId().equals(department.getId()))
+                .ifPresent(existing -> { throw new IllegalArgumentException("Tên phòng ban đã tồn tại trong workspace."); });
+        if (hasText(normalizedCode)) {
+            departments.findByWorkspaceIdAndCodeIgnoreCase(workspaceId, normalizedCode)
+                    .filter(existing -> !existing.getId().equals(department.getId()))
+                    .ifPresent(existing -> { throw new IllegalArgumentException("Mã phòng ban đã tồn tại trong workspace."); });
+        }
+        department.setWorkspaceId(workspaceId);
+        department.setName(normalizedName);
+        department.setCode(normalizedCode);
+        department.setDescription(request.description());
+        department.setStatus(request.status() == null ? DepartmentStatus.ACTIVE : request.status());
+    }
+
+    private JobPositionEntity legacyBusinessPosition(JobPositionEntity item, String title, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, String requiredSkills, JobPositionStatus status) {
         OffsetDateTime now = OffsetDateTime.now();
+        DepartmentEntity department = requireActiveDepartment(departmentId);
         if (item == null) {
             item = new JobPositionEntity();
             item.setWorkspaceId(currentUser().workspaceId());
-            item.setPermissionGroup(PermissionGroup.EMPLOYEE);
-            item.setDepartmentId(UUID.randomUUID());
             item.setCreatedAt(now);
         }
-        item.setTitle(title);
-        item.setDepartmentName(departmentName);
+        String normalizedTitle = title.trim();
+        UUID workspaceId = currentUser().workspaceId();
+        if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(workspaceId, normalizedTitle, departmentId) && !normalizedTitle.equalsIgnoreCase(item.getTitle())) {
+            throw new IllegalArgumentException("Position name already exists in this workspace and department.");
+        }
+        item.setTitle(normalizedTitle);
+        item.setPermissionGroup(permissionGroup);
+        item.setDepartmentId(department.getId());
+        item.setDepartmentName(department.getName());
         item.setDescription(description);
         item.setRequiredSkills(requiredSkills);
         if (status != null) {
@@ -3507,6 +3945,7 @@ public class ForepService {
 
     private void applyBusinessPositionRequest(JobPositionEntity entity, BusinessPositionRequest request) {
         UUID workspaceId = currentUser().workspaceId();
+        DepartmentEntity department = requireActiveDepartment(request.departmentId());
         String normalizedName = request.name().trim();
         String normalizedCode = hasText(request.code()) ? request.code().trim().toUpperCase(Locale.ROOT) : null;
         if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(workspaceId, normalizedName, request.departmentId()) && !normalizedName.equalsIgnoreCase(entity.getTitle())) {
@@ -3519,7 +3958,8 @@ public class ForepService {
         entity.setTitle(normalizedName);
         entity.setCode(normalizedCode);
         entity.setPermissionGroup(request.permissionGroup());
-        entity.setDepartmentId(request.departmentId());
+        entity.setDepartmentId(department.getId());
+        entity.setDepartmentName(department.getName());
         entity.setDescription(request.description());
         entity.setStatus(request.status() == null ? JobPositionStatus.ACTIVE : request.status());
     }
@@ -3583,7 +4023,8 @@ public class ForepService {
     private TaskView toTaskView(TaskEntity item) { return new TaskView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getRequirements(), item.getDescription(), item.getCustomerPhone(), item.getCustomerEmail(), item.getCustomerDescription(), item.getAssignmentType(), item.getAssigneeId(), item.getCreatorId(), item.getPriority(), item.getDeadline(), item.getStartDate(), item.getEstimatedHours(), item.getDifficulty(), item.getRequiredSkills(), item.getRequiredJobPositionId(), item.getTaskDomain(), item.getProjectId(), item.getDepartmentId(), taskAssignees.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAssigneeView).toList(), taskAttachments.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAttachmentView).toList(), item.getProgressPercent(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt(), item.getCompletedAt()); }
     private TaskAssigneeView toTaskAssigneeView(TaskAssigneeEntity item) { return new TaskAssigneeView(item.getId(), item.getTaskId(), item.getEmployeeId(), item.getParticipantRole(), item.isLeader(), item.getAllocatedHours(), item.getCreatedAt()); }
     private TaskAttachmentView toTaskAttachmentView(TaskAttachmentEntity item) { return new TaskAttachmentView(item.getId(), item.getTaskId(), item.getFileName(), item.getFileUrl(), item.getContentType(), item.getFileSize(), item.getAttachmentType(), item.getUploadedBy(), item.getCreatedAt()); }
-    private JobPositionView toJobPositionView(JobPositionEntity item) { return new JobPositionView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getDepartmentName(), item.getDescription(), item.getRequiredSkills(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private DepartmentView toDepartmentView(DepartmentEntity item) { return new DepartmentView(item.getId(), item.getWorkspaceId(), item.getName(), item.getCode(), item.getDescription(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private JobPositionView toJobPositionView(JobPositionEntity item) { return new JobPositionView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getPermissionGroup(), item.getDepartmentId(), item.getDepartmentName(), item.getDescription(), item.getRequiredSkills(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
     private BusinessPositionView toBusinessPositionView(JobPositionEntity item) { return new BusinessPositionView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getCode(), item.getPermissionGroup(), item.getDepartmentId(), item.getDepartmentName(), item.getDescription(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
     private AiHistoryView toAiHistoryView(AiHistoryEntity item) { return new AiHistoryView(item.getId(), item.getCallerName(), item.getCallerRole(), item.getFunctionName(), item.getStatus(), item.getCalledAt()); }
     private TaskUpdateView toTaskUpdateView(TaskUpdateEntity item) { return new TaskUpdateView(item.getId(), item.getTaskId(), item.getUserId(), item.getProgressPercent(), item.getContent(), item.getAttachment(), item.getUpdateType(), item.getCreatedAt()); }
@@ -3606,7 +4047,8 @@ public class ForepService {
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, String customerPhone, String customerEmail, String customerDescription, AssignmentType assignmentType, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, OffsetDateTime startDate, BigDecimal estimatedHours, Integer difficulty, String requiredSkills, UUID requiredJobPositionId, String taskDomain, UUID projectId, UUID departmentId, List<TaskAssigneeView> participants, List<TaskAttachmentView> attachments, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskAssigneeView(UUID id, UUID taskId, UUID employeeId, TaskParticipantRole participantRole, boolean leader, BigDecimal allocatedHours, OffsetDateTime createdAt) {}
     public record TaskAttachmentView(UUID id, UUID taskId, String fileName, String fileUrl, String contentType, Long fileSize, AttachmentType attachmentType, UUID uploadedBy, OffsetDateTime createdAt) {}
-    public record JobPositionView(UUID id, UUID workspaceId, String title, String departmentName, String description, String requiredSkills, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record DepartmentView(UUID id, UUID workspaceId, String name, String code, String description, DepartmentStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record JobPositionView(UUID id, UUID workspaceId, String title, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, String requiredSkills, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessPositionView(UUID id, UUID workspaceId, String name, String code, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record GeneratedOwnerAccountView(UUID userId, String username, String initialPassword, String fullName) {}
     public record AiHistoryView(UUID id, String callerName, String callerRole, String calledFunction, AiHistoryStatus status, OffsetDateTime calledAt) {}
@@ -3615,7 +4057,11 @@ public class ForepService {
     public record NotificationView(UUID id, UUID workspaceId, UUID userId, String type, String title, String message, String relatedEntityType, UUID relatedEntityId, boolean isRead, OffsetDateTime createdAt) {}
     public record WorkloadView(UUID employeeId, String fullName, long openTasks, long inProgressTasks, long blockedTasks, long completedTasks, long overdueTasks, BigDecimal estimatedWorkload, double workloadScore, WorkloadLevel workloadLevel) {}
     public record MonthlyWorkloadView(UUID employeeId, String fullName, int year, int month, BigDecimal allocatedHours, BigDecimal capacityHours, double utilizationRatio, String workloadLevel, String workloadLabel) {}
-    public record AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk) {}
+    public record AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk, UUID departmentId, UUID businessPositionId, String businessPositionName, PermissionGroup permissionGroup, int departmentSuitabilityScore, int businessPositionSuitabilityScore, int leadExperienceScore, int domainExperienceScore, int skillMatchScore, int similarTaskExperienceScore, int workloadAvailabilityScore, int performanceScore, long previousLeaderCount, double leadCompletionRate, int similarTaskCount, Map<String, Object> scoreComponents) {
+        public AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk) {
+            this(employeeId, fullName, score, workloadLevel, requiredRole, roleFit, roleFitReason, reason, risk, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Map.of());
+        }
+    }
     public record OwnerDashboardView(long totalTasks, long activeTasks, long completedTasks, long overdueTasks, List<WorkloadView> employeeWorkload, List<TaskView> recentlyUpdatedTasks, List<DashboardAiRecommendationView> aiRecommendations) {}
     public record DashboardAiRecommendationView(UUID suggestionId, AiSuggestionType type, String source, String outputData, OffsetDateTime createdAt) {}
     public record BusinessSummaryView(long completedTasks, long overdueTasks, long overloadedEmployees, long idleEmployees, String summary) {}
