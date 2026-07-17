@@ -7,9 +7,9 @@ import java.util.List;
 import java.util.UUID;
 
 public interface JobPositionRepository extends JpaRepository<JobPositionEntity, UUID> {
-    List<JobPositionEntity> findByWorkspaceIdOrderByTitleAsc(UUID workspaceId);
-    boolean existsByWorkspaceIdAndTitleIgnoreCase(UUID workspaceId, String title);
-    boolean existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(UUID workspaceId, String title, UUID departmentId);
+    List<JobPositionEntity> findByWorkspaceIdOrderByNameAsc(UUID workspaceId);
+    boolean existsByWorkspaceIdAndNameIgnoreCase(UUID workspaceId, String name);
+    boolean existsByWorkspaceIdAndNameIgnoreCaseAndDepartmentId(UUID workspaceId, String name, UUID departmentId);
     boolean existsByWorkspaceIdAndCodeIgnoreCase(UUID workspaceId, String code);
     boolean existsByWorkspaceIdAndDepartmentIdAndStatus(UUID workspaceId, UUID departmentId, JobPositionStatus status);
 }

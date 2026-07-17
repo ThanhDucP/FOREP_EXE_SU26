@@ -692,7 +692,7 @@ public class ForepService {
 
     public List<JobPositionView> jobPositions() {
         requireOwnerOrHr();
-        return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream().map(this::toJobPositionView).toList();
+        return jobPositions.findByWorkspaceIdOrderByNameAsc(currentUser().workspaceId()).stream().map(this::toJobPositionView).toList();
     }
 
     public JobPositionView createJobPosition(JobPositionRequest request) {
@@ -718,7 +718,7 @@ public class ForepService {
 
     public List<BusinessPositionView> businessPositions(String search, UUID departmentId, PermissionGroup permissionGroup, JobPositionStatus status) {
         requireOwnerOrHr();
-        return jobPositions.findByWorkspaceIdOrderByTitleAsc(currentUser().workspaceId()).stream()
+        return jobPositions.findByWorkspaceIdOrderByNameAsc(currentUser().workspaceId()).stream()
                 .filter(position -> !hasText(search) || normalizedSearchText(position.getTitle()).contains(normalizedSearchText(search)))
                 .filter(position -> departmentId == null || departmentId.equals(position.getDepartmentId()))
                 .filter(position -> permissionGroup == null || permissionGroup == position.getPermissionGroup())
@@ -1883,7 +1883,7 @@ public class ForepService {
 
     private UUID resolveBusinessPositionId(UUID workspaceId, List<String> positionNames) {
         if (positionNames == null || positionNames.isEmpty()) return null;
-        List<JobPositionEntity> activePositions = jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).stream()
+        List<JobPositionEntity> activePositions = jobPositions.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
                 .filter(position -> position.getStatus() == JobPositionStatus.ACTIVE)
                 .toList();
         for (String name : positionNames) {
@@ -1929,7 +1929,7 @@ public class ForepService {
     }
 
     private List<String> availableBusinessPositionNames(UUID workspaceId) {
-        return jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).stream()
+        return jobPositions.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
                 .filter(position -> position.getStatus() == JobPositionStatus.ACTIVE)
                 .map(JobPositionEntity::getTitle)
                 .filter(this::hasText)
@@ -1949,7 +1949,7 @@ public class ForepService {
     private List<String> availableWorkspaceSkills(UUID workspaceId) {
         Set<String> skills = new LinkedHashSet<>();
         workspaceEmployees(workspaceId).forEach(employee -> addDelimitedValues(skills, employee.getSkills()));
-        jobPositions.findByWorkspaceIdOrderByTitleAsc(workspaceId).forEach(position -> addDelimitedValues(skills, position.getRequiredSkills()));
+        jobPositions.findByWorkspaceIdOrderByNameAsc(workspaceId).forEach(position -> addDelimitedValues(skills, position.getRequiredSkills()));
         return skills.stream().limit(150).toList();
     }
 
@@ -4194,7 +4194,7 @@ public class ForepService {
         }
         String normalizedTitle = title.trim();
         UUID workspaceId = currentUser().workspaceId();
-        if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(workspaceId, normalizedTitle, departmentId) && !normalizedTitle.equalsIgnoreCase(item.getTitle())) {
+        if (jobPositions.existsByWorkspaceIdAndNameIgnoreCaseAndDepartmentId(workspaceId, normalizedTitle, departmentId) && !normalizedTitle.equalsIgnoreCase(item.getTitle())) {
             throw new IllegalArgumentException("Position name already exists in this workspace and department.");
         }
         item.setTitle(normalizedTitle);
@@ -4217,7 +4217,7 @@ public class ForepService {
         DepartmentEntity department = requireActiveDepartment(request.departmentId());
         String normalizedName = request.name().trim();
         String normalizedCode = hasText(request.code()) ? request.code().trim().toUpperCase(Locale.ROOT) : null;
-        if (jobPositions.existsByWorkspaceIdAndTitleIgnoreCaseAndDepartmentId(workspaceId, normalizedName, request.departmentId()) && !normalizedName.equalsIgnoreCase(entity.getTitle())) {
+        if (jobPositions.existsByWorkspaceIdAndNameIgnoreCaseAndDepartmentId(workspaceId, normalizedName, request.departmentId()) && !normalizedName.equalsIgnoreCase(entity.getTitle())) {
             throw new IllegalArgumentException("Tên vị trí đã tồn tại trong workspace và phòng ban.");
         }
         if (hasText(normalizedCode) && jobPositions.existsByWorkspaceIdAndCodeIgnoreCase(workspaceId, normalizedCode) && !normalizedCode.equalsIgnoreCase(entity.getCode())) {
