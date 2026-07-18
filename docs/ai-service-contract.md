@@ -299,6 +299,10 @@ Rules:
 - Candidate order comes from backend ranking.
 - AI explains the backend order; it must not reorder or invent candidates.
 - Candidate IDs must come from backend output.
+- AI should return concise JSON suitable for FE cards/tables, not long raw paragraphs.
+- Recommended output keys: `recommendationType`, `taskContext`, `summary`, `candidates`, `recommendedActions`, `dataQuality`.
+- Each candidate should include `rank`, `employeeId`, `fullName`, `department`, `position`, `score`, `scoreLabel`, `workloadLevel`, `roleFit`, `mainReasons`, `risks`, and `numbers`.
+- Backend scores/ranking are final; AI only formats and explains the backend scoring signal.
 
 ## POST /internal/ai/recommendations/result/explain
 
@@ -324,11 +328,44 @@ Public backend endpoint: `GET /api/workspace/ai/business-owner/operational-summa
 
 Backend builds input from real workspace data: employees, tasks, workload, department workload, AI suggestion count, subscription status, plan limits, expiration date, and upgrade options.
 
+Required AI output shape:
+
+```json
+{
+  "title": "Tóm tắt vận hành",
+  "period": "TODAY",
+  "healthLabel": "ỔN ĐỊNH",
+  "summary": "string",
+  "keyMetrics": [],
+  "sections": [],
+  "warnings": [],
+  "dataQuality": {
+    "hasEnoughData": true,
+    "missingData": [],
+    "note": "string"
+  }
+}
+```
+
+Rules:
+
+- Return JSON only.
+- Use backend numbers exactly; do not invent counts, rates, revenue, workload, or missing-report employees.
+- Never say "backend has not returned..." to end users. Convert missing input into `dataQuality.missingData` and a clean user-facing note.
+- Every section must include `sectionTitle`, `status`, `summary`, `numbers`, `details`, and `recommendedActions`.
+- If no risk exists, say what was checked.
+
 ## POST /internal/ai/platform-admin/summary
 
 Public backend endpoint: `GET /api/admin/ai/platform-summary`.
 
 Backend builds input from platform data: workspaces, payment transactions, revenue buckets, payment success rate, feedback summary, and AI suggestion stats.
+
+Rules:
+
+- AI explains platform metrics calculated by backend; it must not calculate revenue or success rates itself.
+- Return concise JSON with summary, risks, recommended actions, and data quality.
+- Do not expose raw provider payloads, secrets, prompts, or internal stack traces.
 
 ## POST /internal/ai/tasks/split
 

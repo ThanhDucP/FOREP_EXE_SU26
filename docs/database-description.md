@@ -45,6 +45,28 @@ Gói subscription do System Administrator quản lý.
 | created_at | timestamp with time zone | not null | Thời điểm tạo |
 | updated_at | timestamp with time zone | not null | Thời điểm cập nhật |
 
+## workspace_subscriptions
+
+Subscription snapshot rieng cho billing/audit cua workspace. Day la nguon truth cho goi dang active; `workspaces.subscription_plan_id` chi la trang thai hien tai/compatibility.
+
+| Cot | Kieu | Rang buoc | Mo ta |
+| --- | --- | --- | --- |
+| id | uuid | Primary key | ID subscription snapshot |
+| workspace_id | uuid | not null, Foreign key -> workspaces(id) | Workspace so huu subscription |
+| subscription_plan_id | uuid | not null, Foreign key -> subscription_plans(id) | Goi subscription |
+| status | varchar(30) | not null | ACTIVE, EXPIRED, CANCELLED, PENDING_RENEWAL, UPGRADED, DOWNGRADED |
+| start_date | timestamp with time zone | not null | Ngay bat dau |
+| end_date | timestamp with time zone | not null, end_date > start_date | Ngay ket thuc |
+| renewal_date | timestamp with time zone | nullable | Ngay gia han du kien |
+| price | numeric(12,2) | not null, check >= 0 | Gia snapshot tai thoi diem kich hoat |
+| max_owner_accounts | integer | not null, check > 0 | Quota Business Owner snapshot |
+| max_employee_accounts | integer | not null, check >= 0 | Quota Employee snapshot |
+| payment_transaction_id | uuid | nullable, unique when present | Payment dung de kich hoat |
+| created_at | timestamp with time zone | not null | Thoi diem tao |
+| updated_at | timestamp with time zone | not null | Thoi diem cap nhat |
+
+Business rule: moi workspace chi co mot `ACTIVE` subscription. Khi admin doi plan, subscription cu duoc dong thanh `UPGRADED` hoac `DOWNGRADED`, sau do tao snapshot `ACTIVE` moi.
+
 ## workspace_registrations
 
 Thông tin đăng ký workspace và xác nhận thanh toán trước khi kích hoạt.

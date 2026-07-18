@@ -985,6 +985,59 @@ Use `GET /api/admin/ai/platform-summary`.
 
 Backend builds the payload from platform workspaces, payment transactions, revenue buckets, feedback, and AI suggestion stats.
 
+## 10A. Business Owner Dashboard
+
+### 10A.1 API
+
+Use `GET /api/workspace/business-owner/dashboard`.
+
+Backend returns production dashboard data, not AI text:
+
+- `overviewCards.today|week|month`: completed, active, overdue, blocked, submitted, missing daily report, overloaded employees, completion rate.
+- `dailyReportInsight`: expected/received/missing/reviewed reports and `missingEmployees`.
+- `workloadInsight`: idle/light/normal/high/overloaded employee lists.
+- `deadlineRisks`: chart/table-ready risky tasks.
+- `blockedTasks`: blocked task table.
+- `taskStatusChart`: `{ title, series, total }`.
+- `workloadDistributionChart`: `{ title, series, total }`.
+- `recommendedActions`: backend-computed operational actions.
+- `aiRecommendations`: cached AI suggestions only.
+- `metadata`: data source, generated time, empty-state note.
+
+FE requirements:
+
+- Render summary cards for today/week/month.
+- Render task status chart from `taskStatusChart.series`.
+- Render workload distribution chart from `workloadDistributionChart.series`.
+- Render missing report list from `dailyReportInsight.missingEmployees`.
+- Render overdue/upcoming/deadline-risk table from `deadlineRisks`.
+- Render blocked task table from `blockedTasks`.
+- Render AI summary separately; do not use AI to compute dashboard numbers.
+- Empty arrays and zero values are valid states; show friendly empty UI using `metadata.note`.
+
+## 10B. Platform Admin Dashboard
+
+### 10B.1 APIs
+
+- `GET /api/admin/dashboard/overview`
+- `GET /api/admin/dashboard/revenue/monthly`
+- `GET /api/admin/dashboard/revenue/quarterly`
+- `GET /api/admin/dashboard/revenue/yearly`
+- `GET /api/admin/dashboard/revenue/by-plan`
+- `GET /api/admin/dashboard/workspaces/by-status`
+- `GET /api/admin/dashboard/workspaces/by-plan`
+- `GET /api/admin/dashboard/payments/summary`
+- `GET /api/admin/dashboard/feedback/summary`
+
+FE requirements:
+
+- Use overview cards for total/active/suspended/expired/new workspaces, users, revenue, success rate, failed payments, pending manual payments, feedback average, AI usage.
+- Use revenue charts from each endpoint's `series`; do not calculate revenue client-side.
+- Use workspace status/package charts from backend `series`.
+- Use payment summary cards and pending manual payment table from backend.
+- Use feedback rating chart and recent feedback table from backend.
+- Platform Admin dashboard must not expose workspace internal task/employee management actions.
+
 ## 11. AI History
 
 ### 11.1 API
@@ -1337,6 +1390,23 @@ Production AI UX rules:
 - Show AI quota/rate-limit/provider errors from backend message.
 - Keep AI output local to current screen unless user explicitly saves a business action.
 
+Dashboard changes:
+
+- Business Owner dashboard must call `GET /api/workspace/business-owner/dashboard`.
+- Platform Admin dashboard must call `/api/admin/dashboard/**` chart endpoints.
+- FE must render backend `series` directly for charts.
+- FE must not calculate revenue, payment success rate, workload buckets, overdue counts, missing report counts, or completion rate from raw rows when backend dashboard endpoints provide them.
+- AI summaries explain dashboard data; AI does not calculate the dashboard metrics.
+
+Subscription/payment/admin workspace changes:
+
+- Platform Admin workspace list/detail must read `activeSubscription` from backend responses.
+- Use `activeSubscription.status`, `startDate`, `endDate`, `renewalDate`, `price`, `maxOwnerAccounts`, and `maxEmployeeAccounts` for current package display when present.
+- Keep `subscriptionPlanId`, `maxUsers`, `maxOwnerAccounts`, and `maxEmployeeAccounts` as compatibility/fallback fields only; do not infer billing history from workspace fields.
+- When admin changes a workspace plan, refetch workspace detail/list because backend creates a new ACTIVE subscription snapshot and closes the old one as `UPGRADED`/`DOWNGRADED`.
+- MoMo UI must not depend on sandbox/production mode. Render returned `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl`; trust only public payment polling for `SUCCESS`.
+- Demo seed data now includes 3 active workspaces with 30 employees each, cached AI suggestions, dashboard workload/task data, subscriptions, and payments. QA can use owners `adminSV0001`, `adminMD0001`, `adminHC0001` with initial password `123456`.
+
 ### 18.5 Required FE Query Keys / Cache
 
 Add or update query keys:
@@ -1350,6 +1420,12 @@ Add or update query keys:
 - `aiHistory`
 - `aiRecommendation:{taskDraftHash}:{type}`
 - `aiTaskAnalysis:{taskDraftHash}`
+- `businessOwnerDashboard`
+- `adminDashboardOverview`
+- `adminRevenue:{period}`
+- `adminWorkspaceCharts`
+- `adminPaymentSummary`
+- `adminFeedbackSummary`
 
 Invalidation required:
 
@@ -1358,6 +1434,7 @@ Invalidation required:
 - Employee mutation -> invalidate `employees`, `tasks`, `workloadMonthly:{year}:{month}`.
 - Task create/update/assign/workflow -> invalidate `tasks`, `taskDetail:{id}`, `workloadMonthly:{year}:{month}`, `notifications`.
 - AI call -> invalidate `aiHistory`; do not invalidate business data unless user applies a real mutation.
+- Successful payment/admin confirmation/workspace activation -> invalidate `adminDashboardOverview`, `adminRevenue:{period}`, `adminWorkspaceCharts`, `adminPaymentSummary`, `workspaceRegistrations`, `payments`, `workspaces`.
 
 ### 18.6 Production Readiness Criteria For FE
 
@@ -1373,4 +1450,10 @@ FE is not considered production-ready until:
 - AI analysis never creates master data automatically.
 - Platform admin AI summary is visible only to `PLATFORM_ADMIN`.
 - Business owner operational summary is hidden from `EMPLOYEE`, `MANAGER`, `HR` unless backend later changes policy.
+- Business Owner dashboard renders backend cards/charts/lists from `/api/workspace/business-owner/dashboard`.
+- Platform Admin dashboard renders backend chart-ready series from `/api/admin/dashboard/**`.
+- Payment result page treats `ACTIVATED` as final successful registration state and never activates workspace from URL/query params.
+- Platform Admin workspace screens render `activeSubscription` and refetch after plan/status/payment lifecycle changes.
+- Payment instruction page supports both real MoMo provider URLs and sandbox instructions without changing UI logic.
+- QA validates dashboards against seeded workspaces `SV`, `MD`, and `HC`, each with 30 employees and mixed workload/task states.
 - Every destructive/lifecycle action has confirmation, loading, success, and backend-error states.

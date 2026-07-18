@@ -8,7 +8,12 @@ import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.Map;
@@ -23,6 +28,9 @@ public class MomoPaymentService {
     private final String returnUrl;
     private final String notifyUrl;
     private final boolean sandboxMode;
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
 
     public MomoPaymentService(ObjectMapper objectMapper,
                               @Value("${forep.payments.momo.endpoint:}") String endpoint,
@@ -47,21 +55,62 @@ public class MomoPaymentService {
         request.put("partnerCode", partnerCode);
         request.put("accessKey", accessKey);
         request.put("requestId", payment.getRequestId());
-        request.put("amount", payment.getAmount());
+        request.put("amount", momoAmount(payment));
         request.put("orderId", payment.getOrderCode());
         request.put("orderInfo", "FOREP workspace registration " + payment.getOrderCode());
         request.put("redirectUrl", returnUrl);
         request.put("ipnUrl", notifyUrl);
+        request.put("extraData", "");
         request.put("requestType", "captureWallet");
-        request.put("signature", signCanonical(request));
+        request.put("lang", "vi");
+        request.put("signature", signCreatePaymentRequest(request));
 
+        if (isRealProviderConfigured()) {
+            return createRealProviderPayment(request);
+        }
+
+        return createSandboxPayment(payment, request);
+    }
+
+    private ProviderPaymentResult createRealProviderPayment(Map<String, Object> request) {
+        String rawRequest = toJson(request);
+        try {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(endpoint))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(rawRequest, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            Map<?, ?> response = objectMapper.readValue(httpResponse.body(), Map.class);
+            Object resultCode = response.get("resultCode");
+            if (httpResponse.statusCode() >= 400 || (resultCode != null && !"0".equals(String.valueOf(resultCode)))) {
+                throw new IllegalStateException("MoMo payment creation failed: " + stringValue(response.get("message")));
+            }
+            return new ProviderPaymentResult(
+                    stringValue(response.get("payUrl")),
+                    stringValue(response.get("deeplink")),
+                    stringValue(response.get("qrCodeUrl")),
+                    null,
+                    null,
+                    null,
+                    null,
+                    rawRequest,
+                    httpResponse.body()
+            );
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not create MoMo provider payment.", exception);
+        }
+    }
+
+    private ProviderPaymentResult createSandboxPayment(PaymentTransactionEntity payment, Map<String, Object> request) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("provider", "MOMO");
-        response.put("mode", hasText(endpoint) ? "CONFIGURED" : "SANDBOX_INSTRUCTIONS");
+        response.put("mode", sandboxMode ? "SANDBOX_MODE" : "SANDBOX_INSTRUCTIONS_MISSING_PROVIDER_CONFIG");
         response.put("orderId", payment.getOrderCode());
         response.put("requestId", payment.getRequestId());
         response.put("amount", payment.getAmount());
-        response.put("payUrl", hasText(endpoint) ? endpoint + "?orderId=" + payment.getOrderCode() : "momo://pay?orderId=" + payment.getOrderCode());
+        response.put("payUrl", "momo://pay?orderId=" + payment.getOrderCode());
         response.put("deeplink", "momo://payment?action=pay&orderId=" + payment.getOrderCode());
         response.put("qrCodeUrl", "https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=MOMO-" + payment.getOrderCode());
 
@@ -106,6 +155,47 @@ public class MomoPaymentService {
         } catch (Exception exception) {
             throw new IllegalStateException("Could not sign MoMo payment payload.", exception);
         }
+    }
+
+    private String signCreatePaymentRequest(Map<String, ?> request) {
+        if (!hasText(secretKey)) {
+            return "";
+        }
+        String raw = "accessKey=" + request.get("accessKey")
+                + "&amount=" + request.get("amount")
+                + "&extraData=" + request.get("extraData")
+                + "&ipnUrl=" + request.get("ipnUrl")
+                + "&orderId=" + request.get("orderId")
+                + "&orderInfo=" + request.get("orderInfo")
+                + "&partnerCode=" + request.get("partnerCode")
+                + "&redirectUrl=" + request.get("redirectUrl")
+                + "&requestId=" + request.get("requestId")
+                + "&requestType=" + request.get("requestType");
+        return hmacSha256(raw);
+    }
+
+    private String hmacSha256(String raw) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secretKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return HexFormat.of().formatHex(mac.doFinal(raw.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not sign MoMo payment payload.", exception);
+        }
+    }
+
+    private boolean isRealProviderConfigured() {
+        return !sandboxMode
+                && hasText(endpoint)
+                && hasText(partnerCode)
+                && hasText(accessKey)
+                && hasText(secretKey)
+                && hasText(returnUrl)
+                && hasText(notifyUrl);
+    }
+
+    private String momoAmount(PaymentTransactionEntity payment) {
+        return payment.getAmount().setScale(0, java.math.RoundingMode.UNNECESSARY).toPlainString();
     }
 
     private String toJson(Object value) {

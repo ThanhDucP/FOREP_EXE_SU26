@@ -129,6 +129,51 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.adminAuditLogs());
     }
 
+    @GetMapping("/dashboard/overview")
+    ApiResponse<?> dashboardOverview() {
+        return ApiResponse.ok(service.adminDashboardOverview());
+    }
+
+    @GetMapping("/dashboard/revenue/monthly")
+    ApiResponse<?> dashboardRevenueMonthly() {
+        return ApiResponse.ok(service.adminDashboardRevenueMonthly());
+    }
+
+    @GetMapping("/dashboard/revenue/quarterly")
+    ApiResponse<?> dashboardRevenueQuarterly() {
+        return ApiResponse.ok(service.adminDashboardRevenueQuarterly());
+    }
+
+    @GetMapping("/dashboard/revenue/yearly")
+    ApiResponse<?> dashboardRevenueYearly() {
+        return ApiResponse.ok(service.adminDashboardRevenueYearly());
+    }
+
+    @GetMapping("/dashboard/revenue/by-plan")
+    ApiResponse<?> dashboardRevenueByPlan() {
+        return ApiResponse.ok(service.adminDashboardRevenueByPlan());
+    }
+
+    @GetMapping("/dashboard/workspaces/by-status")
+    ApiResponse<?> dashboardWorkspacesByStatus() {
+        return ApiResponse.ok(service.adminDashboardWorkspacesByStatus());
+    }
+
+    @GetMapping("/dashboard/workspaces/by-plan")
+    ApiResponse<?> dashboardWorkspacesByPlan() {
+        return ApiResponse.ok(service.adminDashboardWorkspacesByPlan());
+    }
+
+    @GetMapping("/dashboard/payments/summary")
+    ApiResponse<?> dashboardPaymentsSummary() {
+        return ApiResponse.ok(service.adminDashboardPaymentsSummary());
+    }
+
+    @GetMapping("/dashboard/feedback/summary")
+    ApiResponse<?> dashboardFeedbackSummary() {
+        return ApiResponse.ok(service.adminDashboardFeedbackSummary());
+    }
+
     @GetMapping("/ai/platform-summary")
     ApiResponse<?> platformSummary() {
         return ApiResponse.ok(service.platformAdminSystemSummary());

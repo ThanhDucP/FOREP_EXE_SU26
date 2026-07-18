@@ -105,6 +105,10 @@ public final class Enums {
         ACTIVE, INACTIVE
     }
 
+    public enum WorkspaceSubscriptionStatus {
+        ACTIVE, EXPIRED, CANCELLED, PENDING_RENEWAL, UPGRADED, DOWNGRADED
+    }
+
     public enum PaymentStatus {
         PENDING, CONFIRMED, REJECTED, CORRECTION_REQUESTED
     }
@@ -126,6 +130,7 @@ public final class Enums {
         PENDING_PAYMENT,
         PAYMENT_CONFIRMED,
         APPROVED,
+        ACTIVATED,
         REJECTED,
         CANCELLED,
         EXPIRED

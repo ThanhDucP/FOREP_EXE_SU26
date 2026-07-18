@@ -31,6 +31,7 @@ import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkingStatus;
 import com.forep.exe.domain.Enums.WorkloadLevel;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
+import com.forep.exe.domain.Enums.WorkspaceSubscriptionStatus;
 import com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest;
 import com.forep.exe.dto.Requests.AdminUpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.AssignIndividualRequest;
@@ -107,6 +108,8 @@ import com.forep.exe.persistence.WorkspaceEntity;
 import com.forep.exe.persistence.WorkspaceRepository;
 import com.forep.exe.persistence.WorkspaceRegistrationEntity;
 import com.forep.exe.persistence.WorkspaceRegistrationRepository;
+import com.forep.exe.persistence.WorkspaceSubscriptionEntity;
+import com.forep.exe.persistence.WorkspaceSubscriptionRepository;
 import com.forep.exe.security.AuthenticatedUser;
 import com.forep.exe.security.JwtService;
 import com.forep.exe.security.SecurityContext;
@@ -157,6 +160,7 @@ public class ForepService {
     private final AiHistoryRepository aiHistory;
     private final SubscriptionPlanRepository subscriptionPlans;
     private final WorkspaceRegistrationRepository workspaceRegistrations;
+    private final WorkspaceSubscriptionRepository workspaceSubscriptions;
     private final PaymentTransactionRepository paymentTransactions;
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
@@ -182,6 +186,7 @@ public class ForepService {
                         AiHistoryRepository aiHistory,
                         SubscriptionPlanRepository subscriptionPlans,
                         WorkspaceRegistrationRepository workspaceRegistrations,
+                        WorkspaceSubscriptionRepository workspaceSubscriptions,
                         PaymentTransactionRepository paymentTransactions,
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
@@ -206,6 +211,7 @@ public class ForepService {
         this.aiHistory = aiHistory;
         this.subscriptionPlans = subscriptionPlans;
         this.workspaceRegistrations = workspaceRegistrations;
+        this.workspaceSubscriptions = workspaceSubscriptions;
         this.paymentTransactions = paymentTransactions;
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
@@ -847,15 +853,265 @@ public class ForepService {
         return toDailyReportView(reports.save(report));
     }
 
-    public OwnerDashboardView ownerDashboard() {
+    public Map<String, Object> ownerDashboard() {
         requireOwner();
-        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
-        long total = scopedTasks.size();
-        long active = scopedTasks.stream().filter(task -> openTaskStatuses().contains(task.getStatus())).count();
-        long completed = scopedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
-        long overdue = scopedTasks.stream().filter(this::isOverdue).count();
+        UUID workspaceId = currentUser().workspaceId();
+        List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
         List<WorkloadView> currentWorkload = workload();
-        return new OwnerDashboardView(total, active, completed, overdue, currentWorkload, scopedTasks.stream().limit(5).map(this::toTaskView).toList(), cachedDashboardRecommendations());
+        LocalDate today = LocalDate.now();
+
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("overviewCards", Map.of(
+                "today", ownerDashboardOverview(today, today, scopedTasks, currentWorkload),
+                "week", ownerDashboardOverview(today.minusDays(6), today, scopedTasks, currentWorkload),
+                "month", ownerDashboardOverview(today.withDayOfMonth(1), today, scopedTasks, currentWorkload)
+        ));
+        output.put("dailyReportInsight", ownerDashboardDailyReportInsight(workspaceId, today));
+        output.put("workloadInsight", ownerDashboardWorkloadInsight(currentWorkload));
+        output.put("deadlineRisks", scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .filter(task -> isOverdue(task) || !task.getDeadline().isAfter(OffsetDateTime.now().plusDays(3)))
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .limit(10)
+                .map(this::dashboardTaskItem)
+                .toList());
+        output.put("blockedTasks", scopedTasks.stream()
+                .filter(task -> task.getStatus() == TaskStatus.BLOCKED)
+                .sorted(Comparator.comparing(TaskEntity::getUpdatedAt).reversed())
+                .limit(10)
+                .map(this::dashboardTaskItem)
+                .toList());
+        output.put("taskStatusChart", enumCountChart(
+                "Task theo trạng thái",
+                Arrays.stream(TaskStatus.values()).map(Enum::name).toList(),
+                status -> scopedTasks.stream().filter(task -> task.getStatus().name().equals(status)).count()
+        ));
+        output.put("workloadDistributionChart", enumCountChart(
+                "Phân bổ tải công việc",
+                Arrays.stream(WorkloadLevel.values()).map(Enum::name).toList(),
+                level -> currentWorkload.stream().filter(item -> item.workloadLevel().name().equals(level)).count()
+        ));
+        output.put("recentlyUpdatedTasks", scopedTasks.stream().limit(5).map(this::toTaskView).toList());
+        output.put("aiRecommendations", cachedDashboardRecommendations());
+        output.put("recommendedActions", ownerDashboardRecommendedActions(scopedTasks, currentWorkload, output.get("dailyReportInsight")));
+        output.put("metadata", Map.of(
+                "generatedAt", OffsetDateTime.now().toString(),
+                "dataSource", "BACKEND_COMPUTED",
+                "emptyState", scopedTasks.isEmpty() && currentWorkload.isEmpty(),
+                "note", scopedTasks.isEmpty() ? "Chưa có task trong workspace; các chỉ số trả về 0 và danh sách rỗng." : "Backend đã tính số liệu từ task, workload và daily report hiện có."
+        ));
+        return output;
+    }
+
+    private Map<String, Object> ownerDashboardOverview(LocalDate start, LocalDate end, List<TaskEntity> scopedTasks, List<WorkloadView> currentWorkload) {
+        List<TaskEntity> periodTasks = scopedTasks.stream()
+                .filter(task -> isTaskInPeriod(task, start, end))
+                .toList();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("completedTasks", periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count());
+        output.put("activeTasks", periodTasks.stream().filter(task -> openTaskStatuses().contains(task.getStatus())).count());
+        output.put("overdueTasks", periodTasks.stream().filter(this::isOverdue).count());
+        output.put("blockedTasks", periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.BLOCKED).count());
+        output.put("submittedTasks", periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.SUBMITTED).count());
+        output.put("missingDailyReports", missingReportCount(end));
+        output.put("overloadedEmployees", currentWorkload.stream().filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED).count());
+        output.put("completionRate", percentage(
+                periodTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count(),
+                periodTasks.size()
+        ));
+        return output;
+    }
+
+    private Map<String, Object> ownerDashboardDailyReportInsight(UUID workspaceId, LocalDate reportDate) {
+        List<UserEntity> activeEmployees = workspaceEmployees(workspaceId).stream()
+                .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
+                .toList();
+        List<DailyReportEntity> reportList = reports.findByWorkspaceIdOrderByReportDateDesc(workspaceId).stream()
+                .filter(report -> report.getReportDate().equals(reportDate))
+                .toList();
+        Set<UUID> submitted = reportList.stream().map(DailyReportEntity::getUserId).collect(java.util.stream.Collectors.toSet());
+        List<Map<String, Object>> missingEmployees = activeEmployees.stream()
+                .filter(employee -> !submitted.contains(employee.getId()))
+                .map(employee -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("employeeId", employee.getId().toString());
+                    item.put("fullName", employee.getFullName());
+                    item.put("departmentId", employee.getDepartmentId() == null ? null : employee.getDepartmentId().toString());
+                    item.put("businessPositionId", employee.getJobPositionId() == null ? null : employee.getJobPositionId().toString());
+                    return item;
+                })
+                .toList();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("reportDate", reportDate.toString());
+        output.put("expectedReports", activeEmployees.size());
+        output.put("receivedReports", reportList.size());
+        output.put("missingReports", missingEmployees.size());
+        output.put("reportsWithIssues", reportList.stream().filter(report -> hasText(report.getBlockers())).count());
+        output.put("reviewedReports", reportList.stream().filter(report -> report.getReviewedAt() != null).count());
+        output.put("missingEmployees", missingEmployees);
+        output.put("metadata", Map.of(
+                "hasEnoughData", !activeEmployees.isEmpty(),
+                "note", activeEmployees.isEmpty() ? "Workspace chưa có nhân viên active để kỳ vọng daily report." : "Backend tính từ danh sách nhân viên active và daily report ngày hiện tại."
+        ));
+        return output;
+    }
+
+    private Map<String, Object> ownerDashboardWorkloadInsight(List<WorkloadView> currentWorkload) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("idleEmployees", workloadItems(currentWorkload, WorkloadLevel.NO_WORK));
+        output.put("lightEmployees", workloadItems(currentWorkload, WorkloadLevel.LOW));
+        output.put("normalEmployees", workloadItems(currentWorkload, WorkloadLevel.NORMAL));
+        output.put("highEmployees", workloadItems(currentWorkload, WorkloadLevel.HIGH));
+        output.put("overloadedEmployees", workloadItems(currentWorkload, WorkloadLevel.OVERLOADED));
+        output.put("metadata", Map.of(
+                "hasEnoughData", !currentWorkload.isEmpty(),
+                "note", currentWorkload.isEmpty() ? "Workspace chưa có nhân viên để tính workload." : "Backend tính workload từ task mở, task quá hạn và estimated hours."
+        ));
+        return output;
+    }
+
+    private List<Map<String, Object>> workloadItems(List<WorkloadView> workloads, WorkloadLevel level) {
+        return workloads.stream()
+                .filter(item -> item.workloadLevel() == level)
+                .sorted(Comparator.comparingDouble(WorkloadView::workloadScore).reversed())
+                .map(item -> {
+                    Map<String, Object> output = new LinkedHashMap<>();
+                    output.put("employeeId", item.employeeId().toString());
+                    output.put("fullName", item.fullName());
+                    output.put("openTasks", item.openTasks());
+                    output.put("overdueTasks", item.overdueTasks());
+                    output.put("estimatedWorkload", item.estimatedWorkload());
+                    output.put("workloadScore", item.workloadScore());
+                    output.put("workloadLevel", item.workloadLevel().name());
+                    return output;
+                })
+                .toList();
+    }
+
+    private List<Map<String, Object>> ownerDashboardRecommendedActions(List<TaskEntity> scopedTasks, List<WorkloadView> currentWorkload, Object dailyReportInsight) {
+        List<Map<String, Object>> actions = new ArrayList<>();
+        scopedTasks.stream()
+                .filter(this::isOpenTask)
+                .filter(this::isOverdue)
+                .sorted(Comparator.comparingDouble(this::taskRiskScore).reversed())
+                .limit(3)
+                .forEach(task -> actions.add(dashboardAction("FOLLOW_UP_OVERDUE_TASK", "TASK", task.getId(), "Theo dõi task quá hạn", "Task \"" + task.getTitle() + "\" đã quá deadline và cần cập nhật ETA.")));
+        scopedTasks.stream()
+                .filter(task -> task.getStatus() == TaskStatus.BLOCKED)
+                .limit(3)
+                .forEach(task -> actions.add(dashboardAction("RESOLVE_BLOCKER", "TASK", task.getId(), "Xử lý blocker", "Task \"" + task.getTitle() + "\" đang bị block.")));
+        currentWorkload.stream()
+                .filter(item -> item.workloadLevel() == WorkloadLevel.OVERLOADED)
+                .limit(3)
+                .forEach(item -> actions.add(dashboardAction("BALANCE_WORKLOAD", "EMPLOYEE", item.employeeId(), "Cân bằng workload", item.fullName() + " đang quá tải với " + item.openTasks() + " task mở.")));
+        if (dailyReportInsight instanceof Map<?, ?> insight && numberFrom(insight.get("missingReports")).longValue() > 0) {
+            actions.add(dashboardAction("REQUEST_DAILY_REPORT", "DAILY_REPORT", null, "Nhắc daily report", "Có " + numberFrom(insight.get("missingReports")).longValue() + " nhân viên chưa gửi daily report hôm nay."));
+        }
+        if (actions.isEmpty()) {
+            actions.add(dashboardAction("MONITOR_OPERATIONS", "WORKSPACE", currentUser().workspaceId(), "Tiếp tục theo dõi vận hành", "Chưa phát hiện rủi ro nổi bật từ task, workload hoặc daily report."));
+        }
+        return actions.stream().limit(8).toList();
+    }
+
+    private Map<String, Object> dashboardAction(String actionType, String targetEntityType, UUID targetEntityId, String title, String reason) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("actionType", actionType);
+        output.put("targetEntityType", targetEntityType);
+        output.put("targetEntityId", targetEntityId == null ? null : targetEntityId.toString());
+        output.put("title", title);
+        output.put("reason", reason);
+        return output;
+    }
+
+    private Map<String, Object> dashboardTaskItem(TaskEntity task) {
+        Map<UUID, String> names = employeeNames();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("taskId", task.getId().toString());
+        output.put("title", task.getTitle());
+        output.put("status", task.getStatus().name());
+        output.put("priority", task.getPriority().name());
+        output.put("assigneeId", task.getAssigneeId() == null ? null : task.getAssigneeId().toString());
+        output.put("assigneeName", task.getAssigneeId() == null ? null : names.getOrDefault(task.getAssigneeId(), "Unknown"));
+        output.put("deadline", task.getDeadline().toString());
+        output.put("progressPercent", task.getProgressPercent());
+        output.put("overdue", isOverdue(task));
+        output.put("riskReason", fallbackDelayReason(task));
+        return output;
+    }
+
+    private Map<String, Object> enumCountChart(String title, List<String> labels, java.util.function.Function<String, Long> counter) {
+        List<Map<String, Object>> series = labels.stream()
+                .map(label -> Map.<String, Object>of("label", label, "value", counter.apply(label)))
+                .toList();
+        long total = series.stream().mapToLong(item -> numberFrom(item.get("value")).longValue()).sum();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("title", title);
+        output.put("series", series);
+        output.put("total", total);
+        return output;
+    }
+
+    private Map<String, Object> countChart(String title, Map<String, Long> grouped) {
+        List<Map<String, Object>> series = grouped.entrySet().stream()
+                .map(entry -> Map.<String, Object>of("label", entry.getKey(), "value", entry.getValue()))
+                .toList();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("title", title);
+        output.put("series", series);
+        output.put("total", grouped.values().stream().mapToLong(Long::longValue).sum());
+        return output;
+    }
+
+    private Map<String, Object> revenueChart(String title, java.util.function.Function<PaymentTransactionEntity, String> labelResolver) {
+        Map<String, BigDecimal> grouped = new LinkedHashMap<>();
+        paymentTransactions.findAll().stream()
+                .filter(this::isSuccessfulPayment)
+                .sorted(Comparator.comparing(this::effectivePaymentDate))
+                .forEach(payment -> grouped.merge(labelResolver.apply(payment), payment.getAmount(), BigDecimal::add));
+        List<Map<String, Object>> series = grouped.entrySet().stream()
+                .map(entry -> Map.<String, Object>of("label", entry.getKey(), "value", entry.getValue(), "currency", "VND"))
+                .toList();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("title", title);
+        output.put("series", series);
+        output.put("total", grouped.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add));
+        output.put("currency", "VND");
+        output.put("metadata", Map.of("generatedAt", OffsetDateTime.now().toString(), "dataSource", "BACKEND_COMPUTED"));
+        return output;
+    }
+
+    private boolean isSuccessfulPayment(PaymentTransactionEntity payment) {
+        return payment.getStatus() == PaymentTransactionStatus.SUCCESS;
+    }
+
+    private boolean isFailedPayment(PaymentTransactionEntity payment) {
+        return List.of(PaymentTransactionStatus.FAILED, PaymentTransactionStatus.EXPIRED, PaymentTransactionStatus.CANCELLED, PaymentTransactionStatus.REFUNDED).contains(payment.getStatus());
+    }
+
+    private List<PaymentTransactionEntity> pendingManualPayments(List<PaymentTransactionEntity> payments) {
+        return payments.stream()
+                .filter(payment -> List.of(PaymentTransactionStatus.PENDING, PaymentTransactionStatus.PROCESSING, PaymentTransactionStatus.MANUAL_REVIEW).contains(payment.getStatus()))
+                .toList();
+    }
+
+    private BigDecimal successfulRevenueSince(List<PaymentTransactionEntity> payments, OffsetDateTime start) {
+        return payments.stream()
+                .filter(this::isSuccessfulPayment)
+                .filter(payment -> !effectivePaymentDate(payment).isBefore(start))
+                .map(PaymentTransactionEntity::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private OffsetDateTime effectivePaymentDate(PaymentTransactionEntity payment) {
+        if (payment.getPaidAt() != null) return payment.getPaidAt();
+        if (payment.getUpdatedAt() != null) return payment.getUpdatedAt();
+        return payment.getCreatedAt();
+    }
+
+    private double feedbackRatingAverage(List<BusinessFeedbackEntity> feedback) {
+        return feedback.isEmpty()
+                ? 0
+                : Math.round(feedback.stream().mapToInt(BusinessFeedbackEntity::getRating).average().orElse(0) * 100.0) / 100.0;
     }
 
     public WorkloadView employeeWorkload(UUID employeeId) {
@@ -1243,14 +1499,17 @@ public class ForepService {
         if (request.maxUsers() > plan.getMaxUsers()) {
         }
         workspace.setMaxUsers(request.maxUsers() > 0 ? request.maxUsers() : plan.getMaxUsers());
+        workspace.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+        workspace.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
         workspace.setStatus(request.status() == null ? WorkspaceStatus.INACTIVE : request.status());
         workspace.setPaymentStatus(PaymentStatus.CONFIRMED);
-        workspace.setActivatedAt(request.activationDate());
-        workspace.setExpiresAt(request.expirationDate());
+        workspace.setActivatedAt(request.activationDate() == null && request.status() == WorkspaceStatus.ACTIVE ? now : request.activationDate());
+        workspace.setExpiresAt(request.expirationDate() == null && workspace.getActivatedAt() != null ? workspace.getActivatedAt().plusMonths(plan.getDurationInMonths()) : request.expirationDate());
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
         List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
         if (workspace.getStatus() == WorkspaceStatus.ACTIVE || workspace.getActivatedAt() != null) {
+            createWorkspaceSubscription(workspace, plan, workspace.getActivatedAt() == null ? now : workspace.getActivatedAt(), null);
             generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, now);
             workspace.setOwnerAccountProvisionedAt(now);
             workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
@@ -1266,6 +1525,8 @@ public class ForepService {
     public PlatformWorkspaceView adminUpdateWorkspace(UUID workspaceId, AdminUpdateWorkspaceRequest request) {
         requireSystemAdmin();
         WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        UUID previousPlanId = workspace.getSubscriptionPlanId();
+        boolean planChanged = false;
         if (hasText(request.businessName())) workspace.setBusinessName(request.businessName());
         if (hasText(request.workspaceName())) workspace.setName(request.workspaceName());
         if (hasText(request.contactEmail())) workspace.setContactEmail(request.contactEmail());
@@ -1274,7 +1535,10 @@ public class ForepService {
         SubscriptionPlanEntity selectedPlan = null;
         if (request.subscriptionPlanId() != null) {
             selectedPlan = requireSubscriptionPlan(request.subscriptionPlanId());
+            planChanged = previousPlanId == null || !previousPlanId.equals(selectedPlan.getId());
             workspace.setSubscriptionPlanId(selectedPlan.getId());
+            workspace.setMaxOwnerAccounts(selectedPlan.getMaxOwnerAccounts());
+            workspace.setMaxEmployeeAccounts(selectedPlan.getMaxEmployeeAccounts());
         } else if (workspace.getSubscriptionPlanId() != null) {
             selectedPlan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
         }
@@ -1293,7 +1557,21 @@ public class ForepService {
         if (request.activationDate() != null) workspace.setActivatedAt(request.activationDate());
         if (request.expirationDate() != null) workspace.setExpiresAt(request.expirationDate());
         if (request.status() != null) workspace.setStatus(request.status());
+        OffsetDateTime now = OffsetDateTime.now();
+        if (selectedPlan != null && workspace.getStatus() == WorkspaceStatus.ACTIVE && workspace.getActivatedAt() == null) {
+            workspace.setActivatedAt(now);
+        }
+        if (selectedPlan != null && planChanged && workspace.getStatus() == WorkspaceStatus.ACTIVE && request.expirationDate() == null) {
+            workspace.setExpiresAt(now.plusMonths(selectedPlan.getDurationInMonths()));
+        }
         workspace = workspaces.save(workspace);
+        if (selectedPlan != null && workspace.getStatus() == WorkspaceStatus.ACTIVE) {
+            if (planChanged) {
+                replaceActiveWorkspaceSubscription(workspace, selectedPlan, now);
+            } else {
+                ensureActiveWorkspaceSubscription(workspace, selectedPlan, now);
+            }
+        }
         audit(workspace.getId(), "ADMIN_UPDATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace));
         return toPlatformWorkspaceView(workspace);
     }
@@ -1308,12 +1586,24 @@ public class ForepService {
         }
         if (status == WorkspaceStatus.ACTIVE && workspace.getOwnerAccountProvisionedAt() == null && workspace.getSubscriptionPlanId() != null) {
             SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
+            workspace.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+            workspace.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
+            if (workspace.getExpiresAt() == null) {
+                workspace.setExpiresAt(workspace.getActivatedAt().plusMonths(plan.getDurationInMonths()));
+            }
+            ensureActiveWorkspaceSubscription(workspace, plan, workspace.getActivatedAt());
             generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, OffsetDateTime.now());
             workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
             workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
             if (!generatedOwnerAccounts.isEmpty() && workspace.getOwnerId() == null) {
                 workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
             }
+        } else if (status == WorkspaceStatus.ACTIVE && workspace.getSubscriptionPlanId() != null) {
+            SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
+            if (workspace.getExpiresAt() == null) {
+                workspace.setExpiresAt(workspace.getActivatedAt().plusMonths(plan.getDurationInMonths()));
+            }
+            ensureActiveWorkspaceSubscription(workspace, plan, workspace.getActivatedAt());
         }
         workspace = workspaces.save(workspace);
         audit(workspace.getId(), "ADMIN_UPDATE_WORKSPACE_STATUS", "WORKSPACE", workspace.getId(), null, Map.of("status", status.name()));
@@ -1716,7 +2006,7 @@ public class ForepService {
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        List<GeneratedOwnerAccountView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note());
+        List<GeneratedOwnerAccountView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note(), null);
         return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId), generatedOwnerAccounts);
     }
 
@@ -1747,6 +2037,126 @@ public class ForepService {
         output.put("suspendedWorkspaces", all.stream().filter(item -> item.getStatus() == WorkspaceStatus.SUSPENDED).count());
         output.put("expiredWorkspaces", all.stream().filter(item -> item.getStatus() == WorkspaceStatus.EXPIRED).count());
         output.put("workspaces", all.stream().map(this::toPlatformWorkspaceView).toList());
+        return output;
+    }
+
+    public Map<String, Object> adminDashboardOverview() {
+        requireSystemAdmin();
+        List<WorkspaceEntity> allWorkspaces = workspaces.findAll();
+        List<UserEntity> allUsers = users.findAll();
+        List<PaymentTransactionEntity> allPayments = paymentTransactions.findAll();
+        LocalDate today = LocalDate.now();
+        OffsetDateTime monthStart = today.withDayOfMonth(1).atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+        OffsetDateTime quarterStart = today.withMonth(((today.getMonthValue() - 1) / 3) * 3 + 1).withDayOfMonth(1).atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+        OffsetDateTime yearStart = today.withDayOfYear(1).atStartOfDay().atOffset(OffsetDateTime.now().getOffset());
+        long successfulPayments = allPayments.stream().filter(this::isSuccessfulPayment).count();
+        long failedPayments = allPayments.stream().filter(this::isFailedPayment).count();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("totalWorkspaces", allWorkspaces.size());
+        output.put("activeWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.ACTIVE).count());
+        output.put("suspendedWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.SUSPENDED).count());
+        output.put("expiredWorkspaces", allWorkspaces.stream().filter(workspace -> workspace.getStatus() == WorkspaceStatus.EXPIRED).count());
+        output.put("newWorkspacesThisMonth", allWorkspaces.stream().filter(workspace -> workspace.getCreatedAt() != null && !workspace.getCreatedAt().isBefore(monthStart)).count());
+        output.put("totalUsers", allUsers.size());
+        output.put("totalBusinessesByPackage", adminDashboardWorkspacesByPlan().get("series"));
+        output.put("revenueThisMonth", successfulRevenueSince(allPayments, monthStart));
+        output.put("revenueThisQuarter", successfulRevenueSince(allPayments, quarterStart));
+        output.put("revenueThisYear", successfulRevenueSince(allPayments, yearStart));
+        output.put("currency", "VND");
+        output.put("paymentSuccessRate", percentage(successfulPayments, successfulPayments + failedPayments));
+        output.put("failedPayments", failedPayments);
+        output.put("pendingManualPayments", pendingManualPayments(allPayments).size());
+        output.put("businessFeedbackRatingAverage", feedbackRatingAverage(businessFeedback.findAllByOrderByCreatedAtDesc()));
+        output.put("aiUsageStatistics", Map.of(
+                "totalHistoryCalls", aiHistory.count(),
+                "totalSuggestions", aiSuggestions.count(),
+                "generatedSuggestions", aiSuggestions.findAll().stream().filter(item -> item.getStatus() == AiSuggestionStatus.GENERATED).count()
+        ));
+        output.put("metadata", Map.of("generatedAt", OffsetDateTime.now().toString(), "dataSource", "BACKEND_COMPUTED"));
+        return output;
+    }
+
+    public Map<String, Object> adminDashboardRevenueMonthly() {
+        requireSystemAdmin();
+        return revenueChart("Doanh thu theo tháng", payment -> effectivePaymentDate(payment).getYear() + "-" + String.format("%02d", effectivePaymentDate(payment).getMonthValue()));
+    }
+
+    public Map<String, Object> adminDashboardRevenueQuarterly() {
+        requireSystemAdmin();
+        return revenueChart("Doanh thu theo quý", payment -> effectivePaymentDate(payment).getYear() + "-Q" + ((effectivePaymentDate(payment).getMonthValue() - 1) / 3 + 1));
+    }
+
+    public Map<String, Object> adminDashboardRevenueYearly() {
+        requireSystemAdmin();
+        return revenueChart("Doanh thu theo năm", payment -> String.valueOf(effectivePaymentDate(payment).getYear()));
+    }
+
+    public Map<String, Object> adminDashboardRevenueByPlan() {
+        requireSystemAdmin();
+        Map<UUID, String> planNames = subscriptionPlans.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(SubscriptionPlanEntity::getId, SubscriptionPlanEntity::getName));
+        return revenueChart("Doanh thu theo gói", payment -> planNames.getOrDefault(payment.getSubscriptionPlanId(), "Unknown plan"));
+    }
+
+    public Map<String, Object> adminDashboardWorkspacesByStatus() {
+        requireSystemAdmin();
+        List<WorkspaceEntity> allWorkspaces = workspaces.findAll();
+        return enumCountChart(
+                "Workspace theo trạng thái",
+                Arrays.stream(WorkspaceStatus.values()).map(Enum::name).toList(),
+                status -> allWorkspaces.stream().filter(workspace -> workspace.getStatus().name().equals(status)).count()
+        );
+    }
+
+    public Map<String, Object> adminDashboardWorkspacesByPlan() {
+        requireSystemAdmin();
+        Map<UUID, String> planNames = subscriptionPlans.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(SubscriptionPlanEntity::getId, SubscriptionPlanEntity::getName));
+        Map<String, Long> grouped = new LinkedHashMap<>();
+        workspaces.findAll().forEach(workspace -> {
+            String label = workspace.getSubscriptionPlanId() == null ? "NO_PLAN" : planNames.getOrDefault(workspace.getSubscriptionPlanId(), "Unknown plan");
+            grouped.merge(label, 1L, Long::sum);
+        });
+        return countChart("Workspace theo gói", grouped);
+    }
+
+    public Map<String, Object> adminDashboardPaymentsSummary() {
+        requireSystemAdmin();
+        List<PaymentTransactionEntity> allPayments = paymentTransactions.findAllByOrderByCreatedAtDesc();
+        long successfulPayments = allPayments.stream().filter(this::isSuccessfulPayment).count();
+        long failedPayments = allPayments.stream().filter(this::isFailedPayment).count();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("totalPayments", allPayments.size());
+        output.put("successfulPayments", successfulPayments);
+        output.put("failedPayments", failedPayments);
+        output.put("pendingManualPayments", pendingManualPayments(allPayments).size());
+        output.put("paymentSuccessRate", percentage(successfulPayments, successfulPayments + failedPayments));
+        output.put("totalSuccessfulRevenue", allPayments.stream().filter(this::isSuccessfulPayment).map(PaymentTransactionEntity::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add));
+        output.put("currency", "VND");
+        output.put("byStatus", enumCountChart(
+                "Payment theo trạng thái",
+                Arrays.stream(PaymentTransactionStatus.values()).map(Enum::name).toList(),
+                status -> allPayments.stream().filter(payment -> payment.getStatus().name().equals(status)).count()
+        ).get("series"));
+        output.put("pendingManualPaymentTable", pendingManualPayments(allPayments).stream().limit(20).map(this::toPaymentTransactionView).toList());
+        return output;
+    }
+
+    public Map<String, Object> adminDashboardFeedbackSummary() {
+        requireSystemAdmin();
+        List<BusinessFeedbackEntity> feedback = businessFeedback.findAllByOrderByCreatedAtDesc();
+        Map<String, Long> byRating = new LinkedHashMap<>();
+        for (int rating = 1; rating <= 5; rating++) {
+            int fixedRating = rating;
+            byRating.put(String.valueOf(rating), feedback.stream().filter(item -> item.getRating() == fixedRating).count());
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("totalFeedback", feedback.size());
+        output.put("newFeedback", feedback.stream().filter(item -> item.getStatus() == FeedbackStatus.NEW).count());
+        output.put("reviewedFeedback", feedback.stream().filter(item -> item.getStatus() == FeedbackStatus.REVIEWED).count());
+        output.put("averageRating", feedbackRatingAverage(feedback));
+        output.put("ratingChart", countChart("Feedback theo rating", byRating).get("series"));
+        output.put("recentFeedback", feedback.stream().limit(10).map(this::toBusinessFeedbackView).toList());
         return output;
     }
 
@@ -3058,6 +3468,22 @@ public class ForepService {
         return 0;
     }
 
+    private double percentage(long numerator, long denominator) {
+        return denominator <= 0 ? 0 : Math.round((numerator * 10000.0 / denominator)) / 100.0;
+    }
+
+    private Number numberFrom(Object value) {
+        if (value instanceof Number number) return number;
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return new BigDecimal(text);
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
     private double taskRiskScore(TaskEntity task) {
         double score = 0;
         if (isOverdue(task)) score += 100;
@@ -3298,6 +3724,18 @@ public class ForepService {
                 || !task.getUpdatedAt().toLocalDate().isBefore(start)
                 || (task.getCompletedAt() != null && !task.getCompletedAt().toLocalDate().isBefore(start))
                 || !task.getDeadline().toLocalDate().isBefore(start);
+    }
+
+    private boolean isTaskInPeriod(TaskEntity task, LocalDate start, LocalDate end) {
+        return isDateInPeriod(task.getCreatedAt().toLocalDate(), start, end)
+                || isDateInPeriod(task.getUpdatedAt().toLocalDate(), start, end)
+                || (task.getCompletedAt() != null && isDateInPeriod(task.getCompletedAt().toLocalDate(), start, end))
+                || isDateInPeriod(task.getDeadline().toLocalDate(), start, end)
+                || (isOpenTask(task) && task.getCreatedAt().toLocalDate().isBefore(start));
+    }
+
+    private boolean isDateInPeriod(LocalDate value, LocalDate start, LocalDate end) {
+        return !value.isBefore(start) && !value.isAfter(end);
     }
 
     private void applyTaskStatus(TaskEntity task, TaskStatus status, int progressPercent) {
@@ -3735,7 +4173,7 @@ public class ForepService {
         registration.setUpdatedAt(now);
         workspaceRegistrations.save(registration);
 
-        activateWorkspaceForRegistration(registration, adminOverride ? rawPayloadOrNote : null);
+        activateWorkspaceForRegistration(registration, adminOverride ? rawPayloadOrNote : null, payment.getId());
         return toPaymentTransactionView(payment);
     }
 
@@ -3758,7 +4196,7 @@ public class ForepService {
         return toPaymentTransactionView(payment);
     }
 
-    private List<GeneratedOwnerAccountView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote) {
+    private List<GeneratedOwnerAccountView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote, UUID paymentTransactionId) {
         if (registration.getWorkspaceId() != null) {
             return List.of();
         }
@@ -3786,6 +4224,8 @@ public class ForepService {
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
 
+        createWorkspaceSubscription(workspace, plan, now, paymentTransactionId);
+
         List<GeneratedOwnerAccountView> owners = provisionOwnerAccounts(workspace, plan, now);
         workspace.setOwnerAccountProvisionedAt(now);
         workspace.setOwnerAccountCount(owners.size());
@@ -3795,7 +4235,7 @@ public class ForepService {
         workspace = workspaces.save(workspace);
         registration.setWorkspaceId(workspace.getId());
         registration.setPaymentStatus(PaymentStatus.CONFIRMED);
-        registration.setRegistrationStatus(RegistrationStatus.APPROVED);
+        registration.setRegistrationStatus(RegistrationStatus.ACTIVATED);
         registration.setReviewedBy(safeCurrentUserId());
         registration.setReviewedAt(now);
         registration.setReviewNote(reviewNote);
@@ -3803,6 +4243,62 @@ public class ForepService {
         workspaceRegistrations.save(registration);
         audit(workspace.getId(), "ACTIVATE_WORKSPACE_AFTER_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
         return owners;
+    }
+
+    private WorkspaceSubscriptionEntity createWorkspaceSubscription(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime startDate, UUID paymentTransactionId) {
+        if (paymentTransactionId != null && workspaceSubscriptions.existsByPaymentTransactionId(paymentTransactionId)) {
+            return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspace.getId(), WorkspaceSubscriptionStatus.ACTIVE)
+                    .orElseThrow(() -> new IllegalArgumentException("Workspace subscription already exists for payment but active subscription was not found."));
+        }
+        WorkspaceSubscriptionEntity subscription = new WorkspaceSubscriptionEntity();
+        subscription.setWorkspaceId(workspace.getId());
+        subscription.setSubscriptionPlanId(plan.getId());
+        subscription.setStatus(WorkspaceSubscriptionStatus.ACTIVE);
+        subscription.setStartDate(startDate);
+        subscription.setEndDate(workspace.getExpiresAt() == null ? startDate.plusMonths(plan.getDurationInMonths()) : workspace.getExpiresAt());
+        subscription.setRenewalDate(subscription.getEndDate());
+        subscription.setPrice(plan.getPrice());
+        subscription.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+        subscription.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
+        subscription.setPaymentTransactionId(paymentTransactionId);
+        subscription.setCreatedAt(startDate);
+        subscription.setUpdatedAt(startDate);
+        return workspaceSubscriptions.save(subscription);
+    }
+
+    private WorkspaceSubscriptionEntity ensureActiveWorkspaceSubscription(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime startDate) {
+        WorkspaceSubscriptionEntity active = workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspace.getId(), WorkspaceSubscriptionStatus.ACTIVE)
+                .orElse(null);
+        if (active == null) {
+            return createWorkspaceSubscription(workspace, plan, startDate, null);
+        }
+        if (!active.getSubscriptionPlanId().equals(plan.getId())) {
+            return replaceActiveWorkspaceSubscription(workspace, plan, startDate);
+        }
+        return active;
+    }
+
+    private WorkspaceSubscriptionEntity replaceActiveWorkspaceSubscription(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime startDate) {
+        workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspace.getId(), WorkspaceSubscriptionStatus.ACTIVE)
+                .ifPresent(active -> {
+                    active.setStatus(subscriptionTransitionStatus(active, plan));
+                    active.setEndDate(startDate);
+                    active.setRenewalDate(startDate);
+                    active.setUpdatedAt(startDate);
+                    workspaceSubscriptions.saveAndFlush(active);
+                });
+        return createWorkspaceSubscription(workspace, plan, startDate, null);
+    }
+
+    private WorkspaceSubscriptionStatus subscriptionTransitionStatus(WorkspaceSubscriptionEntity current, SubscriptionPlanEntity nextPlan) {
+        int priceComparison = nextPlan.getPrice().compareTo(current.getPrice());
+        if (priceComparison > 0 || nextPlan.getMaxEmployeeAccounts() > current.getMaxEmployeeAccounts() || nextPlan.getMaxOwnerAccounts() > current.getMaxOwnerAccounts()) {
+            return WorkspaceSubscriptionStatus.UPGRADED;
+        }
+        if (priceComparison < 0 || nextPlan.getMaxEmployeeAccounts() < current.getMaxEmployeeAccounts() || nextPlan.getMaxOwnerAccounts() < current.getMaxOwnerAccounts()) {
+            return WorkspaceSubscriptionStatus.DOWNGRADED;
+        }
+        return WorkspaceSubscriptionStatus.CANCELLED;
     }
 
     public List<GeneratedOwnerAccountView> provisionOwnerAccounts(UUID workspaceId) {
@@ -4314,8 +4810,10 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
+    private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerAccountCount(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), generatedOwnerAccounts, item.getCreatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerAccountCount(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), generatedOwnerAccounts, item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
     private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
@@ -4350,7 +4848,8 @@ public class ForepService {
     public record LoginView(String token, UserView user) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
+    public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

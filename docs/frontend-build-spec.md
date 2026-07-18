@@ -82,6 +82,7 @@ Khong hien `PLATFORM_ADMIN`, `BUSINESS_OWNER`, hoac `HR` trong dropdown permissi
 - `PENDING_PAYMENT`: da chon goi, dang cho tao/xac nhan payment.
 - `PAYMENT_CONFIRMED`: payment da xac nhan, backend dang/da kich hoat workspace.
 - `APPROVED`: da duyet va tao workspace.
+- `ACTIVATED`: workspace da kich hoat, subscription/owner accounts da duoc tao.
 - `REJECTED`: bi tu choi.
 - `CANCELLED`: ho so bi huy.
 - `SUBMITTED`, `PAYMENT_PENDING`, `PAYMENT_SUBMITTED`: trang thai cu chi dung de hien thi backward-compatible neu backend tra ve du lieu cu.
@@ -322,7 +323,7 @@ type WorkspaceRegistration = {
   ownerPhone: string | null;
   paymentProofUrl: string | null;
   paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
-  registrationStatus: 'PENDING_PLAN_SELECTION' | 'PENDING_PAYMENT' | 'PAYMENT_CONFIRMED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'SUBMITTED' | 'PAYMENT_PENDING' | 'PAYMENT_SUBMITTED';
+  registrationStatus: 'PENDING_PLAN_SELECTION' | 'PENDING_PAYMENT' | 'PAYMENT_CONFIRMED' | 'APPROVED' | 'ACTIVATED' | 'REJECTED' | 'CANCELLED' | 'SUBMITTED' | 'PAYMENT_PENDING' | 'PAYMENT_SUBMITTED';
   workspaceId: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
@@ -340,17 +341,37 @@ type PlatformWorkspace = {
   contactPhone: string | null;
   businessAddress: string | null;
   subscriptionPlanId: string | null;
+  activeSubscription: WorkspaceSubscription | null;
   maxUsers: number;
   maxOwnerAccounts: number;
   maxEmployeeAccounts: number;
+  ownerAccountCount: number;
   currentUsers: number;
   status: 'PENDING_PAYMENT' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'EXPIRED';
   paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
   ownerId: string | null;
+  ownerAccountProvisionedAt: string | null;
   activatedAt: string | null;
   expiresAt: string | null;
   lastActivityAt: string | null;
+  generatedOwnerAccounts?: GeneratedOwnerAccount[];
   createdAt: string;
+};
+
+type WorkspaceSubscription = {
+  id: string;
+  workspaceId: string;
+  subscriptionPlanId: string;
+  status: 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'PENDING_RENEWAL' | 'UPGRADED' | 'DOWNGRADED';
+  startDate: string;
+  endDate: string;
+  renewalDate: string;
+  price: number;
+  maxOwnerAccounts: number;
+  maxEmployeeAccounts: number;
+  paymentTransactionId: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type PaymentTransaction = {
@@ -457,6 +478,27 @@ Neu khong thanh toan, user public khong tao duoc workspace/account. Chi System A
 
 Production payment note: MoMo callback can xac thuc signature bang `MOMO_SECRET_KEY`. Neu chua co secret, backend chi chap nhan callback khi `MOMO_SANDBOX_MODE=true`; production phai de `false`.
 
+MoMo provider mode:
+
+- FE khong can biet backend dang real provider hay sandbox.
+- Neu backend tra `providerPaymentUrl`, hien nut "Mo MoMo".
+- Neu backend tra `providerDeeplink`, hien nut mobile deeplink.
+- Neu backend tra `providerQrCodeUrl`, hien QR.
+- Neu backend chi tra sandbox instruction/raw provider payload, van hien amount/paymentCode/status va poll public status; khong tu fake thanh cong.
+
+Workspace subscription snapshot:
+
+- Platform workspace response co `activeSubscription`.
+- FE hien goi hien tai/renewal/limit tu `activeSubscription` neu khac null.
+- `subscriptionPlanId`, `maxUsers`, `maxOwnerAccounts`, `maxEmployeeAccounts` tren workspace chi la field tuong thich/fallback.
+- Sau admin update plan/status/payment, invalidate/refetch `workspaces`, `workspaceDetail:{id}`, `adminDashboardOverview`, `adminRevenue:{period}`, `adminWorkspaceCharts`.
+
+Demo seed data cho QA:
+
+- Migration `V16__demo_saas_operational_seed.sql` tao 3 workspace active: `SV`, `MD`, `HC`.
+- Moi workspace co 30 employee, department, business position, 18 task, assignment, daily report, workload bucket, AI history/suggestion cache, feedback, payment va active subscription.
+- Owner demo: `adminSV0001`, `adminMD0001`, `adminHC0001`; password ban dau `123456`.
+
 FE implementation requirements cho registration/payment:
 
 - Sau `POST /api/public/workspace-registrations`, FE phai luu `registrationId` va `registrationToken` trong state/session storage cua flow. Neu mat token, hien thong bao het phien dang ky va yeu cau user bat dau lai hoac lien he admin; khong thu goi API public thieu token.
@@ -476,6 +518,15 @@ Tat ca endpoint duoi day chi danh cho `SYSTEM_ADMIN`.
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
 | Monitoring platform | GET | `/admin/monitoring` | none |
+| Admin dashboard overview | GET | `/api/admin/dashboard/overview` | none |
+| Revenue monthly chart | GET | `/api/admin/dashboard/revenue/monthly` | none |
+| Revenue quarterly chart | GET | `/api/admin/dashboard/revenue/quarterly` | none |
+| Revenue yearly chart | GET | `/api/admin/dashboard/revenue/yearly` | none |
+| Revenue by plan chart | GET | `/api/admin/dashboard/revenue/by-plan` | none |
+| Workspace status chart | GET | `/api/admin/dashboard/workspaces/by-status` | none |
+| Workspace plan chart | GET | `/api/admin/dashboard/workspaces/by-plan` | none |
+| Payment summary | GET | `/api/admin/dashboard/payments/summary` | none |
+| Feedback summary | GET | `/api/admin/dashboard/feedback/summary` | none |
 | Danh sach workspace | GET | `/admin/workspaces` | none |
 | Tao workspace truc tiep | POST | `/admin/workspaces` | `{ businessName, workspaceName, workspaceIdentifier, contactEmail, contactPhone, businessAddress, subscriptionPlanId, maxUsers, activationDate, expirationDate, status }` |
 | Chi tiet workspace | GET | `/admin/workspaces/{id}` | none |
@@ -563,7 +614,8 @@ Analytics/workload danh cho `BUSINESS_OWNER`, `EXECUTIVE`, `MANAGER`, va `HR` th
 
 | Man hinh | Method | Path | Data |
 |---|---|---|---|
-| Dashboard owner | GET | `/analytics/owner-dashboard` | `{ totalTasks, activeTasks, completedTasks, overdueTasks, employeeWorkload, recentlyUpdatedTasks, aiRecommendations }` |
+| Dashboard owner production | GET | `/api/workspace/business-owner/dashboard` | `{ overviewCards, dailyReportInsight, workloadInsight, deadlineRisks, blockedTasks, taskStatusChart, workloadDistributionChart, recommendedActions, metadata }` |
+| Dashboard owner legacy | GET | `/analytics/owner-dashboard` | compatibility only |
 | Workload toan bo | GET | `/analytics/workload` | `Workload[]` |
 | Workload nhan vien | GET | `/analytics/employees/{id}/workload` | `Workload` |
 
@@ -813,14 +865,18 @@ Buttons:
 
 APIs:
 
-- `GET /analytics/owner-dashboard`
+- `GET /api/workspace/business-owner/dashboard`
 - `GET /notifications`
 
 UI blocks:
 
-- KPI: tong task, active, completed, overdue.
+- KPI: today/week/month cards from `overviewCards`.
+- Task status chart from `taskStatusChart.series`.
+- Workload distribution chart from `workloadDistributionChart.series`.
+- Missing report list from `dailyReportInsight.missingEmployees`.
+- Deadline risk table from `deadlineRisks`.
+- Blocked task table from `blockedTasks`.
 - Bang task cap nhat gan day.
-- Bang workload nhan vien.
 - Khoi AI recommendation nhanh.
 - Notification unread count.
 

@@ -118,8 +118,60 @@ Employees cannot directly finalize `COMPLETED`. Use `submit-completion`, then ta
 - GET `/analytics/owner-dashboard`
 - GET `/analytics/workload`
 - GET `/analytics/employees/{id}/workload`
+- GET `/api/workspace/business-owner/dashboard`
 
-`/analytics/owner-dashboard` tra `aiRecommendations` tu cache `ai_suggestions` moi nhat co status `GENERATED` trong dung workspace. Dashboard khong goi LLM moi lan refresh, nen van tra KPI/workload nhanh va khong spam provider. Moi item dashboard co `{ suggestionId, type, source: "CACHE", outputData, createdAt }`.
+`/api/workspace/business-owner/dashboard` is the production workspace dashboard. Backend calculates chart/card-ready data: `overviewCards.today|week|month`, `dailyReportInsight`, `workloadInsight`, `deadlineRisks`, `blockedTasks`, `taskStatusChart`, `workloadDistributionChart`, `recommendedActions`, `recentlyUpdatedTasks`, `aiRecommendations`, and `metadata`. FE must render these values directly and must not ask AI to calculate task counts, overdue counts, missing reports, workload buckets, or completion rate.
+
+`/analytics/owner-dashboard` remains legacy-compatible. Dashboard AI recommendations are read from cached `ai_suggestions` with status `GENERATED`; dashboard refresh does not call the LLM.
+
+## Platform Admin Dashboard
+
+New `/api/admin/dashboard/**` endpoints return backend-computed numbers and chart-ready `series`:
+
+- GET `/api/admin/dashboard/overview`
+- GET `/api/admin/dashboard/revenue/monthly`
+- GET `/api/admin/dashboard/revenue/quarterly`
+- GET `/api/admin/dashboard/revenue/yearly`
+- GET `/api/admin/dashboard/revenue/by-plan`
+- GET `/api/admin/dashboard/workspaces/by-status`
+- GET `/api/admin/dashboard/workspaces/by-plan`
+- GET `/api/admin/dashboard/payments/summary`
+- GET `/api/admin/dashboard/feedback/summary`
+
+Revenue endpoints return `{ title, series: [{ label, value, currency }], total, currency, metadata }`. Workspace/payment/feedback endpoints return labels, values, totals, percentages, and recent table rows where useful. FE must not calculate revenue, success rate, workspace status counts, or feedback averages from raw payment/workspace lists.
+
+## Public Registration And Payment
+
+Production public flow uses:
+
+- GET `/api/public/subscription-plans`
+- GET `/api/public/subscription-plans/{id}`
+- POST `/api/public/workspace-registrations`
+- PATCH `/api/public/workspace-registrations/{id}/select-plan?token={registrationToken}`
+- POST `/api/public/workspace-registrations/{id}/payments?token={registrationToken}`
+- GET `/api/public/payments/{paymentCode}/status?token={registrationToken}`
+- POST `/api/payment-callbacks/momo`
+- POST `/api/payment-callbacks/bank`
+
+Rules:
+
+- Public payment status is read by `paymentCode + registrationToken`; frontend success pages cannot activate workspaces.
+- Successful verified payment sets `PaymentTransaction.status=SUCCESS`, confirms registration payment, activates workspace, creates Business Owner accounts, and returns generated credentials only in the activation response.
+- Final registration state after workspace/account provisioning is `ACTIVATED`.
+- Activation also creates one `workspace_subscriptions` ACTIVE row. This row is the subscription snapshot for billing/audit: plan id, price, owner/employee limits, start/end/renewal dates, and optional payment transaction id.
+- Platform workspace responses include `activeSubscription`. FE/admin screens should show current package, renewal date, and limits from `activeSubscription` when it exists; workspace columns remain compatibility fields.
+- Admin plan changes close the previous ACTIVE subscription as `UPGRADED` or `DOWNGRADED` and create a new ACTIVE subscription snapshot.
+
+MoMo provider mode:
+
+- If `MOMO_SANDBOX_MODE=false` and all of `MOMO_PAYMENT_ENDPOINT`, `MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY`, `MOMO_RETURN_URL`, and `MOMO_NOTIFY_URL` are configured, backend calls the real MoMo create-payment endpoint with signed HMAC payload.
+- If sandbox mode is true, or any required provider config is missing, backend returns sandbox instructions only and clearly marks the provider payload mode as sandbox/missing-config.
+- FE behavior is identical in both modes: render `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl` when present, then rely on backend public status polling for success.
+
+Seed/demo data:
+
+- `V16__demo_saas_operational_seed.sql` creates 3 active workspaces, 30 employees per workspace, departments, business positions, tasks, assignments, daily reports, workload rows, payment rows, subscription snapshots, AI history, cached AI suggestions, and feedback.
+- Demo login pattern uses generated owner usernames such as `adminSV0001`, `adminMD0001`, `adminHC0001`; employee usernames use `svuser01`, `mduser01`, `hcuser01`; initial password is `123456` for seeded accounts.
 
 ## AI Integration
 

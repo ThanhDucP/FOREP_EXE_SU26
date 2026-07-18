@@ -37,7 +37,34 @@ This backend implements a staged workspace registration flow:
 
 On confirmed success, the backend updates the payment, marks the registration as paid, creates the workspace, applies selected plan limits, creates the allowed Business Owner accounts, and activates the workspace in one transaction. Employee accounts are not created during registration.
 
+The activation transaction also creates a dedicated `workspace_subscriptions` ACTIVE row. This row is the billing/audit snapshot for the selected plan, price, owner/employee limits, start date, end date, renewal date, and payment transaction id. Workspace fields such as `subscriptionPlanId`, `maxOwnerAccounts`, and `maxEmployeeAccounts` stay available as compatibility/current-state fields, but admin UI should prefer `activeSubscription` when rendering the current package.
+
+When a Platform Admin changes the plan of an active workspace, the backend closes the previous ACTIVE subscription as `UPGRADED` or `DOWNGRADED` and opens a new ACTIVE subscription snapshot.
+
 Payment transactions expire after their `expiredAt` timestamp. A scheduled backend job marks stale `PENDING`/`PROCESSING` payments as `EXPIRED`, and public payment polling also refreshes the expired state. Workspace registrations that pass their registration expiry date without approval are marked `EXPIRED`.
+
+## Provider Modes
+
+MoMo uses the real provider API only when all production config values are present and `MOMO_SANDBOX_MODE=false`:
+
+- `MOMO_PAYMENT_ENDPOINT`
+- `MOMO_PARTNER_CODE`
+- `MOMO_ACCESS_KEY`
+- `MOMO_SECRET_KEY`
+- `MOMO_RETURN_URL`
+- `MOMO_NOTIFY_URL`
+
+If sandbox mode is enabled or any value is missing, backend returns sandbox instructions instead of attempting a provider charge. Frontend behavior must stay the same in both modes: show returned QR/payment/deeplink fields and poll backend public status until a terminal state.
+
+## Demo Data
+
+Migration `V16__demo_saas_operational_seed.sql` seeds production-like QA data:
+
+- 3 active workspaces: `SV`, `MD`, `HC`
+- 30 employees per workspace
+- Departments and business positions where Developer/BA/Tech Lead/HR Specialist are job positions, not system roles
+- Tasks, team/individual assignments, daily reports, workload buckets, payments, active subscriptions, AI history, cached AI suggestions, and feedback
+- Demo owner logins: `adminSV0001`, `adminMD0001`, `adminHC0001`; initial password `123456`
 
 ## Frontend Pages
 
