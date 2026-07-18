@@ -9,6 +9,53 @@ public final class Enums {
         SYSTEM_ADMIN, OWNER
     }
 
+    public enum Permission {
+        PACKAGE_VIEW,
+        PACKAGE_MANAGE,
+        WORKSPACE_REGISTER,
+        WORKSPACE_VIEW,
+        WORKSPACE_UPDATE,
+        WORKSPACE_MANAGE,
+        PAYMENT_CREATE,
+        PAYMENT_CONFIRM,
+        PAYMENT_STATUS_VIEW,
+        PAYMENT_HISTORY_VIEW,
+        PAYMENT_QR_MANAGE,
+        SUBSCRIPTION_VIEW,
+        SUBSCRIPTION_RENEW,
+        SUBSCRIPTION_UPGRADE,
+        EMPLOYEE_VIEW,
+        EMPLOYEE_CREATE,
+        EMPLOYEE_UPDATE,
+        EMPLOYEE_DEACTIVATE,
+        DEPARTMENT_VIEW,
+        DEPARTMENT_MANAGE,
+        POSITION_VIEW,
+        POSITION_MANAGE,
+        ROLE_MANAGE,
+        PROJECT_CREATE,
+        PROJECT_UPDATE,
+        TASK_VIEW,
+        TASK_CREATE,
+        TASK_ASSIGN,
+        TASK_APPROVE,
+        TASK_UPDATE_OWN,
+        AI_ANALYZE,
+        AI_RECOMMENDATION,
+        AI_SUMMARY,
+        AI_HISTORY,
+        REPORT_VIEW,
+        REPORT_SUBMIT,
+        REPORT_REVIEW,
+        REPORT_EXPORT,
+        AUDIT_LOG_VIEW,
+        SYSTEM_CONFIGURATION,
+        REVENUE_VIEW,
+        FEEDBACK_CREATE,
+        FEEDBACK_MANAGE,
+        NOTIFICATION_VIEW
+    }
+
     public enum PermissionGroup {
         EMPLOYEE, MANAGER, EXECUTIVE
     }

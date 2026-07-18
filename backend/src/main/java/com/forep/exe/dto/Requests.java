@@ -424,6 +424,19 @@ public final class Requests {
     public record CreatePaymentRequest(@NotNull PaymentMethod paymentMethod) {
     }
 
+    public record UpdatePaymentQrSettingRequest(
+            @NotBlank String qrCodeUrl,
+            String paymentUrl,
+            String deeplink,
+            String bankCode,
+            String bankName,
+            String bankAccountNumber,
+            String bankAccountName,
+            String transferContentPrefix,
+            boolean enabled
+    ) {
+    }
+
     public record PaymentCallbackRequest(
             String orderCode,
             String requestId,

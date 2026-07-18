@@ -3,11 +3,13 @@ package com.forep.exe.controller;
 import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
+import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
+import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -67,6 +69,17 @@ public class AdminPlatformController {
     @GetMapping("/payments/{paymentId}")
     ApiResponse<?> payment(@PathVariable UUID paymentId) {
         return ApiResponse.ok(service.adminPayment(paymentId));
+    }
+
+    @GetMapping("/payment-qr-settings")
+    ApiResponse<?> paymentQrSettings() {
+        return ApiResponse.ok(service.adminPaymentQrSettings());
+    }
+
+    @PutMapping("/payment-qr-settings/{paymentMethod}")
+    ApiResponse<?> updatePaymentQrSetting(@PathVariable PaymentMethod paymentMethod,
+                                          @RequestBody @Valid UpdatePaymentQrSettingRequest request) {
+        return ApiResponse.ok(service.updatePaymentQrSetting(paymentMethod, request));
     }
 
     @PatchMapping("/workspace-registrations/{id}/approve")

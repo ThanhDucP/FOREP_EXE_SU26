@@ -184,7 +184,7 @@ public class MomoPaymentService {
         }
     }
 
-    private boolean isRealProviderConfigured() {
+    public boolean isRealProviderConfigured() {
         return !sandboxMode
                 && hasText(endpoint)
                 && hasText(partnerCode)

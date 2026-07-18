@@ -11,14 +11,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.List;
+import java.util.ArrayList;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
+    private final AuthorizationService authorizationService;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, AuthorizationService authorizationService) {
         this.jwtService = jwtService;
+        this.authorizationService = authorizationService;
     }
 
     @Override
@@ -26,7 +28,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String authorization = request.getHeader("Authorization");
         if (authorization != null && authorization.startsWith("Bearer ")) {
             jwtService.parse(authorization.substring(7)).ifPresent(user -> {
-                var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + user.role().name()));
+                var authorities = new ArrayList<SimpleGrantedAuthority>();
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + user.role().name()));
+                authorizationService.permissionsFor(user.role()).stream()
+                        .map(AuthorizationService::authority)
+                        .map(SimpleGrantedAuthority::new)
+                        .forEach(authorities::add);
                 var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             });

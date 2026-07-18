@@ -38,7 +38,7 @@ public class JwtService {
             Map<String, Object> header = Map.of("alg", "HS256", "typ", "JWT");
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sub", user.userId().toString());
-            payload.put("workspaceId", user.workspaceId().toString());
+            payload.put("workspaceId", user.workspaceId() == null ? null : user.workspaceId().toString());
             payload.put("role", user.role().name());
             payload.put("email", user.email());
             payload.put("exp", Instant.now().plusSeconds(expirationMinutes * 60).getEpochSecond());
@@ -66,9 +66,10 @@ public class JwtService {
             if (Instant.now().getEpochSecond() >= exp) {
                 return Optional.empty();
             }
+            Object workspaceId = payload.get("workspaceId");
             return Optional.of(new AuthenticatedUser(
                     UUID.fromString((String) payload.get("sub")),
-                    UUID.fromString((String) payload.get("workspaceId")),
+                    workspaceId == null ? null : UUID.fromString((String) workspaceId),
                     Role.valueOf((String) payload.get("role")),
                     (String) payload.get("email")
             ));

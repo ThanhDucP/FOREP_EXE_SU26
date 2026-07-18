@@ -18,6 +18,7 @@ import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.PaymentStatus;
 import com.forep.exe.domain.Enums.PaymentTransactionStatus;
+import com.forep.exe.domain.Enums.Permission;
 import com.forep.exe.domain.Enums.RegistrationStatus;
 import com.forep.exe.domain.Enums.PermissionGroup;
 import com.forep.exe.domain.Enums.Role;
@@ -66,6 +67,7 @@ import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
+import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
 import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
@@ -92,6 +94,8 @@ import com.forep.exe.persistence.NotificationEntity;
 import com.forep.exe.persistence.NotificationRepository;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
+import com.forep.exe.persistence.PaymentQrSettingEntity;
+import com.forep.exe.persistence.PaymentQrSettingRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
 import com.forep.exe.persistence.TaskAssigneeEntity;
@@ -111,6 +115,7 @@ import com.forep.exe.persistence.WorkspaceRegistrationRepository;
 import com.forep.exe.persistence.WorkspaceSubscriptionEntity;
 import com.forep.exe.persistence.WorkspaceSubscriptionRepository;
 import com.forep.exe.security.AuthenticatedUser;
+import com.forep.exe.security.AuthorizationService;
 import com.forep.exe.security.JwtService;
 import com.forep.exe.security.SecurityContext;
 import com.forep.exe.service.MomoPaymentService.ProviderPaymentResult;
@@ -162,6 +167,7 @@ public class ForepService {
     private final WorkspaceRegistrationRepository workspaceRegistrations;
     private final WorkspaceSubscriptionRepository workspaceSubscriptions;
     private final PaymentTransactionRepository paymentTransactions;
+    private final PaymentQrSettingRepository paymentQrSettings;
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
     private final TaskAttachmentRepository taskAttachments;
@@ -171,6 +177,7 @@ public class ForepService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final SecurityContext securityContext;
+    private final AuthorizationService authorizationService;
     private final AiServiceClient aiServiceClient;
     private final MomoPaymentService momoPaymentService;
     private final BankTransferPaymentService bankTransferPaymentService;
@@ -188,6 +195,7 @@ public class ForepService {
                         WorkspaceRegistrationRepository workspaceRegistrations,
                         WorkspaceSubscriptionRepository workspaceSubscriptions,
                         PaymentTransactionRepository paymentTransactions,
+                        PaymentQrSettingRepository paymentQrSettings,
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
                         TaskAttachmentRepository taskAttachments,
@@ -197,6 +205,7 @@ public class ForepService {
                         PasswordEncoder passwordEncoder,
                         JwtService jwtService,
                         SecurityContext securityContext,
+                        AuthorizationService authorizationService,
                         AiServiceClient aiServiceClient,
                         MomoPaymentService momoPaymentService,
                         BankTransferPaymentService bankTransferPaymentService,
@@ -213,6 +222,7 @@ public class ForepService {
         this.workspaceRegistrations = workspaceRegistrations;
         this.workspaceSubscriptions = workspaceSubscriptions;
         this.paymentTransactions = paymentTransactions;
+        this.paymentQrSettings = paymentQrSettings;
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
         this.taskAttachments = taskAttachments;
@@ -222,6 +232,7 @@ public class ForepService {
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.securityContext = securityContext;
+        this.authorizationService = authorizationService;
         this.aiServiceClient = aiServiceClient;
         this.momoPaymentService = momoPaymentService;
         this.bankTransferPaymentService = bankTransferPaymentService;
@@ -243,7 +254,7 @@ public class ForepService {
             workspaces.save(workspace);
         }
         String token = jwtService.issue(new AuthenticatedUser(user.getId(), user.getWorkspaceId(), user.getRole(), user.getEmail()));
-        return new LoginView(token, toUserView(user));
+        return new LoginView(token, toUserView(user), authorizationService.permissionNamesFor(user.getRole()));
     }
 
     public WorkspaceView registerWorkspace(RegisterWorkspaceRequest request) {
@@ -1874,15 +1885,16 @@ public class ForepService {
         payment.setPaymentCode(uniquePaymentCode());
         payment.setOrderCode(uniqueOrderCode());
         payment.setRequestId(uniqueRequestId());
-        payment.setTransferContent("FOREP " + registration.getWorkspaceIdentifier() + " " + payment.getOrderCode());
+        PaymentQrSettingEntity qrSetting = requireEnabledPaymentQrSetting(request.paymentMethod());
+        payment.setTransferContent(transferContent(qrSetting, registration, payment));
         payment.setStatus(PaymentTransactionStatus.PENDING);
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
 
-        ProviderPaymentResult providerResult = request.paymentMethod() == PaymentMethod.MOMO
-                ? momoPaymentService.createPayment(payment)
-                : bankTransferPaymentService.createPayment(payment);
+        ProviderPaymentResult providerResult = request.paymentMethod() == PaymentMethod.MOMO && momoPaymentService.isRealProviderConfigured()
+                ? withConfiguredQr(momoPaymentService.createPayment(payment), qrSetting)
+                : configuredQrPayment(payment, qrSetting);
         payment.setProviderPaymentUrl(providerResult.paymentUrl());
         payment.setProviderDeeplink(providerResult.deeplink());
         payment.setProviderQrCodeUrl(providerResult.qrCodeUrl());
@@ -1904,6 +1916,41 @@ public class ForepService {
     public PaymentTransactionView payment(UUID paymentId) {
         requireSystemAdmin();
         return toPaymentTransactionView(requirePayment(paymentId));
+    }
+
+    public List<PaymentQrSettingView> adminPaymentQrSettings() {
+        requireSystemAdmin();
+        return paymentQrSettings.findAll(Sort.by(Sort.Direction.ASC, "paymentMethod")).stream()
+                .map(this::toPaymentQrSettingView)
+                .toList();
+    }
+
+    public PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
+        requireSystemAdmin();
+        if (!hasText(request.qrCodeUrl())) {
+            throw new IllegalArgumentException("Vui lòng cập nhật mã QR thanh toán trước khi bật phương thức này.");
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
+            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
+            item.setPaymentMethod(paymentMethod);
+            item.setCreatedAt(now);
+            return item;
+        });
+        setting.setQrCodeUrl(request.qrCodeUrl().trim());
+        setting.setPaymentUrl(blankToNull(request.paymentUrl()));
+        setting.setDeeplink(blankToNull(request.deeplink()));
+        setting.setBankCode(blankToNull(request.bankCode()));
+        setting.setBankName(blankToNull(request.bankName()));
+        setting.setBankAccountNumber(blankToNull(request.bankAccountNumber()));
+        setting.setBankAccountName(blankToNull(request.bankAccountName()));
+        setting.setTransferContentPrefix(blankToNull(request.transferContentPrefix()));
+        setting.setEnabled(request.enabled());
+        setting.setUpdatedBy(currentUser().userId());
+        setting.setUpdatedAt(now);
+        setting = paymentQrSettings.save(setting);
+        audit(null, "ADMIN_UPDATE_PAYMENT_QR_SETTING", "PAYMENT_QR_SETTING", setting.getId(), null, toPaymentQrSettingView(setting));
+        return toPaymentQrSettingView(setting);
     }
 
     public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
@@ -3994,6 +4041,82 @@ public class ForepService {
         return value != null && !value.isBlank();
     }
 
+    private String blankToNull(String value) {
+        return hasText(value) ? value.trim() : null;
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not serialize payment payload.", exception);
+        }
+    }
+
+    private PaymentQrSettingEntity requireEnabledPaymentQrSetting(PaymentMethod paymentMethod) {
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod)
+                .orElseThrow(() -> new IllegalArgumentException("Phương thức thanh toán này chưa có mã QR. Vui lòng đợi quản trị viên cập nhật."));
+        if (!setting.isEnabled() || !hasText(setting.getQrCodeUrl())) {
+            throw new IllegalArgumentException("Phương thức thanh toán này chưa sẵn sàng vì thiếu mã QR. Vui lòng đợi quản trị viên cập nhật.");
+        }
+        if (paymentMethod == PaymentMethod.BANK_TRANSFER
+                && (!hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
+            throw new IllegalArgumentException("Thông tin tài khoản ngân hàng chưa đầy đủ. Vui lòng đợi quản trị viên cập nhật.");
+        }
+        return setting;
+    }
+
+    private String transferContent(PaymentQrSettingEntity setting, WorkspaceRegistrationEntity registration, PaymentTransactionEntity payment) {
+        String prefix = hasText(setting.getTransferContentPrefix()) ? setting.getTransferContentPrefix().trim() : "FOREP";
+        return prefix + " " + registration.getWorkspaceIdentifier() + " " + payment.getOrderCode();
+    }
+
+    private ProviderPaymentResult configuredQrPayment(PaymentTransactionEntity payment, PaymentQrSettingEntity setting) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("paymentMethod", payment.getPaymentMethod());
+        request.put("amount", payment.getAmount());
+        request.put("paymentCode", payment.getPaymentCode());
+        request.put("orderCode", payment.getOrderCode());
+        request.put("transferContent", payment.getTransferContent());
+        request.put("qrSettingId", setting.getId());
+
+        Map<String, Object> response = new LinkedHashMap<>(request);
+        response.put("provider", "ADMIN_CONFIGURED_QR");
+        response.put("qrCodeUrl", setting.getQrCodeUrl());
+        response.put("paymentUrl", setting.getPaymentUrl());
+        response.put("deeplink", setting.getDeeplink());
+        response.put("bankCode", setting.getBankCode());
+        response.put("bankName", setting.getBankName());
+        response.put("bankAccountNumber", setting.getBankAccountNumber());
+        response.put("bankAccountName", setting.getBankAccountName());
+
+        return new ProviderPaymentResult(
+                setting.getPaymentUrl(),
+                setting.getDeeplink(),
+                setting.getQrCodeUrl(),
+                setting.getBankCode(),
+                setting.getBankName(),
+                setting.getBankAccountNumber(),
+                setting.getBankAccountName(),
+                toJson(request),
+                toJson(response)
+        );
+    }
+
+    private ProviderPaymentResult withConfiguredQr(ProviderPaymentResult providerResult, PaymentQrSettingEntity setting) {
+        return new ProviderPaymentResult(
+                hasText(providerResult.paymentUrl()) ? providerResult.paymentUrl() : setting.getPaymentUrl(),
+                hasText(providerResult.deeplink()) ? providerResult.deeplink() : setting.getDeeplink(),
+                setting.getQrCodeUrl(),
+                hasText(providerResult.bankCode()) ? providerResult.bankCode() : setting.getBankCode(),
+                hasText(providerResult.bankName()) ? providerResult.bankName() : setting.getBankName(),
+                hasText(providerResult.bankAccountNumber()) ? providerResult.bankAccountNumber() : setting.getBankAccountNumber(),
+                hasText(providerResult.bankAccountName()) ? providerResult.bankAccountName() : setting.getBankAccountName(),
+                providerResult.rawRequest(),
+                providerResult.rawResponse()
+        );
+    }
+
     @Scheduled(fixedDelayString = "${forep.payments.expiration-scan-delay-ms:60000}", initialDelayString = "${forep.payments.expiration-initial-delay-ms:60000}")
     public void expireStalePaymentAndRegistrationFlows() {
         OffsetDateTime now = OffsetDateTime.now();
@@ -4507,12 +4630,12 @@ public class ForepService {
     }
 
     private AuthenticatedUser currentUser() { return securityContext.currentUser(); }
-    private void requireOwner() { if (!isBusinessOwnerRole(currentUser().role())) throw new IllegalArgumentException("Chỉ OWNER được sử dụng chức năng này."); }
-    private void requireOwnerOrHr() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ Business Owner hoặc HR được sử dụng chức năng này."); }
-    private void requireHr() { if (currentUser().role() != Role.HR) throw new IllegalArgumentException("Chỉ HR được sử dụng chức năng này."); }
-    private void requireOwnerOrHrOrManager() { if (!isBusinessOwnerRole(currentUser().role()) && currentUser().role() != Role.HR && !isManagerOrExecutiveRole(currentUser().role())) throw new IllegalArgumentException("Chỉ Business Owner, HR, Executive hoặc Manager được sử dụng chức năng này."); }
-    private void requireTaskManager() { if (!isBusinessOwnerRole(currentUser().role()) && !isManagerOrExecutiveRole(currentUser().role())) throw new IllegalArgumentException("Chỉ Business Owner, Executive hoặc Manager được sử dụng chức năng này."); }
-    private void requireSystemAdmin() { if (!isPlatformAdminRole(currentUser().role())) throw new IllegalArgumentException("Chỉ System Admin được sử dụng chức năng này."); }
+    private void requireOwner() { authorizationService.require(Permission.WORKSPACE_UPDATE); }
+    private void requireOwnerOrHr() { authorizationService.requireAny(Permission.EMPLOYEE_VIEW, Permission.DEPARTMENT_VIEW, Permission.POSITION_VIEW); }
+    private void requireHr() { authorizationService.requireAny(Permission.EMPLOYEE_CREATE, Permission.DEPARTMENT_MANAGE, Permission.POSITION_MANAGE); }
+    private void requireOwnerOrHrOrManager() { authorizationService.requireAny(Permission.EMPLOYEE_VIEW, Permission.AI_ANALYZE, Permission.TASK_ASSIGN); }
+    private void requireTaskManager() { authorizationService.requireAny(Permission.TASK_ASSIGN, Permission.TASK_APPROVE, Permission.AI_RECOMMENDATION); }
+    private void requireSystemAdmin() { authorizationService.require(Permission.SYSTEM_CONFIGURATION); }
     private boolean isPlatformAdminRole(Role role) { return role == Role.PLATFORM_ADMIN || role == Role.SYSTEM_ADMIN || role == Role.SYSTEM; }
     private boolean isBusinessOwnerRole(Role role) { return role == Role.BUSINESS_OWNER || role == Role.OWNER; }
     private boolean isManagerOrExecutiveRole(Role role) { return role == Role.MANAGER || role == Role.EXECUTIVE; }
@@ -4797,7 +4920,7 @@ public class ForepService {
     }
 
     private WorkspaceView toWorkspaceView(WorkspaceEntity item) { return new WorkspaceView(item.getId(), item.getName(), item.getShortCode(), item.getLogo(), item.getAddress(), item.getOwnerId(), item.getCreatedAt()); }
-    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.isMustChangePassword(), item.isInitialAccountGenerated(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), authorizationService.permissionNamesFor(item.getRole()), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.isMustChangePassword(), item.isInitialAccountGenerated(), item.getCreatedAt(), item.getUpdatedAt()); }
     private TaskView toTaskView(TaskEntity item) { return new TaskView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getRequirements(), item.getDescription(), item.getCustomerPhone(), item.getCustomerEmail(), item.getCustomerDescription(), item.getAssignmentType(), item.getAssigneeId(), item.getCreatorId(), item.getPriority(), item.getDeadline(), item.getStartDate(), item.getEstimatedHours(), item.getDifficulty(), item.getRequiredSkills(), item.getRequiredJobPositionId(), item.getTaskDomain(), item.getProjectId(), item.getDepartmentId(), taskAssignees.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAssigneeView).toList(), taskAttachments.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAttachmentView).toList(), item.getProgressPercent(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt(), item.getCompletedAt()); }
     private TaskAssigneeView toTaskAssigneeView(TaskAssigneeEntity item) { return new TaskAssigneeView(item.getId(), item.getTaskId(), item.getEmployeeId(), item.getParticipantRole(), item.isLeader(), item.getAllocatedHours(), item.getCreatedAt()); }
     private TaskAttachmentView toTaskAttachmentView(TaskAttachmentEntity item) { return new TaskAttachmentView(item.getId(), item.getTaskId(), item.getFileName(), item.getFileUrl(), item.getContentType(), item.getFileSize(), item.getAttachmentType(), item.getUploadedBy(), item.getCreatedAt()); }
@@ -4810,6 +4933,7 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getQrCodeUrl(), item.getPaymentUrl(), item.getDeeplink(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
@@ -4823,7 +4947,7 @@ public class ForepService {
     private AuditLogView toAuditLogView(AuditLogEntity item) { return new AuditLogView(item.getId(), item.getWorkspaceId(), item.getActorId(), item.getAction(), item.getEntityType(), item.getEntityId(), item.getOldValue(), item.getNewValue(), item.getCreatedAt()); }
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
-    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, List<String> permissions, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, String customerPhone, String customerEmail, String customerDescription, AssignmentType assignmentType, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, OffsetDateTime startDate, BigDecimal estimatedHours, Integer difficulty, String requiredSkills, UUID requiredJobPositionId, String taskDomain, UUID projectId, UUID departmentId, List<TaskAssigneeView> participants, List<TaskAttachmentView> attachments, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskAssigneeView(UUID id, UUID taskId, UUID employeeId, TaskParticipantRole participantRole, boolean leader, BigDecimal allocatedHours, OffsetDateTime createdAt) {}
     public record TaskAttachmentView(UUID id, UUID taskId, String fileName, String fileUrl, String contentType, Long fileSize, AttachmentType attachmentType, UUID uploadedBy, OffsetDateTime createdAt) {}
@@ -4845,9 +4969,10 @@ public class ForepService {
     public record OwnerDashboardView(long totalTasks, long activeTasks, long completedTasks, long overdueTasks, List<WorkloadView> employeeWorkload, List<TaskView> recentlyUpdatedTasks, List<DashboardAiRecommendationView> aiRecommendations) {}
     public record DashboardAiRecommendationView(UUID suggestionId, AiSuggestionType type, String source, String outputData, OffsetDateTime createdAt) {}
     public record BusinessSummaryView(long completedTasks, long overdueTasks, long overloadedEmployees, long idleEmployees, String summary) {}
-    public record LoginView(String token, UserView user) {}
+    public record LoginView(String token, UserView user, List<String> permissions) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String qrCodeUrl, String paymentUrl, String deeplink, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

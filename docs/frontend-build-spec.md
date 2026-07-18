@@ -2,7 +2,7 @@
 
 Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front-end cu da bi go khoi repo. Front-end moi phai fit truc tiep voi Backend API hien tai. Dung `http://localhost:8080` lam API origin; cac module authenticated cu dung prefix `/api/v1`, public registration/payment dung prefix `/api/public`, payment provider callbacks dung `/api/payment-callbacks`, va admin platform moi dung `/api/admin`.
 
-`docs/FE.md` la source of truth moi cho FE requirements chi tiet: permission matrix, role vs business position, HR master data, task workflow, AI analysis/recommendation, lifecycle rules va acceptance checklist. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh. Doc nay co them section `18. FE Change Log / Production Delta` de doi FE track tat ca thay doi bat buoc sau khi BE/AI duoc chuan hoa production.
+`docs/FE.md` la source of truth moi cho FE requirements chi tiet: permission matrix, role vs business position, HR master data, task workflow, AI analysis/recommendation, lifecycle rules va acceptance checklist. FE moi nen uu tien cac alias `/api/workspace/...` cho cac man hinh workspace van hanh. Doc nay co them section `17. FE Change Log - Authorization Production Delta` de doi FE track tat ca thay doi bat buoc sau khi BE/AI duoc chuan hoa production.
 
 ## 1. Nguyen tac tich hop API
 
@@ -23,7 +23,8 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 - Luu token sau login. Khuyen nghi dung memory state + `localStorage` neu can giu dang nhap sau reload.
 - Date-time gui len backend dung ISO 8601 offset, vi du `2026-06-29T17:00:00+07:00`.
 - Date cho daily report dung `YYYY-MM-DD`.
-- Backend phan quyen theo system role `PLATFORM_ADMIN`, `BUSINESS_OWNER`, `HR`, `EXECUTIVE`, `MANAGER`, `EMPLOYEE`, `SYSTEM`, kem alias cu `SYSTEM_ADMIN`, `OWNER`; UI phai an hanh dong khong dung role.
+- Backend phan quyen theo `Role -> Permission -> Endpoint`. UI phai guard page/menu/button/action bang `user.permissions`, khong guard truc tiep bang role tru redirect mac dinh sau login.
+- `POST /auth/login` tra `{ token, user, permissions }`; `GET /auth/me` tra `User` co `permissions: Permission[]`. FE auth store phai luu permissions va expose `hasPermission()` / `hasAnyPermission()`.
 - Khong goi Developer, BA, HR Staff, Tech Lead... la system role. Day la Business Position/Job Position trong workspace, khac voi system role.
 
 ## 2. Enum dung trong UI
@@ -157,6 +158,7 @@ type User = {
   employeeCode: string | null;
   initialPassword: string | null;
   role: 'PLATFORM_ADMIN' | 'BUSINESS_OWNER' | 'HR' | 'EXECUTIVE' | 'MANAGER' | 'EMPLOYEE' | 'SYSTEM' | 'SYSTEM_ADMIN' | 'OWNER';
+  permissions: Permission[];
   avatar: string | null;
   status: 'ACTIVE' | 'INACTIVE' | 'INVITED';
   jobTitle: string | null;
@@ -167,6 +169,52 @@ type User = {
   createdAt: string;
   updatedAt: string;
 };
+
+type Permission =
+  | 'PACKAGE_VIEW'
+  | 'PACKAGE_MANAGE'
+  | 'WORKSPACE_REGISTER'
+  | 'WORKSPACE_VIEW'
+  | 'WORKSPACE_UPDATE'
+  | 'WORKSPACE_MANAGE'
+  | 'PAYMENT_CREATE'
+  | 'PAYMENT_CONFIRM'
+  | 'PAYMENT_STATUS_VIEW'
+  | 'PAYMENT_HISTORY_VIEW'
+  | 'PAYMENT_QR_MANAGE'
+  | 'SUBSCRIPTION_VIEW'
+  | 'SUBSCRIPTION_RENEW'
+  | 'SUBSCRIPTION_UPGRADE'
+  | 'EMPLOYEE_VIEW'
+  | 'EMPLOYEE_CREATE'
+  | 'EMPLOYEE_UPDATE'
+  | 'EMPLOYEE_DEACTIVATE'
+  | 'DEPARTMENT_VIEW'
+  | 'DEPARTMENT_MANAGE'
+  | 'POSITION_VIEW'
+  | 'POSITION_MANAGE'
+  | 'ROLE_MANAGE'
+  | 'PROJECT_CREATE'
+  | 'PROJECT_UPDATE'
+  | 'TASK_VIEW'
+  | 'TASK_CREATE'
+  | 'TASK_ASSIGN'
+  | 'TASK_APPROVE'
+  | 'TASK_UPDATE_OWN'
+  | 'AI_ANALYZE'
+  | 'AI_RECOMMENDATION'
+  | 'AI_SUMMARY'
+  | 'AI_HISTORY'
+  | 'REPORT_VIEW'
+  | 'REPORT_SUBMIT'
+  | 'REPORT_REVIEW'
+  | 'REPORT_EXPORT'
+  | 'AUDIT_LOG_VIEW'
+  | 'SYSTEM_CONFIGURATION'
+  | 'REVENUE_VIEW'
+  | 'FEEDBACK_CREATE'
+  | 'FEEDBACK_MANAGE'
+  | 'NOTIFICATION_VIEW';
 
 type Task = {
   id: string;
@@ -400,6 +448,23 @@ type PaymentTransaction = {
   updatedAt: string;
 };
 
+type PaymentQrSetting = {
+  id: string;
+  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
+  qrCodeUrl: string;
+  paymentUrl: string | null;
+  deeplink: string | null;
+  bankCode: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
+  transferContentPrefix: string | null;
+  enabled: boolean;
+  updatedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type PublicPaymentStatus = {
   workspaceRegistrationId: string;
   workspaceId: string | null;
@@ -440,13 +505,20 @@ type PublicPaymentStatus = {
 
 | Man hinh | Method | Path | Body | Data tra ve |
 |---|---|---|---|---|
-| Login | POST | `/auth/login` | `{ email, password }` hoac `{ username, password }` | `{ token, user }` |
+| Login | POST | `/auth/login` | `{ email, password }` hoac `{ username, password }` | `{ token, user, permissions }` |
 | Logout | POST | `/auth/logout` | none | `{ message }` |
 | Current user | GET | `/auth/me` | none | `User` |
 | Doi mat khau | PATCH | `/auth/change-password` | `{ currentPassword, newPassword }` | `User` |
 
 `POST /auth/logout` hien chi tra message, khong revoke token o server. Front-end phai tu xoa token local.
 `PATCH /auth/change-password` can token dang nhap, dung cho employee tu doi mat khau trong trang tai khoan/bao mat. Sau khi thanh cong, UI nen xoa password tam dang hien thi trong local state neu co va thong bao "Doi mat khau thanh cong".
+
+Auth store bat buoc:
+
+- `permissions` lay tu `login.permissions` hoac `me.permissions`.
+- `hasPermission(permission)` va `hasAnyPermission(permissions)` la helper duy nhat cho route/sidebar/button.
+- Guest route pricing/register/payment/result khong dung `RequireAuth`.
+- Role chi dung de redirect sau login va hien thi label, khong dung de hien/hide action.
 
 ### Workspace
 
@@ -480,11 +552,22 @@ Production payment note: MoMo callback can xac thuc signature bang `MOMO_SECRET_
 
 MoMo provider mode:
 
-- FE khong can biet backend dang real provider hay sandbox.
+- FE khong can biet backend dang real provider hay admin-configured QR mode.
+- QR hien thi cho public user luon la QR do Platform Admin cap nhat trong UI.
 - Neu backend tra `providerPaymentUrl`, hien nut "Mo MoMo".
 - Neu backend tra `providerDeeplink`, hien nut mobile deeplink.
 - Neu backend tra `providerQrCodeUrl`, hien QR.
-- Neu backend chi tra sandbox instruction/raw provider payload, van hien amount/paymentCode/status va poll public status; khong tu fake thanh cong.
+- Neu backend bao loi thieu QR/chua san sang, payment method page hien message: "Phuong thuc thanh toan nay chua san sang. Vui long doi quan tri vien cap nhat ma QR." va khong tiep tuc tao payment.
+- Khong tu sinh QR trong FE, khong dung QR fake, khong dung QR tu third-party client-side.
+
+Admin payment QR settings:
+
+- `GET /api/admin/payment-qr-settings`
+- `PUT /api/admin/payment-qr-settings/{paymentMethod}`
+- Body: `{ qrCodeUrl, paymentUrl?, deeplink?, bankCode?, bankName?, bankAccountNumber?, bankAccountName?, transferContentPrefix?, enabled }`
+- Platform Admin upload/cap nhat QR cho tung method `MOMO` va `BANK_TRANSFER`.
+- Chi bat `enabled=true` khi QR hop le. Voi `BANK_TRANSFER`, FE bat buoc nhap account number/account name.
+- Sau khi update QR, invalidate/refetch `paymentQrSettings`; cac payment moi se dung QR moi, payment cu giu snapshot QR tai thoi diem tao.
 
 Workspace subscription snapshot:
 
@@ -1272,7 +1355,7 @@ src/
   auth/
     auth-store.ts
     RequireAuth.tsx
-    RequireRole.tsx
+    RequirePermission.tsx
   components/
     AppShell.tsx
     DataTable.tsx
@@ -1298,16 +1381,30 @@ src/
 ## 16. Checklist nghiem thu front-end
 
 - Login/logout hoat dong.
-- Register workspace tao duoc workspace va business owner.
+- Guest register/select plan/create payment/check payment status duoc khong can login.
 - BUSINESS_OWNER xem dashboard duoc.
 - BUSINESS_OWNER/HR CRUD employee duoc.
-- BUSINESS_OWNER/EXECUTIVE/MANAGER tao/sua/giao/huy task duoc.
+- BUSINESS_OWNER/MANAGER tao/sua/giao/huy task duoc khi co permission tu backend.
 - EMPLOYEE chi thay task duoc giao.
-- BUSINESS_OWNER/EXECUTIVE/MANAGER/EMPLOYEE cap nhat progress, blocker, completion dung quyen duoc.
+- User co `TASK_UPDATE_OWN` cap nhat progress, blocker, completion dung quyen duoc.
 - Daily report tao duoc va khong tao trung cung ngay.
-- BUSINESS_OWNER review daily report duoc.
+- User co `REPORT_REVIEW` review daily report duoc.
 - Notifications doc duoc va mark read duoc.
 - AI recommendation chon duoc assignee nhung khong auto assign.
 - UI xu ly 401/403 ro rang.
 - Khong con request nao tro toi AI service truc tiep.
 - Khong con dependency vao front-end cu da xoa.
+
+## 17. FE Change Log - Authorization Production Delta
+
+Bat buoc update trong FE source:
+
+- Replace `RequireRole` bang `RequirePermission(requiredPermissions)`; role chi de redirect sau login.
+- Add `Permission` type, `user.permissions`, `login.permissions`, `hasPermission()`, `hasAnyPermission()`.
+- Public pages `pricing`, `workspace registration`, `plan selection`, `payment method`, `payment instruction`, `payment result`, `activation result` khong bi redirect login.
+- Sidebar/menu/button/dialog/action hide theo permission matrix trong `docs/FE.md`.
+- HR screens: Department/Business Position mutation button dung `DEPARTMENT_MANAGE`/`POSITION_MANAGE`; Business Owner co the mutate neu backend tra permission.
+- Task screens: create `TASK_CREATE`, assign `TASK_ASSIGN`, approve/return/cancel `TASK_APPROVE`, employee self update `TASK_UPDATE_OWN`.
+- AI screens: analyze `AI_ANALYZE`, recommendation/explanation `AI_RECOMMENDATION`, owner/platform summary `AI_SUMMARY`, history/suggestions `AI_HISTORY`; HR khong thay AI center neu khong co permission.
+- Platform screens: plans `PACKAGE_MANAGE`, registrations/workspaces `WORKSPACE_MANAGE`, payments `PAYMENT_HISTORY_VIEW`, confirm/reject `PAYMENT_CONFIRM`, QR settings `PAYMENT_QR_MANAGE`, revenue `REVENUE_VIEW`, audit `AUDIT_LOG_VIEW`.
+- Payment QR UI must use backend-returned `providerQrCodeUrl`; if missing QR business error, show waiting state and do not generate fallback QR client-side.

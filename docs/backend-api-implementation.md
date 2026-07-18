@@ -8,7 +8,11 @@ Workspace operation screens should prefer `/api/workspace/...` aliases. `/api/v1
 
 ## Authorization Model
 
-System roles are permission roles only:
+Backend authorization is workflow-first:
+
+`System Role -> role_permissions table -> PERMISSION_* authority -> endpoint permission -> service object/workspace isolation`
+
+System roles are identity buckets only:
 
 - `PLATFORM_ADMIN`: platform administration.
 - `BUSINESS_OWNER`: workspace owner/business owner.
@@ -20,6 +24,24 @@ System roles are permission roles only:
 
 Business/job positions are workspace master data, not system roles. Examples: Backend Java Developer, Business Analyst, HR Staff, Tech Lead. A business position carries `permissionGroup = EMPLOYEE | MANAGER | EXECUTIVE`; it never creates `PLATFORM_ADMIN`, `BUSINESS_OWNER`, or `HR`.
 
+Runtime permission source:
+
+- `role_permissions` stores enabled permissions per system role and is seeded by `V18__dynamic_role_permissions.sql`.
+- JWT authentication expands a user's role into Spring authorities like `PERMISSION_TASK_ASSIGN`.
+- `SecurityConfig` maps endpoint groups to permissions, not `hasRole`.
+- `ForepService` keeps workspace/object guards after route permission passes.
+- `POST /auth/login` returns `{ token, user, permissions }`.
+- `GET /auth/me` returns `UserView` with `permissions`.
+- FE must use `permissions`, not role names, for page/menu/button visibility.
+
+Core permission categories:
+
+- Public/guest flow: `PACKAGE_VIEW`, `WORKSPACE_REGISTER`, `PAYMENT_CREATE`, `PAYMENT_STATUS_VIEW`.
+- Platform flow: `PACKAGE_MANAGE`, `WORKSPACE_MANAGE`, `PAYMENT_CONFIRM`, `PAYMENT_HISTORY_VIEW`, `PAYMENT_QR_MANAGE`, `REVENUE_VIEW`, `AUDIT_LOG_VIEW`, `SYSTEM_CONFIGURATION`.
+- Workspace owner/HR flow: `WORKSPACE_VIEW`, `WORKSPACE_UPDATE`, `EMPLOYEE_*`, `DEPARTMENT_*`, `POSITION_*`, `ROLE_MANAGE`, `SUBSCRIPTION_*`.
+- Manager/employee execution flow: `TASK_VIEW`, `TASK_CREATE`, `TASK_ASSIGN`, `TASK_APPROVE`, `TASK_UPDATE_OWN`, `REPORT_*`.
+- AI flow: `AI_ANALYZE`, `AI_RECOMMENDATION`, `AI_SUMMARY`, `AI_HISTORY`.
+
 ## Auth
 
 - POST `/auth/login`
@@ -27,6 +49,19 @@ Business/job positions are workspace master data, not system roles. Examples: Ba
 - GET `/auth/me`
 
 Login chap nhan email hoac username. Employee username duoc tao tu ten nhan vien + chu cai dau ho/ten dem + employeeCode; password ban dau bang employeeCode.
+
+Auth response:
+
+```json
+{
+  "token": "jwt",
+  "user": {
+    "role": "MANAGER",
+    "permissions": ["TASK_VIEW", "TASK_ASSIGN"]
+  },
+  "permissions": ["TASK_VIEW", "TASK_ASSIGN"]
+}
+```
 
 ## Workspace
 
@@ -152,10 +187,15 @@ Production public flow uses:
 - GET `/api/public/payments/{paymentCode}/status?token={registrationToken}`
 - POST `/api/payment-callbacks/momo`
 - POST `/api/payment-callbacks/bank`
+- GET `/api/admin/payment-qr-settings`
+- PUT `/api/admin/payment-qr-settings/{paymentMethod}`
 
 Rules:
 
 - Public payment status is read by `paymentCode + registrationToken`; frontend success pages cannot activate workspaces.
+- Public payment creation requires an enabled Platform Admin QR setting for the selected method. Missing QR returns a business-rule error asking the user to wait; backend does not create a payment transaction.
+- QR for public users comes from `payment_qr_settings`, not frontend-generated QR and not fake third-party QR generation.
+- Platform Admin can update `MOMO` and `BANK_TRANSFER` QR settings from UI. New payment transactions snapshot the latest QR/settings; old payment instructions are unchanged.
 - Successful verified payment sets `PaymentTransaction.status=SUCCESS`, confirms registration payment, activates workspace, creates Business Owner accounts, and returns generated credentials only in the activation response.
 - Final registration state after workspace/account provisioning is `ACTIVATED`.
 - Activation also creates one `workspace_subscriptions` ACTIVE row. This row is the subscription snapshot for billing/audit: plan id, price, owner/employee limits, start/end/renewal dates, and optional payment transaction id.

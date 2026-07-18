@@ -67,6 +67,27 @@ Subscription snapshot rieng cho billing/audit cua workspace. Day la nguon truth 
 
 Business rule: moi workspace chi co mot `ACTIVE` subscription. Khi admin doi plan, subscription cu duoc dong thanh `UPGRADED` hoac `DOWNGRADED`, sau do tao snapshot `ACTIVE` moi.
 
+## payment_qr_settings
+
+Global payment QR settings do Platform Admin cap nhat tu UI. Public payment chi duoc tao khi method da enabled va co QR hop le.
+
+| Cot | Kieu | Rang buoc | Mo ta |
+| --- | --- | --- | --- |
+| id | uuid | Primary key | ID cau hinh QR |
+| payment_method | varchar(30) | unique, MOMO/BANK_TRANSFER | Phuong thuc thanh toan |
+| qr_code_url | text | not null | URL QR do admin upload/cap nhat |
+| payment_url | text | nullable | Link thanh toan neu co |
+| deeplink | text | nullable | Deeplink mobile neu co |
+| bank_code | varchar(50) | nullable | Ma ngan hang |
+| bank_name | varchar(255) | nullable | Ten ngan hang |
+| bank_account_number | varchar(120) | nullable | So tai khoan |
+| bank_account_name | varchar(255) | nullable | Ten chu tai khoan |
+| transfer_content_prefix | text | nullable | Prefix noi dung chuyen khoan |
+| enabled | boolean | not null | Co cho phep public user tao payment method nay khong |
+| updated_by | uuid | Foreign key -> users(id) | Platform Admin cap nhat cuoi |
+| created_at | timestamp with time zone | not null | Thoi diem tao |
+| updated_at | timestamp with time zone | not null | Thoi diem cap nhat |
+
 ## workspace_registrations
 
 Thông tin đăng ký workspace và xác nhận thanh toán trước khi kích hoạt.
@@ -260,6 +281,26 @@ Feedback cấp doanh nghiệp/workspace do System Administrator review.
 | reviewed_at | timestamp with time zone | nullable | Thời điểm review |
 | created_at | timestamp with time zone | not null | Thời điểm tạo |
 | updated_at | timestamp with time zone | not null | Thời điểm cập nhật |
+
+## role_permissions
+
+Dynamic authorization matrix for system roles.
+
+| Column | Type | Constraint | Description |
+| --- | --- | --- | --- |
+| id | uuid | Primary key | Role-permission mapping ID |
+| role | varchar(50) | not null, unique with permission | System role: PLATFORM_ADMIN, BUSINESS_OWNER, HR, EXECUTIVE, MANAGER, EMPLOYEE, SYSTEM |
+| permission | varchar(80) | not null, unique with role | Permission code such as TASK_ASSIGN, PAYMENT_QR_MANAGE, AI_SUMMARY |
+| enabled | boolean | not null default true | Whether this permission is active for the role |
+| created_at | timestamp with time zone | not null | Created time |
+| updated_at | timestamp with time zone | not null | Updated time |
+
+Rules:
+
+- Business Position/Job Position does not write to this table directly.
+- Employee system role is still derived from Business Position `permissionGroup`.
+- Backend expands `role_permissions` into JWT runtime authorities.
+- FE reads `User.permissions`; FE must not hardcode role-to-screen visibility.
 
 ## Indexes
 
