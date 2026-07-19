@@ -64,10 +64,17 @@ class AiServiceTests(unittest.TestCase):
             employees=[employee("e1", "An", "LOW")],
         )
 
-        with patch("app.services._ask_llm_json", return_value={"recommendations": []}) as mocked:
+        with patch("app.services._ask_llm_json", return_value={"recommendations": [{
+            "employeeId": "e1",
+            "fullName": "An",
+            "score": 80,
+            "workloadLevel": "LOW",
+            "reason": "Phu hop",
+            "risk": "Khong co rui ro lon",
+        }]}) as mocked:
             services.recommend_assignee(payload)
 
-        prompt = mocked.call_args.args[0]
+        prompt = mocked.call_args.kwargs["task"]
         self.assertIn("departmentId and requiredJobPositionId", prompt)
         self.assertIn("After structural fit", prompt)
 

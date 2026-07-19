@@ -16,8 +16,9 @@ public class PaymentQrSettingEntity extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private PaymentMethod paymentMethod;
-    @Column(nullable = false, columnDefinition = "text")
+    @Column(columnDefinition = "text")
     private String qrCodeUrl;
+    private UUID qrFileId;
     @Column(columnDefinition = "text")
     private String paymentUrl;
     @Column(columnDefinition = "text")
@@ -40,6 +41,8 @@ public class PaymentQrSettingEntity extends BaseEntity {
     public void setPaymentMethod(PaymentMethod paymentMethod) { this.paymentMethod = paymentMethod; }
     public String getQrCodeUrl() { return qrCodeUrl; }
     public void setQrCodeUrl(String qrCodeUrl) { this.qrCodeUrl = qrCodeUrl; }
+    public UUID getQrFileId() { return qrFileId; }
+    public void setQrFileId(UUID qrFileId) { this.qrFileId = qrFileId; }
     public String getPaymentUrl() { return paymentUrl; }
     public void setPaymentUrl(String paymentUrl) { this.paymentUrl = paymentUrl; }
     public String getDeeplink() { return deeplink; }

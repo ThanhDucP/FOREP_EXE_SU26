@@ -1193,9 +1193,9 @@ Rules:
 
 ## 14. Platform Admin Owner Account Provisioning
 
-### 14.1 UX After Workspace Activation
+### 14.1 UX After Workspace Creation/Activation
 
-After Platform Admin activates a workspace, backend may return generated Business Owner accounts.
+After Platform Admin creates or activates a workspace, backend may return generated Business Owner accounts.
 
 Show generated accounts once:
 
@@ -1205,6 +1205,10 @@ Show generated accounts once:
 - Copy button.
 - Export CSV button if implemented.
 - Warning: “These credentials are shown only once. Business Owners must change password on first login.”
+
+- Username format: `{XX}0000{suffix}`, for example `SV0000A`, `SV0000B`.
+- Default generated password: `123456`.
+- Owner accounts can be created before activation, but login works only after workspace is `ACTIVE` and payment is `CONFIRMED`.
 
 ### 14.2 Workspace Detail Fields
 
@@ -1222,6 +1226,18 @@ Show generated accounts once:
 - Activated at.
 - Expires at.
 - Owner provisioning timestamp.
+- `ownerAccounts` table: username, full name, email, phone, status, must-change-password, created at, updated at.
+- Row actions: reset password, activate/deactivate account.
+- `generatedOwnerAccounts` modal after create/provision/reset.
+
+### 14.3 Required Platform Admin Actions
+
+- Create workspace and automatically receive owner credentials.
+- Open business/workspace detail and manage Business Owner accounts.
+- Add Business Owner manually; if username/password are empty, backend uses `{XX}0000{suffix}` and `123456`.
+- Reset Business Owner password to `123456`.
+- Activate/deactivate Business Owner account.
+- Re-provision missing Business Owner accounts when package limit increases.
 
 ## 15. Error Messages FE Nên Map Thân Thiện
 
@@ -1455,7 +1471,7 @@ Subscription/payment/admin workspace changes:
 - MoMo/Bank UI must render returned `providerQrCodeUrl`; FE must not generate fake QR or call third-party QR services client-side.
 - If backend returns missing/unready QR error when public user creates payment, show a blocking message asking the user to wait for admin to update the QR, and keep them on payment method/instruction recovery state.
 - MoMo UI must not depend on sandbox/production mode. Render returned `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl`; trust only public payment polling for `SUCCESS`.
-- Demo seed data now includes 3 active workspaces with 30 employees each, cached AI suggestions, dashboard workload/task data, subscriptions, and payments. QA can use owners `adminSV0001`, `adminMD0001`, `adminHC0001` with initial password `123456`.
+- Demo seed data now includes 3 active workspaces with 30 employees each, cached AI suggestions, dashboard workload/task data, subscriptions, and payments. QA can use owners `SV0000A`, `MD0000A`, `HC0000A` with initial password `123456`.
 
 ### 18.5 Required FE Query Keys / Cache
 

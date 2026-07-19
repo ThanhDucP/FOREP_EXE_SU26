@@ -33,6 +33,8 @@ public final class Enums {
         POSITION_VIEW,
         POSITION_MANAGE,
         ROLE_MANAGE,
+        HR_ACCOUNT_MANAGE,
+        EMPLOYEE_IMPORT,
         PROJECT_CREATE,
         PROJECT_UPDATE,
         TASK_VIEW,
@@ -141,7 +143,7 @@ public final class Enums {
     }
 
     public enum AiHistoryStatus {
-        SUCCESS, FAILED, PROCESSING, CANCELLED
+        SUCCESS, FAILED, FALLBACK, PROCESSING, CANCELLED
     }
 
     public enum WorkspaceStatus {

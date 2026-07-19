@@ -11,6 +11,8 @@ import com.forep.exe.dto.Requests.AssignIndividualRequest;
 import com.forep.exe.dto.Requests.AssignTeamRequest;
 import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
+import com.forep.exe.dto.Requests.CreateEmployeeRequest;
+import com.forep.exe.dto.Requests.CreateHrAccountRequest;
 import com.forep.exe.dto.Requests.DepartmentRequest;
 import com.forep.exe.dto.Requests.EmployeeReportAiRequest;
 import com.forep.exe.dto.Requests.EstimateHoursRequest;
@@ -24,10 +26,18 @@ import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
 import com.forep.exe.dto.Requests.UpdateTaskRequest;
+import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
+import com.forep.exe.dto.Requests.UpdateEmployeeStatusRequest;
+import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.service.ForepService;
+import com.forep.exe.service.EmployeeImportService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -37,9 +47,11 @@ import java.time.OffsetDateTime;
 @RequestMapping("/api/workspace")
 public class WorkspaceOperationsController {
     private final ForepService service;
+    private final EmployeeImportService employeeImportService;
 
-    public WorkspaceOperationsController(ForepService service) {
+    public WorkspaceOperationsController(ForepService service, EmployeeImportService employeeImportService) {
         this.service = service;
+        this.employeeImportService = employeeImportService;
     }
 
     @GetMapping("/tasks")
@@ -105,6 +117,89 @@ public class WorkspaceOperationsController {
     @PostMapping("/tasks/{id}/attachments")
     ApiResponse<?> addTaskAttachment(@PathVariable UUID id, @RequestBody @Valid TaskAttachmentRequest request) {
         return ApiResponse.ok(service.addTaskAttachment(id, request));
+    }
+
+    @GetMapping("/hr/employees")
+    ApiResponse<?> employees() {
+        return ApiResponse.ok(service.employees());
+    }
+
+    @GetMapping("/hr/employees/import-template")
+    ResponseEntity<byte[]> employeeImportTemplate() {
+        return fileResponse(employeeImportService.template());
+    }
+
+    @PostMapping(value = "/hr/employees/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    ApiResponse<?> validateEmployeeImport(@RequestPart("file") MultipartFile file) {
+        return ApiResponse.ok(employeeImportService.validate(file));
+    }
+
+    @GetMapping("/hr/employees/imports")
+    ApiResponse<?> employeeImportHistory() {
+        return ApiResponse.ok(employeeImportService.history());
+    }
+
+    @GetMapping("/hr/employees/imports/{batchId}")
+    ApiResponse<?> employeeImportBatch(@PathVariable UUID batchId) {
+        return ApiResponse.ok(employeeImportService.batch(batchId));
+    }
+
+    @PostMapping("/hr/employees/imports/{batchId}/confirm")
+    ApiResponse<?> confirmEmployeeImport(@PathVariable UUID batchId) {
+        return ApiResponse.ok(employeeImportService.confirm(batchId));
+    }
+
+    @GetMapping("/hr/employees/imports/{batchId}/errors")
+    ResponseEntity<byte[]> employeeImportErrors(@PathVariable UUID batchId) {
+        return fileResponse(employeeImportService.errorReport(batchId));
+    }
+
+    @DeleteMapping("/hr/employees/imports/{batchId}")
+    ApiResponse<?> cancelEmployeeImport(@PathVariable UUID batchId) {
+        return ApiResponse.ok(employeeImportService.cancel(batchId));
+    }
+
+    private ResponseEntity<byte[]> fileResponse(EmployeeImportService.FilePayload file) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
+                .contentType(MediaType.parseMediaType(file.contentType()))
+                .contentLength(file.content().length)
+                .body(file.content());
+    }
+
+    @GetMapping("/hr/employees/{id}")
+    ApiResponse<?> employee(@PathVariable UUID id) {
+        return ApiResponse.ok(service.employee(id));
+    }
+
+    @PostMapping("/hr/employees")
+    ApiResponse<?> createEmployee(@RequestBody @Valid CreateEmployeeRequest request) {
+        return ApiResponse.ok(service.createEmployee(request));
+    }
+
+    @PutMapping("/hr/employees/{id}")
+    ApiResponse<?> updateEmployee(@PathVariable UUID id, @RequestBody @Valid UpdateEmployeeRequest request) {
+        return ApiResponse.ok(service.updateEmployee(id, request));
+    }
+
+    @PatchMapping("/hr/employees/{id}/status")
+    ApiResponse<?> updateEmployeeStatus(@PathVariable UUID id, @RequestBody @Valid UpdateEmployeeStatusRequest request) {
+        return ApiResponse.ok(service.updateEmployeeStatus(id, UserStatus.valueOf(request.status().toUpperCase())));
+    }
+
+    @GetMapping("/business-owner/hr-accounts")
+    ApiResponse<?> hrAccounts() {
+        return ApiResponse.ok(service.hrAccounts());
+    }
+
+    @PostMapping("/business-owner/hr-accounts")
+    ApiResponse<?> createInitialHrAccount(@RequestBody @Valid CreateHrAccountRequest request) {
+        return ApiResponse.ok(service.createInitialHrAccount(request));
+    }
+
+    @PatchMapping("/business-owner/hr-accounts/{id}/status")
+    ApiResponse<?> updateHrAccountStatus(@PathVariable UUID id, @RequestBody @Valid UpdateEmployeeStatusRequest request) {
+        return ApiResponse.ok(service.updateHrAccountStatus(id, UserStatus.valueOf(request.status().toUpperCase())));
     }
 
     @GetMapping("/hr/departments")

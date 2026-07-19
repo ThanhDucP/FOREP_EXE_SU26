@@ -81,7 +81,7 @@ Migration `V16__demo_saas_operational_seed.sql` seeds production-like QA data:
 - 30 employees per workspace
 - Departments and business positions where Developer/BA/Tech Lead/HR Specialist are job positions, not system roles
 - Tasks, team/individual assignments, daily reports, workload buckets, payments, active subscriptions, AI history, cached AI suggestions, and feedback
-- Demo owner logins: `adminSV0001`, `adminMD0001`, `adminHC0001`; initial password `123456`
+- Demo owner logins: `SV0000A`, `MD0000A`, `HC0000A`; initial password `123456`
 
 ## Frontend Pages
 

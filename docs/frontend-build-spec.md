@@ -402,6 +402,7 @@ type PlatformWorkspace = {
   activatedAt: string | null;
   expiresAt: string | null;
   lastActivityAt: string | null;
+  ownerAccounts: User[];
   generatedOwnerAccounts?: GeneratedOwnerAccount[];
   createdAt: string;
 };
@@ -580,7 +581,7 @@ Demo seed data cho QA:
 
 - Migration `V16__demo_saas_operational_seed.sql` tao 3 workspace active: `SV`, `MD`, `HC`.
 - Moi workspace co 30 employee, department, business position, 18 task, assignment, daily report, workload bucket, AI history/suggestion cache, feedback, payment va active subscription.
-- Owner demo: `adminSV0001`, `adminMD0001`, `adminHC0001`; password ban dau `123456`.
+- Owner demo: `SV0000A`, `MD0000A`, `HC0000A`; password ban dau `123456`.
 
 FE implementation requirements cho registration/payment:
 
@@ -639,6 +640,16 @@ Tat ca endpoint duoi day chi danh cho `SYSTEM_ADMIN`.
 | Review feedback | PATCH | `/admin/business-feedback/{id}/review` | `{ supportNote }` |
 
 UI System Admin khong duoc hien task detail, task assignment, employee workload noi bo, daily report chi tiet hay thao tac nghiep vu trong workspace.
+
+Business management detail screen is mandatory:
+
+- `GET /admin/workspaces/{id}` returns workspace detail, `activeSubscription`, `ownerAccounts`, `generatedOwnerAccounts`, limits, payment status, activation/expiration dates, and provisioning metadata.
+- `ownerAccounts` is the current account table for Business Owners in that workspace; render username, full name, email, phone, status, must-change-password, created/updated time, reset password action, status action.
+- `generatedOwnerAccounts` is only for newly created/provisioned credentials; show it in a one-time credentials modal with copy/export CSV.
+- When Platform Admin creates a workspace directly, backend automatically creates Business Owner accounts up to plan `maxOwnerAccounts`.
+- Auto owner username format is `{XX}0000{suffix}` with password `123456`, for example `SV0000A / 123456`, `SV0000B / 123456`. `XX` is the two-character workspace identifier; suffix increments `A`, `B`, ..., `Z`, `AA` if needed.
+- Owner accounts may exist before workspace activation, but login is blocked until workspace status is `ACTIVE` and payment status is `CONFIRMED`.
+- Manual create owner defaults to the same username/password format when `username`/`temporaryPassword` are omitted.
 
 ### Employees
 

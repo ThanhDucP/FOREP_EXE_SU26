@@ -72,6 +72,16 @@ Auth response:
 
 Workspace register bat buoc co `shortCode` gom 2 ky tu chu/so, vi day la tien to tao ma nhan vien.
 
+Platform Admin workspace management:
+
+- `GET /api/admin/workspaces/{id}` and legacy `GET /api/v1/admin/workspaces/{id}` return business/workspace detail with `ownerAccounts` and one-time `generatedOwnerAccounts`.
+- Direct admin workspace creation automatically provisions Business Owner accounts up to plan `maxOwnerAccounts`.
+- Generated owner username format is `{XX}0000{suffix}` with password `123456`, for example `SV0000A`, `SV0000B`.
+- `XX` is the normalized two-character workspace identifier; suffix increments `A`, `B`, ..., `Z`, `AA`.
+- Owner accounts can exist before workspace activation, but login is blocked until workspace status is `ACTIVE` and payment is `CONFIRMED`.
+- Manual Business Owner creation defaults to the same username/password format when `username` and `temporaryPassword` are omitted.
+- Admin can list owners, create owners, reset password to `123456`, activate/deactivate owners, and re-provision missing owners after package limit changes.
+
 ## Employees
 
 - GET `/employees`
@@ -211,7 +221,7 @@ MoMo provider mode:
 Seed/demo data:
 
 - `V16__demo_saas_operational_seed.sql` creates 3 active workspaces, 30 employees per workspace, departments, business positions, tasks, assignments, daily reports, workload rows, payment rows, subscription snapshots, AI history, cached AI suggestions, and feedback.
-- Demo login pattern uses generated owner usernames such as `adminSV0001`, `adminMD0001`, `adminHC0001`; employee usernames use `svuser01`, `mduser01`, `hcuser01`; initial password is `123456` for seeded accounts.
+- Demo login pattern uses generated owner usernames such as `SV0000A`, `MD0000A`, `HC0000A`; employee usernames use `svuser01`, `mduser01`, `hcuser01`; initial password is `123456` for seeded accounts.
 
 ## AI Integration
 

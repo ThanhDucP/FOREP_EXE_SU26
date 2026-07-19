@@ -42,9 +42,21 @@ public class BankTransferPaymentService {
     }
 
     public ProviderPaymentResult createPayment(PaymentTransactionEntity payment) {
-        String configuredBankCode = hasText(bankCode) ? bankCode : "BANK";
-        String configuredAccountNumber = hasText(accountNumber) ? accountNumber : "0000000000";
-        String configuredAccountName = hasText(accountName) ? accountName : "FOREP PLATFORM";
+        return createPayment(payment, bankCode, bankName, accountNumber, accountName);
+    }
+
+    public ProviderPaymentResult createPayment(PaymentTransactionEntity payment,
+                                               String configuredBankCode,
+                                               String configuredBankName,
+                                               String configuredAccountNumber,
+                                               String configuredAccountName) {
+        configuredBankCode = hasText(configuredBankCode) ? configuredBankCode : bankCode;
+        configuredBankName = hasText(configuredBankName) ? configuredBankName : bankName;
+        configuredAccountNumber = hasText(configuredAccountNumber) ? configuredAccountNumber : accountNumber;
+        configuredAccountName = hasText(configuredAccountName) ? configuredAccountName : accountName;
+        if (!hasText(configuredBankCode) || !hasText(configuredAccountNumber) || !hasText(configuredAccountName)) {
+            throw new IllegalArgumentException("Bank transfer configuration is incomplete.");
+        }
         String qrCodeUrl = vietQrTemplate
                 .replace("{bankCode}", url(configuredBankCode))
                 .replace("{accountNumber}", url(configuredAccountNumber))
@@ -61,7 +73,7 @@ public class BankTransferPaymentService {
 
         Map<String, Object> response = new LinkedHashMap<>(request);
         response.put("provider", "VIETQR");
-        response.put("bankName", hasText(bankName) ? bankName : configuredBankCode);
+        response.put("bankName", hasText(configuredBankName) ? configuredBankName : configuredBankCode);
         response.put("qrCodeUrl", qrCodeUrl);
 
         return new ProviderPaymentResult(
@@ -69,7 +81,7 @@ public class BankTransferPaymentService {
                 null,
                 qrCodeUrl,
                 configuredBankCode,
-                hasText(bankName) ? bankName : configuredBankCode,
+                hasText(configuredBankName) ? configuredBankName : configuredBankCode,
                 configuredAccountNumber,
                 configuredAccountName,
                 toJson(request),

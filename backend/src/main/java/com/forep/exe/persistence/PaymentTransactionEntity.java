@@ -33,6 +33,7 @@ public class PaymentTransactionEntity extends BaseEntity {
     @Column(nullable = false, unique = true)
     private String requestId;
     private String providerTransactionId;
+    private String providerName;
     private String providerPaymentUrl;
     private String providerDeeplink;
     private String providerQrCodeUrl;
@@ -48,7 +49,15 @@ public class PaymentTransactionEntity extends BaseEntity {
     private String rawProviderRequest;
     @Column(columnDefinition = "text")
     private String rawProviderResponse;
+    @Column(columnDefinition = "text")
+    private String paymentConfigurationSnapshot;
+    @Column(columnDefinition = "text")
+    private String qrDisplayData;
     private OffsetDateTime paidAt;
+    private OffsetDateTime confirmedAt;
+    private UUID confirmedBy;
+    @Column(columnDefinition = "text")
+    private String failureReason;
     private OffsetDateTime expiredAt;
     @Column(nullable = false)
     private OffsetDateTime createdAt;
@@ -73,6 +82,8 @@ public class PaymentTransactionEntity extends BaseEntity {
     public void setRequestId(String requestId) { this.requestId = requestId; }
     public String getProviderTransactionId() { return providerTransactionId; }
     public void setProviderTransactionId(String providerTransactionId) { this.providerTransactionId = providerTransactionId; }
+    public String getProviderName() { return providerName; }
+    public void setProviderName(String providerName) { this.providerName = providerName; }
     public String getProviderPaymentUrl() { return providerPaymentUrl; }
     public void setProviderPaymentUrl(String providerPaymentUrl) { this.providerPaymentUrl = providerPaymentUrl; }
     public String getProviderDeeplink() { return providerDeeplink; }
@@ -95,8 +106,18 @@ public class PaymentTransactionEntity extends BaseEntity {
     public void setRawProviderRequest(String rawProviderRequest) { this.rawProviderRequest = rawProviderRequest; }
     public String getRawProviderResponse() { return rawProviderResponse; }
     public void setRawProviderResponse(String rawProviderResponse) { this.rawProviderResponse = rawProviderResponse; }
+    public String getPaymentConfigurationSnapshot() { return paymentConfigurationSnapshot; }
+    public void setPaymentConfigurationSnapshot(String paymentConfigurationSnapshot) { this.paymentConfigurationSnapshot = paymentConfigurationSnapshot; }
+    public String getQrDisplayData() { return qrDisplayData; }
+    public void setQrDisplayData(String qrDisplayData) { this.qrDisplayData = qrDisplayData; }
     public OffsetDateTime getPaidAt() { return paidAt; }
     public void setPaidAt(OffsetDateTime paidAt) { this.paidAt = paidAt; }
+    public OffsetDateTime getConfirmedAt() { return confirmedAt; }
+    public void setConfirmedAt(OffsetDateTime confirmedAt) { this.confirmedAt = confirmedAt; }
+    public UUID getConfirmedBy() { return confirmedBy; }
+    public void setConfirmedBy(UUID confirmedBy) { this.confirmedBy = confirmedBy; }
+    public String getFailureReason() { return failureReason; }
+    public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
     public OffsetDateTime getExpiredAt() { return expiredAt; }
     public void setExpiredAt(OffsetDateTime expiredAt) { this.expiredAt = expiredAt; }
     public OffsetDateTime getCreatedAt() { return createdAt; }

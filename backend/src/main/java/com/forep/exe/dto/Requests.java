@@ -86,6 +86,13 @@ public final class Requests {
     public record UpdateEmployeeStatusRequest(@NotNull String status) {
     }
 
+    public record CreateHrAccountRequest(
+            @NotBlank String fullName,
+            @Email @NotBlank String email,
+            String phone
+    ) {
+    }
+
     public record UpdateWorkspaceRequest(String name, @Pattern(regexp = "^[A-Za-z0-9]{2}$") String shortCode, String logo, String address) {
     }
 
@@ -425,7 +432,7 @@ public final class Requests {
     }
 
     public record UpdatePaymentQrSettingRequest(
-            @NotBlank String qrCodeUrl,
+            String qrCodeUrl,
             String paymentUrl,
             String deeplink,
             String bankCode,

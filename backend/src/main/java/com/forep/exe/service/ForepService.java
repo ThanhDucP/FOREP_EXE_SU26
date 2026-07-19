@@ -43,6 +43,7 @@ import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
+import com.forep.exe.dto.Requests.CreateHrAccountRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.CreateTaskRequest;
@@ -96,6 +97,8 @@ import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.PaymentQrSettingEntity;
 import com.forep.exe.persistence.PaymentQrSettingRepository;
+import com.forep.exe.persistence.PaymentQrFileEntity;
+import com.forep.exe.persistence.PaymentQrFileRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
 import com.forep.exe.persistence.TaskAssigneeEntity;
@@ -127,8 +130,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import javax.imageio.ImageIO;
 import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.time.Duration;
@@ -147,6 +156,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.function.Function;
 
 @Service
 @Transactional
@@ -168,6 +178,7 @@ public class ForepService {
     private final WorkspaceSubscriptionRepository workspaceSubscriptions;
     private final PaymentTransactionRepository paymentTransactions;
     private final PaymentQrSettingRepository paymentQrSettings;
+    private final PaymentQrFileRepository paymentQrFiles;
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
     private final TaskAttachmentRepository taskAttachments;
@@ -196,6 +207,7 @@ public class ForepService {
                         WorkspaceSubscriptionRepository workspaceSubscriptions,
                         PaymentTransactionRepository paymentTransactions,
                         PaymentQrSettingRepository paymentQrSettings,
+                        PaymentQrFileRepository paymentQrFiles,
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
                         TaskAttachmentRepository taskAttachments,
@@ -223,6 +235,7 @@ public class ForepService {
         this.workspaceSubscriptions = workspaceSubscriptions;
         this.paymentTransactions = paymentTransactions;
         this.paymentQrSettings = paymentQrSettings;
+        this.paymentQrFiles = paymentQrFiles;
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
         this.taskAttachments = taskAttachments;
@@ -274,7 +287,6 @@ public class ForepService {
             throw new IllegalArgumentException("Mật khẩu mới phải khác mật khẩu hiện tại.");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
-        user.setInitialPassword(null);
         user.setMustChangePassword(false);
         user.setUpdatedAt(OffsetDateTime.now());
         user = users.save(user);
@@ -310,8 +322,8 @@ public class ForepService {
         return workspaceEmployees(currentUser().workspaceId()).stream().map(this::toUserView).toList();
     }
 
-    public UserView createEmployee(CreateEmployeeRequest request) {
-        requireOwnerOrHr();
+    public CreatedUserAccountView createEmployee(CreateEmployeeRequest request) {
+        authorizationService.require(Permission.EMPLOYEE_CREATE);
         UUID workspaceId = currentUser().workspaceId();
         if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
             throw new IllegalArgumentException("Email đã tồn tại trong workspace.");
@@ -329,7 +341,6 @@ public class ForepService {
         employee.setPhone(request.phone());
         employee.setUsername(username);
         employee.setEmployeeCode(employeeCode);
-        employee.setInitialPassword(initialPassword);
         employee.setJobTitle(request.jobTitle());
         employee.setSeniorityLevel(request.seniorityLevel());
         employee.setSkillRating(request.skillRating());
@@ -344,7 +355,7 @@ public class ForepService {
         UserView created = toUserView(users.save(employee));
         workspace.setNextEmployeeNumber(workspace.getNextEmployeeNumber() + 1);
         workspaces.save(workspace);
-        return created;
+        return new CreatedUserAccountView(created, username, initialPassword, true);
     }
 
     public UserView employee(UUID employeeId) {
@@ -354,7 +365,7 @@ public class ForepService {
     }
 
     public UserView updateEmployee(UUID employeeId, UpdateEmployeeRequest request) {
-        requireOwnerOrHr();
+        authorizationService.require(Permission.EMPLOYEE_UPDATE);
         UserEntity employee = requireEmployee(employeeId);
         employee.setFullName(request.fullName());
         employee.setEmail(request.email());
@@ -372,23 +383,71 @@ public class ForepService {
     }
 
     public UserView updateEmployeeStatus(UUID employeeId, UserStatus status) {
-        requireOwnerOrHr();
+        authorizationService.require(Permission.EMPLOYEE_DEACTIVATE);
         UserEntity employee = requireEmployee(employeeId);
         employee.setStatus(status);
         employee.setUpdatedAt(OffsetDateTime.now());
         return toUserView(users.save(employee));
     }
 
-    public UserView resetEmployeePassword(UUID employeeId) {
-        requireOwnerOrHr();
+    public CreatedUserAccountView resetEmployeePassword(UUID employeeId) {
+        authorizationService.require(Permission.EMPLOYEE_UPDATE);
         UserEntity employee = requireEmployee(employeeId);
         String temporaryPassword = hasText(employee.getEmployeeCode()) ? employee.getEmployeeCode() : "Employee" + employee.getId().toString().substring(0, 8);
-        employee.setInitialPassword(temporaryPassword);
         employee.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         employee.setUpdatedAt(OffsetDateTime.now());
         employee = users.save(employee);
         audit(employee.getWorkspaceId(), "RESET_EMPLOYEE_PASSWORD", "USER", employee.getId(), null, Map.of("employeeCode", employee.getEmployeeCode()));
-        return toUserView(employee);
+        return new CreatedUserAccountView(toUserView(employee), employee.getUsername(), temporaryPassword, true);
+    }
+
+    public List<UserView> hrAccounts() {
+        authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.HR).stream()
+                .map(this::toUserView)
+                .toList();
+    }
+
+    public GeneratedHrAccountView createInitialHrAccount(CreateHrAccountRequest request) {
+        authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        UUID workspaceId = currentUser().workspaceId();
+        if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
+            throw new IllegalArgumentException("Email already exists in this workspace.");
+        }
+        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        enforceWorkspaceUserLimit(workspace);
+        String username = nextHrUsername(workspace);
+        String temporaryPassword = secureTemporaryPassword();
+        OffsetDateTime now = OffsetDateTime.now();
+        UserEntity hr = new UserEntity();
+        hr.setWorkspaceId(workspaceId);
+        hr.setFullName(request.fullName());
+        hr.setEmail(request.email());
+        hr.setPhone(request.phone());
+        hr.setUsername(username);
+        hr.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        hr.setMustChangePassword(true);
+        hr.setInitialAccountGenerated(true);
+        hr.setRole(Role.HR);
+        hr.setStatus(UserStatus.ACTIVE);
+        hr.setCreatedAt(now);
+        hr.setUpdatedAt(now);
+        hr = users.save(hr);
+        audit(workspaceId, "BUSINESS_OWNER_CREATE_HR_ACCOUNT", "USER", hr.getId(), null,
+                Map.of("username", username, "email", request.email()));
+        return new GeneratedHrAccountView(hr.getId(), username, temporaryPassword, hr.getFullName(), true);
+    }
+
+    public UserView updateHrAccountStatus(UUID hrAccountId, UserStatus status) {
+        authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        UserEntity hr = users.findById(hrAccountId)
+                .filter(user -> currentUser().workspaceId().equals(user.getWorkspaceId()) && user.getRole() == Role.HR)
+                .orElseThrow(() -> new IllegalArgumentException("HR account not found in this workspace."));
+        hr.setStatus(status);
+        hr.setUpdatedAt(OffsetDateTime.now());
+        hr = users.save(hr);
+        audit(hr.getWorkspaceId(), "BUSINESS_OWNER_UPDATE_HR_STATUS", "USER", hr.getId(), null, Map.of("status", status.name()));
+        return toUserView(hr);
     }
 
     public List<TaskView> tasks() {
@@ -1276,7 +1335,8 @@ public class ForepService {
         payload.put("deadline", request.deadline() == null ? null : request.deadline().toString());
         payload.put("backendWorkingDays", request.backendWorkingDays());
         payload.put("backendDefaultHours", request.backendDefaultHours() == null ? null : request.backendDefaultHours().doubleValue());
-        return invokeAiMap("TASK_ESTIMATE_HOURS", AiSuggestionType.TASK_ESTIMATE_HOURS, payload, () -> aiServiceClient.estimateHours(payload));
+        return invokeAiMapWithFallback("TASK_ESTIMATE_HOURS", AiSuggestionType.TASK_ESTIMATE_HOURS, payload,
+                () -> aiServiceClient.estimateHours(payload), exception -> fallbackEstimateHours(payload, exception));
     }
 
     public Map<String, Object> explainRecommendation(RecommendationExplanationRequest request) {
@@ -1295,7 +1355,8 @@ public class ForepService {
             case "TEAM_MEMBER" -> () -> aiServiceClient.explainTeamMemberRecommendation(payload);
             default -> () -> aiServiceClient.explainIndividualRecommendation(payload);
         };
-        return invokeAiMap("RECOMMENDATION_EXPLANATION_" + recommendationType, AiSuggestionType.RECOMMENDATION_EXPLANATION, payload, call);
+        return invokeAiMapWithFallback("RECOMMENDATION_EXPLANATION_" + recommendationType, AiSuggestionType.RECOMMENDATION_EXPLANATION,
+                payload, call, exception -> fallbackRecommendationExplanation(recommendationType, request, exception));
     }
 
     public Map<String, Object> explainRecommendationResult(RecommendationResultExplanationRequest request) {
@@ -1308,7 +1369,9 @@ public class ForepService {
         payload.put("comparisonWithOtherCandidates", request.comparisonWithOtherCandidates() == null ? List.of() : request.comparisonWithOtherCandidates());
         payload.put("workloadData", request.workloadData() == null ? Map.of() : request.workloadData());
         payload.put("performanceData", request.performanceData() == null ? Map.of() : request.performanceData());
-        return invokeAiMap("RECOMMENDATION_RESULT_EXPLANATION", AiSuggestionType.RECOMMENDATION_RESULT_EXPLANATION, payload, () -> aiServiceClient.explainRecommendationResult(payload));
+        return invokeAiMapWithFallback("RECOMMENDATION_RESULT_EXPLANATION", AiSuggestionType.RECOMMENDATION_RESULT_EXPLANATION,
+                payload, () -> aiServiceClient.explainRecommendationResult(payload),
+                exception -> fallbackRecommendationResult(request, exception));
     }
 
     public Map<String, Object> explainWorkloadRisk(WorkloadRiskExplanationRequest request) {
@@ -1319,7 +1382,8 @@ public class ForepService {
         payload.put("monthlyCapacityHours", request.monthlyCapacityHours().doubleValue());
         payload.put("monthlyWorkloadEvaluation", request.monthlyWorkloadEvaluation());
         payload.put("backendOverallRisk", request.backendOverallRisk());
-        return invokeAiMap("WORKLOAD_RISK_EXPLANATION", AiSuggestionType.WORKLOAD_RISK, payload, () -> aiServiceClient.workloadRisk(payload));
+        return invokeAiMapWithFallback("WORKLOAD_RISK_EXPLANATION", AiSuggestionType.WORKLOAD_RISK, payload,
+                () -> aiServiceClient.workloadRisk(payload), exception -> fallbackWorkloadRisk(request, exception));
     }
 
     public Map<String, Object> generateEmployeeReport(EmployeeReportAiRequest request) {
@@ -1331,19 +1395,22 @@ public class ForepService {
         payload.put("metrics", request.metrics());
         payload.put("notableTasks", request.notableTasks() == null ? List.of() : request.notableTasks());
         payload.put("risks", request.risks() == null ? List.of() : request.risks());
-        return invokeAiMap("EMPLOYEE_REPORT", AiSuggestionType.EMPLOYEE_REPORT, payload, () -> aiServiceClient.employeeReport(payload));
+        return invokeAiMapWithFallback("EMPLOYEE_REPORT", AiSuggestionType.EMPLOYEE_REPORT, payload,
+                () -> aiServiceClient.employeeReport(payload), exception -> fallbackEmployeeReport(request, exception));
     }
 
     public Map<String, Object> businessOwnerOperationalSummary() {
         requireOwner();
         Map<String, Object> payload = businessOwnerOperationalSummaryPayload();
-        return invokeAiMap("OWNER_OPERATIONAL_SUMMARY", AiSuggestionType.OWNER_OPERATIONAL_SUMMARY, payload, () -> aiServiceClient.businessOwnerOperationalSummary(payload));
+        return invokeAiMapWithFallback("OWNER_OPERATIONAL_SUMMARY", AiSuggestionType.OWNER_OPERATIONAL_SUMMARY, payload,
+                () -> aiServiceClient.businessOwnerOperationalSummary(payload), exception -> fallbackOwnerOperationalSummary(payload, exception));
     }
 
     public Map<String, Object> platformAdminSystemSummary() {
         requireSystemAdmin();
         Map<String, Object> payload = platformAdminSystemSummaryPayload();
-        return invokeAiMap("PLATFORM_SYSTEM_SUMMARY", AiSuggestionType.PLATFORM_SYSTEM_SUMMARY, payload, () -> aiServiceClient.platformAdminSystemSummary(payload));
+        return invokeAiMapWithFallback("PLATFORM_SYSTEM_SUMMARY", AiSuggestionType.PLATFORM_SYSTEM_SUMMARY, payload,
+                () -> aiServiceClient.platformAdminSystemSummary(payload), exception -> fallbackPlatformSystemSummary(payload, exception));
     }
 
     public Map<String, Object> extractTasks(ExtractTasksRequest request) {
@@ -1521,14 +1588,14 @@ public class ForepService {
         List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
         if (workspace.getStatus() == WorkspaceStatus.ACTIVE || workspace.getActivatedAt() != null) {
             createWorkspaceSubscription(workspace, plan, workspace.getActivatedAt() == null ? now : workspace.getActivatedAt(), null);
-            generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, now);
-            workspace.setOwnerAccountProvisionedAt(now);
-            workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
-            if (!generatedOwnerAccounts.isEmpty()) {
-                workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
-            }
-            workspace = workspaces.save(workspace);
         }
+        generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, now);
+        workspace.setOwnerAccountProvisionedAt(now);
+        workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
+        if (!generatedOwnerAccounts.isEmpty()) {
+            workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
+        }
+        workspace = workspaces.save(workspace);
         audit(workspace.getId(), "ADMIN_CREATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace, generatedOwnerAccounts));
         return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
     }
@@ -1605,7 +1672,7 @@ public class ForepService {
             ensureActiveWorkspaceSubscription(workspace, plan, workspace.getActivatedAt());
             generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, OffsetDateTime.now());
             workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
-            workspace.setOwnerAccountCount(generatedOwnerAccounts.size());
+            workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
             if (!generatedOwnerAccounts.isEmpty() && workspace.getOwnerId() == null) {
                 workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
             }
@@ -1621,24 +1688,31 @@ public class ForepService {
         return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
     }
 
-    public UserView adminCreateBusinessOwner(UUID workspaceId, CreateBusinessOwnerRequest request) {
+    public CreatedUserAccountView adminCreateBusinessOwner(UUID workspaceId, CreateBusinessOwnerRequest request) {
         requireSystemAdmin();
         WorkspaceEntity workspace = requireWorkspace(workspaceId);
         enforceWorkspaceUserLimit(workspace);
+        if (ownerAccounts(workspaceId).size() >= workspace.getMaxOwnerAccounts()) {
+            throw new IllegalArgumentException("Số tài khoản Business Owner đã đạt giới hạn gói hiện tại.");
+        }
         if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
             throw new IllegalArgumentException("Email đã tồn tại trong workspace.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        String temporaryPassword = hasText(request.temporaryPassword()) ? request.temporaryPassword() : temporaryPassword(workspace);
+        String username = hasText(request.username()) ? request.username().trim().toUpperCase(Locale.ROOT) : nextOwnerUsername(workspace);
+        if (users.existsByUsernameIgnoreCase(username)) {
+            throw new IllegalArgumentException("Username Business Owner đã tồn tại.");
+        }
+        String temporaryPassword = hasText(request.temporaryPassword()) ? request.temporaryPassword() : defaultOwnerPassword();
         UserEntity owner = new UserEntity();
         owner.setWorkspaceId(workspaceId);
         owner.setFullName(request.fullName());
         owner.setEmail(request.email());
         owner.setPhone(request.phone());
-        owner.setUsername(hasText(request.username()) ? request.username().trim().toLowerCase(Locale.ROOT) : null);
+        owner.setUsername(username);
         owner.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         owner.setMustChangePassword(true);
-        owner.setInitialAccountGenerated(false);
+        owner.setInitialAccountGenerated(!hasText(request.temporaryPassword()));
         owner.setRole(Role.BUSINESS_OWNER);
         owner.setStatus(request.status() == null ? UserStatus.ACTIVE : request.status());
         owner.setCreatedAt(now);
@@ -1646,10 +1720,12 @@ public class ForepService {
         owner = users.save(owner);
         if (workspace.getOwnerId() == null) {
             workspace.setOwnerId(owner.getId());
-            workspaces.save(workspace);
         }
+        workspace.setOwnerAccountCount(ownerAccounts(workspaceId).size());
+        workspace.setOwnerAccountProvisionedAt(workspace.getOwnerAccountProvisionedAt() == null ? now : workspace.getOwnerAccountProvisionedAt());
+        workspaces.save(workspace);
         audit(workspaceId, "ADMIN_CREATE_BUSINESS_OWNER", "USER", owner.getId(), null, Map.of("email", owner.getEmail(), "status", owner.getStatus().name()));
-        return toUserView(owner);
+        return new CreatedUserAccountView(toUserView(owner), username, temporaryPassword, true);
     }
 
     public List<UserView> adminBusinessOwners(UUID workspaceId) {
@@ -1658,7 +1734,7 @@ public class ForepService {
         return users.findByWorkspaceIdAndRoleInOrderByFullNameAsc(workspaceId, List.of(Role.BUSINESS_OWNER, Role.OWNER)).stream().map(this::toUserView).toList();
     }
 
-    public UserView adminResetOwnerPassword(UUID ownerId) {
+    public CreatedUserAccountView adminResetOwnerPassword(UUID ownerId) {
         requireSystemAdmin();
         UserEntity owner = users.findById(ownerId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy Business Owner."));
         if (!isBusinessOwnerRole(owner.getRole())) throw new IllegalArgumentException("Tài khoản không phải Business Owner.");
@@ -1669,7 +1745,7 @@ public class ForepService {
         owner.setUpdatedAt(OffsetDateTime.now());
         owner = users.save(owner);
         audit(owner.getWorkspaceId(), "ADMIN_RESET_OWNER_PASSWORD", "USER", owner.getId(), null, Map.of("email", owner.getEmail()));
-        return toUserView(owner);
+        return new CreatedUserAccountView(toUserView(owner), owner.getUsername(), temporaryPassword, true);
     }
 
     public UserView adminUpdateOwnerStatus(UUID ownerId, UserStatus status) {
@@ -1887,17 +1963,36 @@ public class ForepService {
         payment.setRequestId(uniqueRequestId());
         PaymentQrSettingEntity qrSetting = requireEnabledPaymentQrSetting(request.paymentMethod());
         payment.setTransferContent(transferContent(qrSetting, registration, payment));
+        payment.setPaymentConfigurationSnapshot(paymentConfigurationSnapshot(qrSetting));
         payment.setStatus(PaymentTransactionStatus.PENDING);
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
 
-        ProviderPaymentResult providerResult = request.paymentMethod() == PaymentMethod.MOMO && momoPaymentService.isRealProviderConfigured()
-                ? withConfiguredQr(momoPaymentService.createPayment(payment), qrSetting)
-                : configuredQrPayment(payment, qrSetting);
+        ProviderPaymentResult providerResult;
+        if (request.paymentMethod() == PaymentMethod.MOMO) {
+            if (!momoPaymentService.isRealProviderConfigured()) {
+                throw new IllegalArgumentException("MoMo payment provider is not configured.");
+            }
+            providerResult = momoPaymentService.createPayment(payment);
+            payment.setProviderName("MOMO");
+        } else {
+            providerResult = bankTransferPaymentService.createPayment(
+                    payment,
+                    qrSetting.getBankCode(),
+                    qrSetting.getBankName(),
+                    qrSetting.getBankAccountNumber(),
+                    qrSetting.getBankAccountName()
+            );
+            if (qrSetting.getQrFileId() != null) {
+                providerResult = withUploadedBankQr(providerResult, qrSetting.getQrFileId());
+            }
+            payment.setProviderName(qrSetting.getQrFileId() == null ? "VIETQR" : "BANK_TRANSFER");
+        }
         payment.setProviderPaymentUrl(providerResult.paymentUrl());
         payment.setProviderDeeplink(providerResult.deeplink());
         payment.setProviderQrCodeUrl(providerResult.qrCodeUrl());
+        payment.setQrDisplayData(providerResult.qrCodeUrl());
         payment.setBankCode(providerResult.bankCode());
         payment.setBankName(providerResult.bankName());
         payment.setBankAccountNumber(providerResult.bankAccountNumber());
@@ -1927,8 +2022,8 @@ public class ForepService {
 
     public PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
         requireSystemAdmin();
-        if (!hasText(request.qrCodeUrl())) {
-            throw new IllegalArgumentException("Vui lòng cập nhật mã QR thanh toán trước khi bật phương thức này.");
+        if (hasText(request.qrCodeUrl())) {
+            throw new IllegalArgumentException("External QR image URLs are not accepted. Upload a bank QR image or use dynamic provider data.");
         }
         OffsetDateTime now = OffsetDateTime.now();
         PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
@@ -1937,13 +2032,23 @@ public class ForepService {
             item.setCreatedAt(now);
             return item;
         });
-        setting.setQrCodeUrl(request.qrCodeUrl().trim());
-        setting.setPaymentUrl(blankToNull(request.paymentUrl()));
-        setting.setDeeplink(blankToNull(request.deeplink()));
-        setting.setBankCode(blankToNull(request.bankCode()));
-        setting.setBankName(blankToNull(request.bankName()));
-        setting.setBankAccountNumber(blankToNull(request.bankAccountNumber()));
-        setting.setBankAccountName(blankToNull(request.bankAccountName()));
+        setting.setQrCodeUrl(null);
+        setting.setPaymentUrl(null);
+        setting.setDeeplink(null);
+        if (paymentMethod == PaymentMethod.MOMO) {
+            setting.setBankCode(null);
+            setting.setBankName(null);
+            setting.setBankAccountNumber(null);
+            setting.setBankAccountName(null);
+        } else {
+            setting.setBankCode(blankToNull(request.bankCode()));
+            setting.setBankName(blankToNull(request.bankName()));
+            setting.setBankAccountNumber(blankToNull(request.bankAccountNumber()));
+            setting.setBankAccountName(blankToNull(request.bankAccountName()));
+            if (request.enabled() && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
+                throw new IllegalArgumentException("Bank code, account number and account name are required before enabling bank transfer.");
+            }
+        }
         setting.setTransferContentPrefix(blankToNull(request.transferContentPrefix()));
         setting.setEnabled(request.enabled());
         setting.setUpdatedBy(currentUser().userId());
@@ -1951,6 +2056,64 @@ public class ForepService {
         setting = paymentQrSettings.save(setting);
         audit(null, "ADMIN_UPDATE_PAYMENT_QR_SETTING", "PAYMENT_QR_SETTING", setting.getId(), null, toPaymentQrSettingView(setting));
         return toPaymentQrSettingView(setting);
+    }
+
+    public PaymentQrFileView uploadPaymentQrImage(PaymentMethod paymentMethod, MultipartFile file) {
+        requireSystemAdmin();
+        if (paymentMethod != PaymentMethod.BANK_TRANSFER) {
+            throw new IllegalArgumentException("Only bank transfer configuration accepts an uploaded QR image.");
+        }
+        byte[] content = validatedQrImage(file);
+        OffsetDateTime now = OffsetDateTime.now();
+        PaymentQrFileEntity stored = new PaymentQrFileEntity();
+        stored.setFileName(uniqueQrFileName(file.getContentType()));
+        stored.setContentType(normalizedImageContentType(file.getContentType()));
+        stored.setFileSize(content.length);
+        stored.setContent(content);
+        stored.setUploadedBy(currentUser().userId());
+        stored.setCreatedAt(now);
+        stored = paymentQrFiles.save(stored);
+
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
+            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
+            item.setPaymentMethod(paymentMethod);
+            item.setEnabled(false);
+            item.setCreatedAt(now);
+            return item;
+        });
+        setting.setQrCodeUrl(null);
+        setting.setQrFileId(stored.getId());
+        setting.setUpdatedBy(currentUser().userId());
+        setting.setUpdatedAt(now);
+        paymentQrSettings.save(setting);
+        audit(null, "ADMIN_UPLOAD_BANK_QR_IMAGE", "PAYMENT_QR_FILE", stored.getId(), null,
+                Map.of("fileName", stored.getFileName(), "size", stored.getFileSize()));
+        return toPaymentQrFileView(stored);
+    }
+
+    public PaymentQrSettingView removePaymentQrImage(PaymentMethod paymentMethod) {
+        requireSystemAdmin();
+        if (paymentMethod != PaymentMethod.BANK_TRANSFER) {
+            throw new IllegalArgumentException("MoMo QR data is generated by the provider and cannot be removed here.");
+        }
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod)
+                .orElseThrow(() -> new IllegalArgumentException("Payment configuration not found."));
+        UUID oldFileId = setting.getQrFileId();
+        setting.setQrFileId(null);
+        setting.setQrCodeUrl(null);
+        setting.setUpdatedBy(currentUser().userId());
+        setting.setUpdatedAt(OffsetDateTime.now());
+        setting = paymentQrSettings.save(setting);
+        audit(null, "ADMIN_REMOVE_BANK_QR_IMAGE", "PAYMENT_QR_SETTING", setting.getId(),
+                Map.of("fileId", oldFileId == null ? "" : oldFileId.toString()), null);
+        return toPaymentQrSettingView(setting);
+    }
+
+    @Transactional(readOnly = true)
+    public PaymentQrFileContent paymentQrFile(UUID fileId) {
+        PaymentQrFileEntity file = paymentQrFiles.findById(fileId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment QR image not found."));
+        return new PaymentQrFileContent(file.getContentType(), file.getContent());
     }
 
     public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
@@ -1974,6 +2137,7 @@ public class ForepService {
             throw new IllegalArgumentException("Invalid MoMo callback signature.");
         }
         assertCallbackAmountMatches(payment, request);
+        payment.setProviderTransactionId(blankToNull(request.providerTransactionId()));
         boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
         return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
     }
@@ -1985,6 +2149,7 @@ public class ForepService {
             throw new IllegalArgumentException("Invalid bank transfer callback signature.");
         }
         assertCallbackAmountMatches(payment, request);
+        payment.setProviderTransactionId(blankToNull(request.providerTransactionId()));
         return confirmPayment(payment.getId(), false, request.rawPayload());
     }
 
@@ -3462,6 +3627,107 @@ public class ForepService {
         suggestions.add(item);
     }
 
+    private Map<String, Object> fallbackEstimateHours(Map<String, Object> payload, AiProviderException exception) {
+        long workingDays = Math.max(1, longValue(payload, "backendWorkingDays"));
+        Number configured = numberFrom(payload.get("backendDefaultHours"));
+        double suggestedHours = configured.doubleValue() > 0 ? configured.doubleValue() : workingDays * 8.0;
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("suggestedHours", suggestedHours);
+        output.put("workingDays", workingDays);
+        output.put("calculationBasis", "Backend default based on working days; user confirmation is required.");
+        output.put("confidence", 0.35);
+        output.put("userConfirmationRequired", true);
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackRecommendationExplanation(String recommendationType, RecommendationExplanationRequest request, AiProviderException exception) {
+        List<Map<String, Object>> ranked = new ArrayList<>();
+        int rank = 1;
+        for (Map<String, Object> candidate : request.candidates()) {
+            Map<String, Object> item = new LinkedHashMap<>(candidate);
+            item.putIfAbsent("rank", rank++);
+            item.putIfAbsent("summaryReason", "The order is computed by backend ranking data. AI narrative is temporarily unavailable.");
+            item.putIfAbsent("strengths", List.of());
+            item.putIfAbsent("risks", candidate.get("riskFlags") instanceof List<?> risks ? risks : List.of());
+            ranked.add(item);
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("recommendationType", recommendationType);
+        output.put("taskSummary", stringValue(request.task(), "title"));
+        if ("TEAM_LEADER".equals(recommendationType)) {
+            output.put("taskOrProjectDomain", stringValue(request.task(), "taskDomain"));
+            output.put("leaderCandidates", ranked);
+        } else if ("TEAM_MEMBER".equals(recommendationType)) {
+            output.put("memberCandidates", ranked);
+            output.put("teamCompositionAdvice", "Use the backend ranking and verify role coverage before confirming the team.");
+        } else {
+            output.put("rankedCandidates", ranked);
+        }
+        output.put("finalNote", "Candidate ranking remains unchanged; only the optional AI narrative is unavailable.");
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackRecommendationResult(RecommendationResultExplanationRequest request, AiProviderException exception) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("explanationTitle", "Backend recommendation result");
+        output.put("shortExplanation", "The selection is preserved from backend-computed ranking data.");
+        output.put("detailedExplanation", "AI narrative is temporarily unavailable. Review the ranking, workload and performance figures returned by the backend.");
+        output.put("keyReasons", List.of("Backend ranking order", "Workload data", "Role and skill suitability"));
+        output.put("riskWarnings", List.of());
+        output.put("dataUsed", List.of("rankingData", "workloadData", "performanceData"));
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackWorkloadRisk(WorkloadRiskExplanationRequest request, AiProviderException exception) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("overallRisk", hasText(request.backendOverallRisk()) ? request.backendOverallRisk().toUpperCase(Locale.ROOT) : "LOW");
+        output.put("monthlyWarnings", request.monthlyWorkloadEvaluation());
+        output.put("recommendation", "Use backend workload thresholds and review any month above capacity before assignment.");
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackEmployeeReport(EmployeeReportAiRequest request, AiProviderException exception) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("reportType", stringValue(request.period(), "reportType"));
+        output.put("employeeName", stringValue(request.employee(), "fullName"));
+        output.put("periodSummary", "Report generated from backend metrics without optional AI narrative.");
+        output.put("performanceEvaluation", "STABLE");
+        output.put("keyMetrics", request.metrics());
+        output.put("strengths", List.of());
+        output.put("issues", request.risks() == null ? List.of() : request.risks());
+        output.put("recommendations", List.of("Review the backend metrics and notable tasks with the employee."));
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackOwnerOperationalSummary(Map<String, Object> payload, AiProviderException exception) {
+        long overdue = longValue(payload, "overdueTasks");
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summaryTitle", "Operational overview");
+        output.put("businessHealthLabel", overdue > 0 ? "NEEDS_ATTENTION" : "STABLE");
+        output.put("summary", "Backend metrics remain available while AI narrative is temporarily unavailable.");
+        output.put("keyNumbers", Map.of("totalEmployees", longValue(payload, "totalEmployees"), "activeEmployees", longValue(payload, "activeEmployees"), "totalTasks", longValue(payload, "totalTasks"), "completedTasks", longValue(payload, "completedTasks"), "overdueTasks", overdue));
+        output.put("workloadInsights", List.of("Review workload distribution returned by the backend dashboard."));
+        output.put("subscriptionInsights", List.of("Subscription status and limits remain backend-computed."));
+        output.put("risks", overdue > 0 ? List.of(overdue + " overdue task(s) require attention.") : List.of());
+        output.put("recommendedActions", overdue > 0 ? List.of("Review overdue tasks and owners.") : List.of("Continue monitoring workload and deadlines."));
+        return withFallbackMetadata(output, exception);
+    }
+
+    private Map<String, Object> fallbackPlatformSystemSummary(Map<String, Object> payload, AiProviderException exception) {
+        long failedPayments = longValue(payload, "failedPayments");
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("summaryTitle", "Platform overview");
+        output.put("platformStatusLabel", failedPayments > 0 ? "NEEDS_ATTENTION" : "STABLE");
+        output.put("summary", "Platform figures are backend-computed; optional AI narrative is temporarily unavailable.");
+        output.put("revenueInsights", List.of("Use backend revenue charts for authoritative totals."));
+        output.put("workspaceInsights", List.of("Active workspaces: " + longValue(payload, "activeWorkspaces")));
+        output.put("paymentInsights", List.of("Failed payments: " + failedPayments));
+        output.put("feedbackInsights", List.of("Feedback aggregates remain available in the dashboard."));
+        output.put("risks", failedPayments > 0 ? List.of("Failed payments require review.") : List.of());
+        output.put("recommendedActions", failedPayments > 0 ? List.of("Review failed and manual-review payments.") : List.of("Continue monitoring platform health."));
+        return withFallbackMetadata(output, exception);
+    }
+
     private Map<String, Object> withFallbackMetadata(Map<String, Object> output, AiProviderException exception) {
         output.put("source", RULE_BASED_FALLBACK_SOURCE);
         output.put("aiProviderFailed", true);
@@ -4045,6 +4311,62 @@ public class ForepService {
         return hasText(value) ? value.trim() : null;
     }
 
+    private byte[] validatedQrImage(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("QR image file is required.");
+        }
+        if (file.getSize() > 5L * 1024 * 1024) {
+            throw new IllegalArgumentException("QR image must not exceed 5 MB.");
+        }
+        String contentType = normalizedImageContentType(file.getContentType());
+        try {
+            byte[] content = file.getBytes();
+            if (!matchesImageSignature(contentType, content)) {
+                throw new IllegalArgumentException("QR image content does not match its declared MIME type.");
+            }
+            var image = ImageIO.read(new ByteArrayInputStream(content));
+            if (!"image/webp".equals(contentType) && image == null) {
+                throw new IllegalArgumentException("QR image is corrupt or unsupported.");
+            }
+            if (image != null && (image.getWidth() < 128 || image.getHeight() < 128 || image.getWidth() > 4096 || image.getHeight() > 4096)) {
+                throw new IllegalArgumentException("QR image dimensions must be between 128 and 4096 pixels.");
+            }
+            return content;
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Could not read QR image.", exception);
+        }
+    }
+
+    private String normalizedImageContentType(String contentType) {
+        String normalized = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        if ("image/jpg".equals(normalized)) normalized = "image/jpeg";
+        if (!List.of("image/png", "image/jpeg", "image/webp").contains(normalized)) {
+            throw new IllegalArgumentException("Only PNG, JPG, JPEG and WEBP QR images are accepted.");
+        }
+        return normalized;
+    }
+
+    private boolean matchesImageSignature(String contentType, byte[] content) {
+        if (content.length < 12) return false;
+        if ("image/png".equals(contentType)) {
+            return (content[0] & 0xff) == 0x89 && content[1] == 0x50 && content[2] == 0x4e && content[3] == 0x47;
+        }
+        if ("image/jpeg".equals(contentType)) {
+            return (content[0] & 0xff) == 0xff && (content[1] & 0xff) == 0xd8 && (content[content.length - 2] & 0xff) == 0xff && (content[content.length - 1] & 0xff) == 0xd9;
+        }
+        return content[0] == 'R' && content[1] == 'I' && content[2] == 'F' && content[3] == 'F'
+                && content[8] == 'W' && content[9] == 'E' && content[10] == 'B' && content[11] == 'P';
+    }
+
+    private String uniqueQrFileName(String contentType) {
+        String extension = switch (normalizedImageContentType(contentType)) {
+            case "image/png" -> ".png";
+            case "image/webp" -> ".webp";
+            default -> ".jpg";
+        };
+        return "bank-qr-" + UUID.randomUUID() + extension;
+    }
+
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -4055,12 +4377,12 @@ public class ForepService {
 
     private PaymentQrSettingEntity requireEnabledPaymentQrSetting(PaymentMethod paymentMethod) {
         PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod)
-                .orElseThrow(() -> new IllegalArgumentException("Phương thức thanh toán này chưa có mã QR. Vui lòng đợi quản trị viên cập nhật."));
-        if (!setting.isEnabled() || !hasText(setting.getQrCodeUrl())) {
-            throw new IllegalArgumentException("Phương thức thanh toán này chưa sẵn sàng vì thiếu mã QR. Vui lòng đợi quản trị viên cập nhật.");
+                .orElseThrow(() -> new IllegalArgumentException("Payment method is not configured."));
+        if (!setting.isEnabled()) {
+            throw new IllegalArgumentException("Payment method is disabled.");
         }
         if (paymentMethod == PaymentMethod.BANK_TRANSFER
-                && (!hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
+                && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
             throw new IllegalArgumentException("Thông tin tài khoản ngân hàng chưa đầy đủ. Vui lòng đợi quản trị viên cập nhật.");
         }
         return setting;
@@ -4071,47 +4393,29 @@ public class ForepService {
         return prefix + " " + registration.getWorkspaceIdentifier() + " " + payment.getOrderCode();
     }
 
-    private ProviderPaymentResult configuredQrPayment(PaymentTransactionEntity payment, PaymentQrSettingEntity setting) {
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("paymentMethod", payment.getPaymentMethod());
-        request.put("amount", payment.getAmount());
-        request.put("paymentCode", payment.getPaymentCode());
-        request.put("orderCode", payment.getOrderCode());
-        request.put("transferContent", payment.getTransferContent());
-        request.put("qrSettingId", setting.getId());
-
-        Map<String, Object> response = new LinkedHashMap<>(request);
-        response.put("provider", "ADMIN_CONFIGURED_QR");
-        response.put("qrCodeUrl", setting.getQrCodeUrl());
-        response.put("paymentUrl", setting.getPaymentUrl());
-        response.put("deeplink", setting.getDeeplink());
-        response.put("bankCode", setting.getBankCode());
-        response.put("bankName", setting.getBankName());
-        response.put("bankAccountNumber", setting.getBankAccountNumber());
-        response.put("bankAccountName", setting.getBankAccountName());
-
-        return new ProviderPaymentResult(
-                setting.getPaymentUrl(),
-                setting.getDeeplink(),
-                setting.getQrCodeUrl(),
-                setting.getBankCode(),
-                setting.getBankName(),
-                setting.getBankAccountNumber(),
-                setting.getBankAccountName(),
-                toJson(request),
-                toJson(response)
-        );
+    private String paymentConfigurationSnapshot(PaymentQrSettingEntity setting) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("configurationId", setting.getId());
+        snapshot.put("paymentMethod", setting.getPaymentMethod());
+        snapshot.put("bankCode", setting.getBankCode());
+        snapshot.put("bankName", setting.getBankName());
+        snapshot.put("accountNumber", setting.getBankAccountNumber());
+        snapshot.put("accountName", setting.getBankAccountName());
+        snapshot.put("transferContentPrefix", setting.getTransferContentPrefix());
+        snapshot.put("qrFileId", setting.getQrFileId());
+        snapshot.put("configuredAt", setting.getUpdatedAt());
+        return toJson(snapshot);
     }
 
-    private ProviderPaymentResult withConfiguredQr(ProviderPaymentResult providerResult, PaymentQrSettingEntity setting) {
+    private ProviderPaymentResult withUploadedBankQr(ProviderPaymentResult providerResult, UUID qrFileId) {
         return new ProviderPaymentResult(
-                hasText(providerResult.paymentUrl()) ? providerResult.paymentUrl() : setting.getPaymentUrl(),
-                hasText(providerResult.deeplink()) ? providerResult.deeplink() : setting.getDeeplink(),
-                setting.getQrCodeUrl(),
-                hasText(providerResult.bankCode()) ? providerResult.bankCode() : setting.getBankCode(),
-                hasText(providerResult.bankName()) ? providerResult.bankName() : setting.getBankName(),
-                hasText(providerResult.bankAccountNumber()) ? providerResult.bankAccountNumber() : setting.getBankAccountNumber(),
-                hasText(providerResult.bankAccountName()) ? providerResult.bankAccountName() : setting.getBankAccountName(),
+                providerResult.paymentUrl(),
+                providerResult.deeplink(),
+                "/api/public/payment-files/" + qrFileId,
+                providerResult.bankCode(),
+                providerResult.bankName(),
+                providerResult.bankAccountNumber(),
+                providerResult.bankAccountName(),
                 providerResult.rawRequest(),
                 providerResult.rawResponse()
         );
@@ -4226,13 +4530,26 @@ public class ForepService {
     private void audit(UUID workspaceId, String action, String entityType, UUID entityId, Object oldValue, Object newValue) {
         try {
             AuditLogEntity logItem = new AuditLogEntity();
-            logItem.setWorkspaceId(workspaceId == null ? currentUser().workspaceId() : workspaceId);
-            logItem.setActorId(currentUser().userId());
+            AuthenticatedUser actor = null;
+            try { actor = currentUser(); } catch (Exception ignored) { }
+            UserEntity actorEntity = actor == null ? null : users.findById(actor.userId()).orElse(null);
+            logItem.setWorkspaceId(workspaceId == null && actor != null ? actor.workspaceId() : workspaceId);
+            logItem.setActorId(actor == null ? null : actor.userId());
+            logItem.setActorNameSnapshot(actorEntity == null ? "SYSTEM" : actorEntity.getFullName());
+            logItem.setActorRoleSnapshot(actor == null ? "SYSTEM" : actor.role().name());
             logItem.setAction(action);
             logItem.setEntityType(entityType);
             logItem.setEntityId(entityId);
+            logItem.setResult("SUCCESS");
             logItem.setOldValue(oldValue == null ? null : objectMapper.writeValueAsString(oldValue));
             logItem.setNewValue(newValue == null ? null : objectMapper.writeValueAsString(newValue));
+            if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+                var request = attributes.getRequest();
+                logItem.setIpAddress(clientIp(request.getHeader("X-Forwarded-For"), request.getRemoteAddr()));
+                logItem.setUserAgent(request.getHeader("User-Agent"));
+                Object requestId = request.getAttribute("requestId");
+                logItem.setRequestId(requestId == null ? null : requestId.toString());
+            }
             logItem.setCreatedAt(OffsetDateTime.now());
             auditLogs.save(logItem);
         } catch (Exception exception) {
@@ -4264,7 +4581,8 @@ public class ForepService {
     }
 
     private PaymentTransactionView confirmPayment(UUID paymentId, boolean adminOverride, String rawPayloadOrNote) {
-        PaymentTransactionEntity payment = requirePayment(paymentId);
+        PaymentTransactionEntity payment = paymentTransactions.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
         if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
             return toPaymentTransactionView(payment);
         }
@@ -4277,7 +4595,8 @@ public class ForepService {
             paymentTransactions.save(payment);
             throw new IllegalArgumentException("Payment transaction has expired.");
         }
-        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+        WorkspaceRegistrationEntity registration = workspaceRegistrations.findByIdForUpdate(payment.getWorkspaceRegistrationId())
+                .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         SubscriptionPlanEntity plan = requireSubscriptionPlan(payment.getSubscriptionPlanId());
         if (payment.getAmount().compareTo(plan.getPrice()) != 0) {
             throw new IllegalArgumentException("Payment amount does not match the selected subscription plan.");
@@ -4285,6 +4604,9 @@ public class ForepService {
         OffsetDateTime now = OffsetDateTime.now();
         payment.setStatus(PaymentTransactionStatus.SUCCESS);
         payment.setPaidAt(now);
+        payment.setConfirmedAt(now);
+        payment.setConfirmedBy(adminOverride ? safeCurrentUserId() : null);
+        payment.setFailureReason(null);
         payment.setUpdatedAt(now);
         if (hasText(rawPayloadOrNote)) {
             payment.setRawProviderResponse(rawPayloadOrNote);
@@ -4301,11 +4623,13 @@ public class ForepService {
     }
 
     private PaymentTransactionView failPayment(UUID paymentId, String rawPayloadOrNote) {
-        PaymentTransactionEntity payment = requirePayment(paymentId);
+        PaymentTransactionEntity payment = paymentTransactions.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
         if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
             throw new IllegalArgumentException("Successful payment transactions cannot be rejected.");
         }
         payment.setStatus(PaymentTransactionStatus.FAILED);
+        payment.setFailureReason(hasText(rawPayloadOrNote) ? rawPayloadOrNote : "Payment provider rejected the transaction.");
         payment.setUpdatedAt(OffsetDateTime.now());
         if (hasText(rawPayloadOrNote)) {
             payment.setRawProviderResponse(rawPayloadOrNote);
@@ -4320,6 +4644,8 @@ public class ForepService {
     }
 
     private List<GeneratedOwnerAccountView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote, UUID paymentTransactionId) {
+        registration = workspaceRegistrations.findByIdForUpdate(registration.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         if (registration.getWorkspaceId() != null) {
             return List.of();
         }
@@ -4428,9 +4754,10 @@ public class ForepService {
         requireSystemAdmin();
         WorkspaceEntity workspace = requireWorkspace(workspaceId);
         SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
-        List<GeneratedOwnerAccountView> generated = provisionOwnerAccounts(workspace, plan, OffsetDateTime.now());
-        workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
-        workspace.setOwnerAccountCount(generated.size());
+        OffsetDateTime now = OffsetDateTime.now();
+        List<GeneratedOwnerAccountView> generated = provisionOwnerAccounts(workspace, plan, now);
+        workspace.setOwnerAccountProvisionedAt(now);
+        workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
         if (!generated.isEmpty() && workspace.getOwnerId() == null) {
             workspace.setOwnerId(generated.getFirst().userId());
         }
@@ -4440,15 +4767,15 @@ public class ForepService {
 
     private List<GeneratedOwnerAccountView> provisionOwnerAccounts(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
         List<GeneratedOwnerAccountView> generated = new ArrayList<>();
-        String abbreviation = workspaceOwnerAbbreviation(workspace);
-        int sequence = 1;
-        for (int index = 1; index <= plan.getMaxOwnerAccounts(); index++) {
-            String username = uniqueOwnerUsername(abbreviation, sequence);
-            sequence = Integer.parseInt(username.substring(username.length() - 4)) + 1;
-            String password = "123456";
+        List<UserEntity> existingOwners = new ArrayList<>(ownerAccounts(workspace.getId()));
+        int baseOwnerCount = existingOwners.size();
+        int missingOwnerAccounts = Math.max(0, plan.getMaxOwnerAccounts() - existingOwners.size());
+        for (int index = 1; index <= missingOwnerAccounts; index++) {
+            String username = nextOwnerUsername(workspace);
+            String password = defaultOwnerPassword();
             UserEntity owner = new UserEntity();
             owner.setWorkspaceId(workspace.getId());
-            owner.setFullName((hasText(workspace.getBusinessName()) ? workspace.getBusinessName() : workspace.getName()) + " Owner " + index);
+            owner.setFullName((hasText(workspace.getBusinessName()) ? workspace.getBusinessName() : workspace.getName()) + " Owner " + (baseOwnerCount + index));
             owner.setEmail(username + "@workspace.local");
             owner.setPhone(workspace.getContactPhone());
             owner.setUsername(username);
@@ -4460,6 +4787,7 @@ public class ForepService {
             owner.setCreatedAt(now);
             owner.setUpdatedAt(now);
             owner = users.save(owner);
+            existingOwners.add(owner);
             generated.add(new GeneratedOwnerAccountView(owner.getId(), owner.getUsername(), password, owner.getFullName()));
         }
         return generated;
@@ -4657,8 +4985,8 @@ public class ForepService {
         if (currentWorkspaceUserCount(workspace.getId()) >= workspace.getMaxUsers()) {
         }
     }
-    private String temporaryPassword(WorkspaceEntity workspace) {
-        return (workspace.getShortCode() == null ? "OWNER" : workspace.getShortCode()) + "Owner" + String.format("%04d", currentWorkspaceUserCount(workspace.getId()) + 1);
+    private String defaultOwnerPassword() {
+        return secureTemporaryPassword();
     }
     private List<Role> workforceRoles() {
         return List.of(Role.EMPLOYEE, Role.MANAGER, Role.EXECUTIVE);
@@ -4772,16 +5100,50 @@ public class ForepService {
         return normalized.substring(0, 2);
     }
 
-    private String uniqueOwnerUsername(String abbreviation, int sequence) {
-        int candidateSequence = Math.max(1, sequence);
-        while (candidateSequence < 10000) {
-            String username = String.format("admin%s%04d", abbreviation, candidateSequence).toLowerCase(Locale.ROOT);
+    private String nextOwnerUsername(WorkspaceEntity workspace) {
+        String abbreviation = workspaceOwnerAbbreviation(workspace);
+        int candidateSequence = 1;
+        while (candidateSequence <= 702) {
+            String username = abbreviation + "0000" + ownerAccountSuffix(candidateSequence);
             if (!users.existsByUsernameIgnoreCase(username)) {
                 return username;
             }
             candidateSequence++;
         }
         throw new IllegalArgumentException("Không thể tạo username Business Owner duy nhất.");
+    }
+
+    private String nextHrUsername(WorkspaceEntity workspace) {
+        String prefix = "hr" + workspaceOwnerAbbreviation(workspace).toLowerCase(Locale.ROOT);
+        for (int sequence = 1; sequence <= 9999; sequence++) {
+            String username = prefix + String.format("%04d", sequence);
+            if (!users.existsByUsernameIgnoreCase(username)) return username;
+        }
+        throw new IllegalArgumentException("Could not allocate a unique HR username.");
+    }
+
+    private String secureTemporaryPassword() {
+        String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
+        StringBuilder value = new StringBuilder(16);
+        for (int index = 0; index < 16; index++) {
+            value.append(alphabet.charAt(SECURE_RANDOM.nextInt(alphabet.length())));
+        }
+        return value.toString();
+    }
+
+    private String ownerAccountSuffix(int sequence) {
+        int number = sequence;
+        StringBuilder suffix = new StringBuilder();
+        while (number > 0) {
+            number--;
+            suffix.insert(0, (char) ('A' + (number % 26)));
+            number /= 26;
+        }
+        return suffix.toString();
+    }
+
+    private List<UserEntity> ownerAccounts(UUID workspaceId) {
+        return users.findByWorkspaceIdAndRoleInOrderByFullNameAsc(workspaceId, List.of(Role.BUSINESS_OWNER, Role.OWNER));
     }
 
     private void applyDepartmentRequest(DepartmentEntity department, DepartmentRequest request) {
@@ -4878,6 +5240,35 @@ public class ForepService {
         }
     }
 
+    private String clientIp(String forwardedFor, String remoteAddress) {
+        if (!hasText(forwardedFor)) return remoteAddress;
+        return forwardedFor.split(",", 2)[0].trim();
+    }
+
+    private Map<String, Object> invokeAiMapWithFallback(String functionName,
+                                                        AiSuggestionType suggestionType,
+                                                        Object inputData,
+                                                        Supplier<Map<String, Object>> call,
+                                                        Function<AiProviderException, Map<String, Object>> fallback) {
+        AiProviderException failure = null;
+        Map<String, Object> output;
+        if (isAiUsageLimitReached()) {
+            failure = new AiProviderException("AI usage limit reached.");
+            output = fallback.apply(failure);
+        } else {
+            try {
+                output = call.get();
+            } catch (AiProviderException exception) {
+                failure = exception;
+                log.warn("AI function {} failed; using backend fallback. message={}", functionName, fallbackReason(exception));
+                output = fallback.apply(exception);
+            }
+        }
+        saveAiSuggestion(suggestionType, inputData, output);
+        saveAiHistory(functionName, failure == null ? AiHistoryStatus.SUCCESS : AiHistoryStatus.FALLBACK);
+        return output;
+    }
+
     private String nextEmployeeCode(WorkspaceEntity workspace) {
         String shortCode = workspace.getShortCode();
         if (shortCode == null || shortCode.isBlank()) {
@@ -4920,7 +5311,7 @@ public class ForepService {
     }
 
     private WorkspaceView toWorkspaceView(WorkspaceEntity item) { return new WorkspaceView(item.getId(), item.getName(), item.getShortCode(), item.getLogo(), item.getAddress(), item.getOwnerId(), item.getCreatedAt()); }
-    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getInitialPassword(), item.getRole(), authorizationService.permissionNamesFor(item.getRole()), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.isMustChangePassword(), item.isInitialAccountGenerated(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private UserView toUserView(UserEntity item) { return new UserView(item.getId(), item.getWorkspaceId(), item.getFullName(), item.getEmail(), item.getPhone(), item.getUsername(), item.getEmployeeCode(), item.getRole(), authorizationService.permissionNamesFor(item.getRole()), item.getAvatar(), item.getAvatarFileId(), item.getStatus(), item.getJobTitle(), item.getSeniorityLevel(), item.getSkillRating(), item.getYearsOfExperience(), item.getSkills(), item.getDepartmentId(), item.getJobPositionId(), item.getDateOfBirth(), item.getGender(), item.getAddress(), item.getPersonalSummary(), item.getEmploymentType(), item.getWorkingStatus(), item.getEmployeeLevel(), item.getMonthlyWorkingCapacityHours(), item.getMainExpertise(), item.getSecondaryExpertise(), item.isMustChangePassword(), item.isInitialAccountGenerated(), item.getCreatedAt(), item.getUpdatedAt()); }
     private TaskView toTaskView(TaskEntity item) { return new TaskView(item.getId(), item.getWorkspaceId(), item.getTitle(), item.getRequirements(), item.getDescription(), item.getCustomerPhone(), item.getCustomerEmail(), item.getCustomerDescription(), item.getAssignmentType(), item.getAssigneeId(), item.getCreatorId(), item.getPriority(), item.getDeadline(), item.getStartDate(), item.getEstimatedHours(), item.getDifficulty(), item.getRequiredSkills(), item.getRequiredJobPositionId(), item.getTaskDomain(), item.getProjectId(), item.getDepartmentId(), taskAssignees.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAssigneeView).toList(), taskAttachments.findByTaskIdOrderByCreatedAtAsc(item.getId()).stream().map(this::toTaskAttachmentView).toList(), item.getProgressPercent(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt(), item.getCompletedAt()); }
     private TaskAssigneeView toTaskAssigneeView(TaskAssigneeEntity item) { return new TaskAssigneeView(item.getId(), item.getTaskId(), item.getEmployeeId(), item.getParticipantRole(), item.isLeader(), item.getAllocatedHours(), item.getCreatedAt()); }
     private TaskAttachmentView toTaskAttachmentView(TaskAttachmentEntity item) { return new TaskAttachmentView(item.getId(), item.getTaskId(), item.getFileName(), item.getFileUrl(), item.getContentType(), item.getFileSize(), item.getAttachmentType(), item.getUploadedBy(), item.getCreatedAt()); }
@@ -4933,21 +5324,23 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getQrCodeUrl(), item.getPaymentUrl(), item.getDeeplink(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getQrCodeUrl(), item.getQrFileId(), item.getQrFileId() == null ? null : "/api/public/payment-files/" + item.getQrFileId(), item.getPaymentUrl(), item.getDeeplink(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentQrFileView toPaymentQrFileView(PaymentQrFileEntity item) { return new PaymentQrFileView(item.getId(), item.getFileName(), item.getContentType(), item.getFileSize(), "/api/public/payment-files/" + item.getId(), item.getCreatedAt()); }
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerAccountCount(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), generatedOwnerAccounts, item.getCreatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { UUID workspaceId = workspaceRegistrations.findById(item.getWorkspaceRegistrationId()).map(WorkspaceRegistrationEntity::getWorkspaceId).orElse(null); return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), workspaceId, item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderName(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getQrDisplayData(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getPaymentConfigurationSnapshot(), item.getRawProviderResponse(), item.getStatus(), item.getPaidAt(), item.getConfirmedAt(), item.getConfirmedBy(), item.getExpiredAt(), item.getFailureReason(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private BusinessFeedbackView toBusinessFeedbackView(BusinessFeedbackEntity item) { return new BusinessFeedbackView(item.getId(), item.getWorkspaceId(), item.getRating(), item.getContent(), item.getSupportNote(), item.getStatus(), item.getReviewedBy(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private AuditLogView toAuditLogView(AuditLogEntity item) { return new AuditLogView(item.getId(), item.getWorkspaceId(), item.getActorId(), item.getAction(), item.getEntityType(), item.getEntityId(), item.getOldValue(), item.getNewValue(), item.getCreatedAt()); }
+    private AuditLogView toAuditLogView(AuditLogEntity item) { return new AuditLogView(item.getId(), item.getWorkspaceId(), item.getActorId(), item.getActorNameSnapshot(), item.getActorRoleSnapshot(), item.getAction(), item.getEntityType(), item.getEntityId(), item.getResult(), item.getIpAddress(), item.getUserAgent(), item.getRequestId(), item.getMetadata(), item.getOldValue(), item.getNewValue(), item.getCreatedAt()); }
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
-    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, String initialPassword, Role role, List<String> permissions, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, Role role, List<String> permissions, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record CreatedUserAccountView(UserView user, String username, String initialPassword, boolean credentialsVisibleOnce) {}
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, String customerPhone, String customerEmail, String customerDescription, AssignmentType assignmentType, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, OffsetDateTime startDate, BigDecimal estimatedHours, Integer difficulty, String requiredSkills, UUID requiredJobPositionId, String taskDomain, UUID projectId, UUID departmentId, List<TaskAssigneeView> participants, List<TaskAttachmentView> attachments, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskAssigneeView(UUID id, UUID taskId, UUID employeeId, TaskParticipantRole participantRole, boolean leader, BigDecimal allocatedHours, OffsetDateTime createdAt) {}
     public record TaskAttachmentView(UUID id, UUID taskId, String fileName, String fileUrl, String contentType, Long fileSize, AttachmentType attachmentType, UUID uploadedBy, OffsetDateTime createdAt) {}
@@ -4955,6 +5348,7 @@ public class ForepService {
     public record JobPositionView(UUID id, UUID workspaceId, String title, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, String requiredSkills, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessPositionView(UUID id, UUID workspaceId, String name, String code, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record GeneratedOwnerAccountView(UUID userId, String username, String initialPassword, String fullName) {}
+    public record GeneratedHrAccountView(UUID userId, String username, String initialPassword, String fullName, boolean credentialsVisibleOnce) {}
     public record AiHistoryView(UUID id, String callerName, String callerRole, String calledFunction, AiHistoryStatus status, OffsetDateTime calledAt) {}
     public record TaskUpdateView(UUID id, UUID taskId, UUID userId, int progressPercent, String content, String attachment, UpdateType updateType, OffsetDateTime createdAt) {}
     public record DailyReportView(UUID id, UUID workspaceId, UUID userId, LocalDate reportDate, String todayCompleted, String currentWork, String blockers, String tomorrowPlan, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
@@ -4972,14 +5366,16 @@ public class ForepService {
     public record LoginView(String token, UserView user, List<String> permissions) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String qrCodeUrl, String paymentUrl, String deeplink, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String qrCodeUrl, UUID qrFileId, String qrDisplayUrl, String paymentUrl, String deeplink, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentQrFileView(UUID fileId, String fileName, String contentType, long size, String displayUrl, OffsetDateTime createdAt) {}
+    public record PaymentQrFileContent(String contentType, byte[] content) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String action, String entityType, UUID entityId, String oldValue, String newValue, OffsetDateTime createdAt) {}
+    public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType, UUID entityId, String result, String ipAddress, String userAgent, String requestId, String metadata, String oldValue, String newValue, OffsetDateTime createdAt) {}
     private record AssignmentPlan(AssignmentType assignmentType, UUID primaryAssigneeId, UUID teamLeaderId, List<UUID> participantIds) {}
 }
 

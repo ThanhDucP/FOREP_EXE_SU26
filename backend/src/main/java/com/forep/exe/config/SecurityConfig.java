@@ -37,7 +37,14 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        .requestMatchers("/api/public/**", "/api/payment-callbacks/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/subscription-plans", "/api/public/subscription-plans/*").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/workspace-registrations/*", "/api/public/payments/*/status",
+                                "/api/public/payment-files/*").permitAll()
+                        .requestMatchers(HttpMethod.PATCH, "/api/public/workspace-registrations/*/select-plan",
+                                "/api/public/workspace-registrations/*/cancel").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations/*/payments",
+                                "/api/payment-callbacks/momo", "/api/payment-callbacks/bank").permitAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login",
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
@@ -45,6 +52,8 @@ public class SecurityConfig {
                                 "/api/v1/admin/workspace-registrations/*/confirm-payment").hasAuthority(permission(Permission.PAYMENT_CONFIRM))
                         .requestMatchers(HttpMethod.PATCH, "/api/admin/payments/*/reject", "/api/v1/admin/payments/*/reject").hasAuthority(permission(Permission.PAYMENT_CONFIRM))
                         .requestMatchers(HttpMethod.PUT, "/api/admin/payment-qr-settings/*").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
+                        .requestMatchers(HttpMethod.POST, "/api/admin/payment-qr-settings/*/qr-image").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
+                        .requestMatchers(HttpMethod.DELETE, "/api/admin/payment-qr-settings/*/qr-image").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
                         .requestMatchers(HttpMethod.GET, "/api/admin/payment-qr-settings").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
                         .requestMatchers(HttpMethod.GET, "/api/admin/payments/**", "/api/v1/payments/**").hasAuthority(permission(Permission.PAYMENT_HISTORY_VIEW))
                         .requestMatchers("/api/admin/subscription-plans/**", "/api/v1/admin/subscription-plans/**").hasAuthority(permission(Permission.PACKAGE_MANAGE))
@@ -61,6 +70,18 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PATCH, "/api/v1/employees/*/status").hasAuthority(permission(Permission.EMPLOYEE_DEACTIVATE))
                         .requestMatchers(HttpMethod.PATCH, "/api/v1/employees/*/reset-password").hasAuthority(permission(Permission.EMPLOYEE_UPDATE))
                         .requestMatchers(HttpMethod.GET, "/api/v1/employees/**").hasAuthority(permission(Permission.EMPLOYEE_VIEW))
+                        .requestMatchers(HttpMethod.GET, "/api/workspace/hr/employees/import-template",
+                                "/api/workspace/hr/employees/imports/**").hasAuthority(permission(Permission.EMPLOYEE_IMPORT))
+                        .requestMatchers(HttpMethod.POST, "/api/workspace/hr/employees/import",
+                                "/api/workspace/hr/employees/imports/*/confirm").hasAuthority(permission(Permission.EMPLOYEE_IMPORT))
+                        .requestMatchers(HttpMethod.DELETE, "/api/workspace/hr/employees/imports/*").hasAuthority(permission(Permission.EMPLOYEE_IMPORT))
+                        .requestMatchers(HttpMethod.GET, "/api/workspace/hr/employees/**").hasAuthority(permission(Permission.EMPLOYEE_VIEW))
+                        .requestMatchers(HttpMethod.POST, "/api/workspace/hr/employees").hasAuthority(permission(Permission.EMPLOYEE_CREATE))
+                        .requestMatchers(HttpMethod.PUT, "/api/workspace/hr/employees/*").hasAuthority(permission(Permission.EMPLOYEE_UPDATE))
+                        .requestMatchers(HttpMethod.PATCH, "/api/workspace/hr/employees/*/status").hasAuthority(permission(Permission.EMPLOYEE_DEACTIVATE))
+                        .requestMatchers(HttpMethod.GET, "/api/workspace/business-owner/hr-accounts").hasAuthority(permission(Permission.HR_ACCOUNT_MANAGE))
+                        .requestMatchers(HttpMethod.POST, "/api/workspace/business-owner/hr-accounts").hasAuthority(permission(Permission.HR_ACCOUNT_MANAGE))
+                        .requestMatchers(HttpMethod.PATCH, "/api/workspace/business-owner/hr-accounts/*/status").hasAuthority(permission(Permission.HR_ACCOUNT_MANAGE))
                         .requestMatchers(HttpMethod.GET, "/api/v1/hr/departments/**", "/api/workspace/hr/departments/**").hasAuthority(permission(Permission.DEPARTMENT_VIEW))
                         .requestMatchers(HttpMethod.POST, "/api/v1/hr/departments", "/api/workspace/hr/departments").hasAuthority(permission(Permission.DEPARTMENT_MANAGE))
                         .requestMatchers(HttpMethod.PUT, "/api/v1/hr/departments/*", "/api/workspace/hr/departments/*").hasAuthority(permission(Permission.DEPARTMENT_MANAGE))
@@ -136,9 +157,19 @@ public class SecurityConfig {
                 .map(String::trim)
                 .filter(origin -> !origin.isBlank())
                 .toList();
-        configuration.setAllowedOriginPatterns(origins);
+        configuration.setAllowedOrigins(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        configuration.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "Accept",
+                "Origin",
+                "X-Requested-With",
+                "X-Workspace-Id",
+                "X-Registration-Token",
+                "Idempotency-Key"
+        ));
+        configuration.setExposedHeaders(List.of("Location", "Content-Disposition", "X-Request-Id"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

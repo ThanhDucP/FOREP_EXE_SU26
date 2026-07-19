@@ -13,6 +13,8 @@ import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -80,6 +82,17 @@ public class AdminPlatformController {
     ApiResponse<?> updatePaymentQrSetting(@PathVariable PaymentMethod paymentMethod,
                                           @RequestBody @Valid UpdatePaymentQrSettingRequest request) {
         return ApiResponse.ok(service.updatePaymentQrSetting(paymentMethod, request));
+    }
+
+    @PostMapping(value = "/payment-qr-settings/{paymentMethod}/qr-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    ApiResponse<?> uploadPaymentQrImage(@PathVariable PaymentMethod paymentMethod,
+                                        @RequestPart("file") MultipartFile file) {
+        return ApiResponse.ok(service.uploadPaymentQrImage(paymentMethod, file));
+    }
+
+    @DeleteMapping("/payment-qr-settings/{paymentMethod}/qr-image")
+    ApiResponse<?> removePaymentQrImage(@PathVariable PaymentMethod paymentMethod) {
+        return ApiResponse.ok(service.removePaymentQrImage(paymentMethod));
     }
 
     @PatchMapping("/workspace-registrations/{id}/approve")

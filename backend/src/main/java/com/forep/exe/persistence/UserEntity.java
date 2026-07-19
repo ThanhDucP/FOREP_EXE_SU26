@@ -30,7 +30,6 @@ public class UserEntity extends BaseEntity {
     private String username;
     @Column(unique = true)
     private String employeeCode;
-    private String initialPassword;
     @Column(nullable = false)
     private String passwordHash;
     @Column(nullable = false)
@@ -122,14 +121,6 @@ public class UserEntity extends BaseEntity {
 
     public void setEmployeeCode(String employeeCode) {
         this.employeeCode = employeeCode;
-    }
-
-    public String getInitialPassword() {
-        return initialPassword;
-    }
-
-    public void setInitialPassword(String initialPassword) {
-        this.initialPassword = initialPassword;
     }
 
     public String getPasswordHash() {
