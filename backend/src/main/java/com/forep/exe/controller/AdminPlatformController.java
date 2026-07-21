@@ -4,7 +4,9 @@ import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.domain.Enums.PaymentMethod;
+import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.ApiResponse;
+import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
@@ -17,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @RestController
@@ -140,6 +143,26 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.provisionOwnerAccounts(id));
     }
 
+    @GetMapping("/workspaces/{id}/business-owners")
+    ApiResponse<?> businessOwners(@PathVariable UUID id) {
+        return ApiResponse.ok(service.adminBusinessOwners(id));
+    }
+
+    @PostMapping("/workspaces/{id}/business-owners")
+    ApiResponse<?> createBusinessOwner(@PathVariable UUID id, @RequestBody @Valid CreateBusinessOwnerRequest request) {
+        return ApiResponse.ok(service.adminCreateBusinessOwner(id, request));
+    }
+
+    @PatchMapping("/business-owners/{id}/reset-password")
+    ApiResponse<?> resetOwnerPassword(@PathVariable UUID id) {
+        return ApiResponse.ok(service.adminResetOwnerPassword(id));
+    }
+
+    @PatchMapping("/business-owners/{id}/status")
+    ApiResponse<?> updateOwnerStatus(@PathVariable UUID id, @RequestParam UserStatus status) {
+        return ApiResponse.ok(service.adminUpdateOwnerStatus(id, status));
+    }
+
     @GetMapping("/business-feedback")
     ApiResponse<?> businessFeedback() {
         return ApiResponse.ok(service.adminBusinessFeedback());
@@ -151,8 +174,17 @@ public class AdminPlatformController {
     }
 
     @GetMapping("/audit-logs")
-    ApiResponse<?> auditLogs() {
-        return ApiResponse.ok(service.adminAuditLogs());
+    ApiResponse<?> auditLogs(@RequestParam(required = false) UUID workspaceId,
+                             @RequestParam(required = false) UUID actorId,
+                             @RequestParam(required = false) String action,
+                             @RequestParam(required = false) String entityType,
+                             @RequestParam(required = false) String result,
+                             @RequestParam(required = false) OffsetDateTime from,
+                             @RequestParam(required = false) OffsetDateTime to,
+                             @RequestParam(required = false) String search,
+                             @RequestParam(required = false) Integer page,
+                             @RequestParam(required = false) Integer size) {
+        return ApiResponse.ok(service.adminAuditLogs(workspaceId, actorId, action, entityType, result, from, to, search, page, size));
     }
 
     @GetMapping("/dashboard/overview")

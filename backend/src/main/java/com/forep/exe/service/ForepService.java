@@ -124,6 +124,7 @@ import com.forep.exe.security.SecurityContext;
 import com.forep.exe.service.MomoPaymentService.ProviderPaymentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -163,6 +164,8 @@ import java.util.function.Function;
 public class ForepService {
     private static final Logger log = LoggerFactory.getLogger(ForepService.class);
     private static final String RULE_BASED_FALLBACK_SOURCE = "RULE_BASED_FALLBACK";
+    private static final String DEFAULT_OWNER_PASSWORD = "123456";
+    private static final UUID SYSTEM_ENTITY_ID = new UUID(0L, 0L);
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final WorkspaceRepository workspaces;
@@ -255,18 +258,29 @@ public class ForepService {
     public LoginView login(LoginRequest request) {
         String identifier = loginIdentifier(request);
         UserEntity user = identifier.contains("@")
-                ? users.findFirstByEmailIgnoreCase(identifier).orElseThrow(() -> new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng."))
-                : users.findFirstByUsernameIgnoreCase(identifier).orElseThrow(() -> new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng."));
+                ? users.findFirstByEmailIgnoreCase(identifier).orElse(null)
+                : users.findFirstByUsernameIgnoreCase(identifier).orElse(null);
+        if (user == null) {
+            auditAuthentication(null, "LOGIN_FAILED", "FAILED", Map.of("identifier", identifier, "reason", "USER_NOT_FOUND"));
+            throw new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng.");
+        }
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash()) || user.getStatus() != UserStatus.ACTIVE) {
+            auditAuthentication(user, "LOGIN_FAILED", "FAILED", Map.of("identifier", identifier, "status", user.getStatus().name()));
             throw new IllegalArgumentException("Tài khoản hoặc mật khẩu không đúng.");
         }
         if (!isPlatformAdminRole(user.getRole())) {
             WorkspaceEntity workspace = requireWorkspace(user.getWorkspaceId());
-            enforceWorkspaceLoginAllowed(workspace);
+            try {
+                enforceWorkspaceLoginAllowed(workspace);
+            } catch (IllegalArgumentException exception) {
+                auditAuthentication(user, "LOGIN_FAILED", "FAILED", Map.of("identifier", identifier, "reason", "WORKSPACE_BLOCKED"));
+                throw exception;
+            }
             workspace.setLastActivityAt(OffsetDateTime.now());
             workspaces.save(workspace);
         }
         String token = jwtService.issue(new AuthenticatedUser(user.getId(), user.getWorkspaceId(), user.getRole(), user.getEmail()));
+        auditAuthentication(user, "LOGIN_SUCCESS", "SUCCESS", Map.of("identifier", identifier, "role", user.getRole().name()));
         return new LoginView(token, toUserView(user), authorizationService.permissionNamesFor(user.getRole()));
     }
 
@@ -519,6 +533,7 @@ public class ForepService {
         saveTaskAttachments(task, request.attachments());
         createNotification(workspaceId, currentUser().userId(), "TASK_CREATED", "Bạn vừa tạo task mới", "Bạn vừa tạo task mới: " + task.getTitle(), "TASK", task.getId());
         notifyParticipants(task, "TASK_ASSIGNED", "Task mới được giao", "Bạn vừa được giao task mới: " + task.getTitle());
+        audit(workspaceId, "TASK_CREATE", "TASK", task.getId(), null, Map.of("assignmentType", task.getAssignmentType().name(), "assigneeId", task.getAssigneeId()));
         return toTaskView(task);
     }
 
@@ -581,6 +596,7 @@ public class ForepService {
         task = tasks.save(task);
         saveTaskParticipants(task, new AssignmentPlan(AssignmentType.INDIVIDUAL, request.employeeId(), request.employeeId(), List.of(request.employeeId())));
         createNotification(task.getWorkspaceId(), request.employeeId(), "TASK_ASSIGNED", "Task mới được giao", "Bạn vừa được giao task mới: " + task.getTitle(), "TASK", task.getId());
+        audit(task.getWorkspaceId(), "TASK_ASSIGN_INDIVIDUAL", "TASK", task.getId(), null, Map.of("assigneeId", request.employeeId()));
         return toTaskView(task);
     }
 
@@ -595,6 +611,7 @@ public class ForepService {
         task = tasks.save(task);
         saveTaskParticipants(task, assignment);
         notifyParticipants(task, "TASK_ASSIGNED", "Task nhóm mới được giao", "Bạn vừa được phân công vào task nhóm: " + task.getTitle());
+        audit(task.getWorkspaceId(), "TASK_ASSIGN_TEAM", "TASK", task.getId(), null, Map.of("leaderId", assignment.teamLeaderId(), "memberCount", assignment.participantIds().size()));
         return toTaskView(task);
     }
 
@@ -614,6 +631,7 @@ public class ForepService {
         applyTaskStatus(task, TaskStatus.CANCELLED, task.getProgressPercent());
         task = tasks.save(task);
         createNotification(task.getWorkspaceId(), task.getAssigneeId(), "TASK_CANCELLED", "Task đã bị hủy", task.getTitle() + " đã bị hủy.", "TASK", task.getId());
+        audit(task.getWorkspaceId(), "TASK_CANCEL", "TASK", task.getId(), null, Map.of("status", task.getStatus().name()));
         return toTaskView(task);
     }
 
@@ -653,6 +671,7 @@ public class ForepService {
         task = tasks.save(task);
         saveTaskUpdate(task, task.getProgressPercent(), "Manager đã xác nhận task hoàn thành.", null, UpdateType.COMPLETION_APPROVAL);
         notifyParticipants(task, "TASK_COMPLETION_APPROVED", "Task đã được xác nhận hoàn thành", "Task đã được xác nhận hoàn thành: " + task.getTitle());
+        audit(task.getWorkspaceId(), "TASK_APPROVE_COMPLETION", "TASK", task.getId(), null, Map.of("status", task.getStatus().name()));
         return toTaskView(task);
     }
 
@@ -666,6 +685,7 @@ public class ForepService {
         task = tasks.save(task);
         saveTaskUpdate(task, task.getProgressPercent(), request.reason(), request.attachment(), UpdateType.RETURN);
         notifyParticipants(task, "TASK_RETURNED", "Task bị trả lại để chỉnh sửa", "Task cần chỉnh sửa thêm: " + task.getTitle() + ". Lý do: " + request.reason());
+        audit(task.getWorkspaceId(), "TASK_RETURN", "TASK", task.getId(), null, Map.of("reason", request.reason()));
         return toTaskView(task);
     }
 
@@ -873,7 +893,7 @@ public class ForepService {
     }
 
     public List<MonthlyWorkloadView> monthlyWorkload(int year, int month) {
-        requireTaskManager();
+        authorizationService.require(Permission.REPORT_VIEW);
         YearMonth yearMonth = YearMonth.of(year, month);
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId());
         return workspaceEmployees(currentUser().workspaceId()).stream()
@@ -962,8 +982,6 @@ public class ForepService {
                 level -> currentWorkload.stream().filter(item -> item.workloadLevel().name().equals(level)).count()
         ));
         output.put("recentlyUpdatedTasks", scopedTasks.stream().limit(5).map(this::toTaskView).toList());
-        output.put("aiRecommendations", cachedDashboardRecommendations());
-        output.put("recommendedActions", ownerDashboardRecommendedActions(scopedTasks, currentWorkload, output.get("dailyReportInsight")));
         output.put("metadata", Map.of(
                 "generatedAt", OffsetDateTime.now().toString(),
                 "dataSource", "BACKEND_COMPUTED",
@@ -1489,28 +1507,6 @@ public class ForepService {
         return output;
     }
 
-    public Map<String, Object> actionSuggestions() {
-        requireOwner();
-        List<WorkloadView> currentWorkload = workload();
-        if (isAiUsageLimitReached()) {
-            return fallbackActionSuggestions(currentWorkload, new AiProviderException("AI usage limit reached."));
-        }
-        enforceAiUsageLimit();
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("tasks", taskPayloads(LocalDate.now().minusDays(30)));
-        payload.put("reports", reportPayloads(LocalDate.now().minusDays(6)));
-        payload.put("workload", currentWorkload.stream().map(AiEmployeeWorkload::from).toList());
-        Map<String, Object> output;
-        try {
-            output = aiServiceClient.actionSuggestions(payload);
-        } catch (AiProviderException exception) {
-            log.warn("AI action suggestions failed; using rule-based fallback. message={}", fallbackReason(exception));
-            output = fallbackActionSuggestions(currentWorkload, exception);
-        }
-        saveAiSuggestion(AiSuggestionType.ACTION_SUGGESTION, payload, output);
-        return output;
-    }
-
     public List<NotificationView> notifications() {
         generateOperationalNotifications(currentUser().workspaceId());
         AuthenticatedUser user = currentUser();
@@ -1536,7 +1532,10 @@ public class ForepService {
 
     public List<AiSuggestionView> aiSuggestions() {
         requireOwner();
-        return aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream().map(this::toAiSuggestionView).toList();
+        return aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream()
+                .filter(suggestion -> suggestion.getType() != AiSuggestionType.ACTION_SUGGESTION)
+                .map(this::toAiSuggestionView)
+                .toList();
     }
 
     public AiSuggestionView updateAiSuggestionStatus(UUID suggestionId, AiSuggestionStatus status) {
@@ -2022,8 +2021,8 @@ public class ForepService {
 
     public PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
         requireSystemAdmin();
-        if (hasText(request.qrCodeUrl())) {
-            throw new IllegalArgumentException("External QR image URLs are not accepted. Upload a bank QR image or use dynamic provider data.");
+        if (hasText(request.qrCodeUrl()) || hasText(request.paymentUrl()) || hasText(request.deeplink())) {
+            throw new IllegalArgumentException("Payment URLs are not accepted in admin configuration. Upload a bank QR image or configure the real MoMo provider.");
         }
         OffsetDateTime now = OffsetDateTime.now();
         PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
@@ -2403,31 +2402,54 @@ public class ForepService {
     }
 
     public List<AuditLogView> adminAuditLogs() {
-        requireSystemAdmin();
-        return auditLogs.findAllByOrderByCreatedAtDesc().stream().map(this::toAuditLogView).toList();
+        return adminAuditLogs(null, null, null, null, null, null, null, null, 0, 500).items();
     }
 
-    private List<DashboardAiRecommendationView> cachedDashboardRecommendations() {
-        return aiSuggestions.findByWorkspaceIdOrderByCreatedAtDesc(currentUser().workspaceId()).stream()
-                .filter(suggestion -> suggestion.getStatus() == AiSuggestionStatus.GENERATED)
-                .filter(suggestion -> List.of(
-                        AiSuggestionType.ASSIGNEE_RECOMMENDATION,
-                        AiSuggestionType.ACTION_SUGGESTION,
-                        AiSuggestionType.MISSING_REPORT,
-                        AiSuggestionType.DELAY_RISK,
-                        AiSuggestionType.TASK_ADJUSTMENT,
-                        AiSuggestionType.DAILY_REPORT_INSIGHTS,
-                        AiSuggestionType.BUSINESS_SUMMARY
-                ).contains(suggestion.getType()))
-                .limit(5)
-                .map(suggestion -> new DashboardAiRecommendationView(
-                        suggestion.getId(),
-                        suggestion.getType(),
-                        "CACHE",
-                        suggestion.getOutputData(),
-                        suggestion.getCreatedAt()
-                ))
-                .toList();
+    public AuditLogPageView adminAuditLogs(UUID workspaceId, UUID actorId, String action, String entityType, String result,
+                                           OffsetDateTime from, OffsetDateTime to, String search, Integer page, Integer size) {
+        requireSystemAdmin();
+        Specification<AuditLogEntity> spec = (root, query, builder) -> builder.conjunction();
+        if (workspaceId != null) {
+            spec = spec.and((root, query, builder) -> builder.equal(root.get("workspaceId"), workspaceId));
+        }
+        if (actorId != null) {
+            spec = spec.and((root, query, builder) -> builder.equal(root.get("actorId"), actorId));
+        }
+        if (hasText(action)) {
+            String keyword = "%" + action.trim().toLowerCase(Locale.ROOT) + "%";
+            spec = spec.and((root, query, builder) -> builder.like(builder.lower(root.get("action")), keyword));
+        }
+        if (hasText(entityType)) {
+            spec = spec.and((root, query, builder) -> builder.equal(builder.lower(root.get("entityType")), entityType.trim().toLowerCase(Locale.ROOT)));
+        }
+        if (hasText(result)) {
+            spec = spec.and((root, query, builder) -> builder.equal(builder.lower(root.get("result")), result.trim().toLowerCase(Locale.ROOT)));
+        }
+        if (from != null) {
+            spec = spec.and((root, query, builder) -> builder.greaterThanOrEqualTo(root.get("createdAt"), from));
+        }
+        if (to != null) {
+            spec = spec.and((root, query, builder) -> builder.lessThanOrEqualTo(root.get("createdAt"), to));
+        }
+        if (hasText(search)) {
+            String keyword = "%" + search.trim().toLowerCase(Locale.ROOT) + "%";
+            spec = spec.and((root, query, builder) -> builder.or(
+                    builder.like(builder.lower(root.get("action")), keyword),
+                    builder.like(builder.lower(root.get("entityType")), keyword),
+                    builder.like(builder.lower(root.get("actorNameSnapshot")), keyword),
+                    builder.like(builder.lower(root.get("actorRoleSnapshot")), keyword)
+            ));
+        }
+        int safePage = Math.max(0, page == null ? 0 : page);
+        int safeSize = Math.max(1, Math.min(size == null ? 50 : size, 500));
+        var pageResult = auditLogs.findAll(spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")));
+        return new AuditLogPageView(
+                pageResult.getContent().stream().map(this::toAuditLogView).toList(),
+                safePage,
+                safeSize,
+                pageResult.getTotalElements(),
+                pageResult.getTotalPages()
+        );
     }
 
     private List<AiEmployeeWorkload> assigneeCandidates() {
@@ -4385,6 +4407,9 @@ public class ForepService {
                 && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
             throw new IllegalArgumentException("Thông tin tài khoản ngân hàng chưa đầy đủ. Vui lòng đợi quản trị viên cập nhật.");
         }
+        if (paymentMethod == PaymentMethod.BANK_TRANSFER && setting.getQrFileId() == null) {
+            throw new IllegalArgumentException("Mã QR ngân hàng chưa được cấu hình. Vui lòng đợi quản trị viên cập nhật.");
+        }
         return setting;
     }
 
@@ -4529,18 +4554,53 @@ public class ForepService {
 
     private void audit(UUID workspaceId, String action, String entityType, UUID entityId, Object oldValue, Object newValue) {
         try {
-            AuditLogEntity logItem = new AuditLogEntity();
             AuthenticatedUser actor = null;
             try { actor = currentUser(); } catch (Exception ignored) { }
             UserEntity actorEntity = actor == null ? null : users.findById(actor.userId()).orElse(null);
-            logItem.setWorkspaceId(workspaceId == null && actor != null ? actor.workspaceId() : workspaceId);
-            logItem.setActorId(actor == null ? null : actor.userId());
-            logItem.setActorNameSnapshot(actorEntity == null ? "SYSTEM" : actorEntity.getFullName());
-            logItem.setActorRoleSnapshot(actor == null ? "SYSTEM" : actor.role().name());
+            writeAudit(
+                    workspaceId == null && actor != null ? actor.workspaceId() : workspaceId,
+                    actor == null ? null : actor.userId(),
+                    actorEntity == null ? "SYSTEM" : actorEntity.getFullName(),
+                    actor == null ? "SYSTEM" : actor.role().name(),
+                    action,
+                    entityType,
+                    entityId,
+                    "SUCCESS",
+                    oldValue,
+                    newValue
+            );
+        } catch (Exception exception) {
+            log.warn("Could not write audit log action={} entityType={} entityId={}", action, entityType, entityId, exception);
+        }
+    }
+
+    private void auditAuthentication(UserEntity user, String action, String result, Object metadata) {
+        writeAudit(
+                user == null ? null : user.getWorkspaceId(),
+                user == null ? null : user.getId(),
+                user == null ? "UNKNOWN" : user.getFullName(),
+                user == null ? "UNKNOWN" : user.getRole().name(),
+                action,
+                "AUTH",
+                user == null ? SYSTEM_ENTITY_ID : user.getId(),
+                result,
+                null,
+                metadata
+        );
+    }
+
+    private void writeAudit(UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType,
+                            UUID entityId, String result, Object oldValue, Object newValue) {
+        try {
+            AuditLogEntity logItem = new AuditLogEntity();
+            logItem.setWorkspaceId(workspaceId);
+            logItem.setActorId(actorId);
+            logItem.setActorNameSnapshot(actorName);
+            logItem.setActorRoleSnapshot(actorRole);
             logItem.setAction(action);
             logItem.setEntityType(entityType);
-            logItem.setEntityId(entityId);
-            logItem.setResult("SUCCESS");
+            logItem.setEntityId(entityId == null ? SYSTEM_ENTITY_ID : entityId);
+            logItem.setResult(result);
             logItem.setOldValue(oldValue == null ? null : objectMapper.writeValueAsString(oldValue));
             logItem.setNewValue(newValue == null ? null : objectMapper.writeValueAsString(newValue));
             if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
@@ -4962,7 +5022,7 @@ public class ForepService {
     private void requireOwnerOrHr() { authorizationService.requireAny(Permission.EMPLOYEE_VIEW, Permission.DEPARTMENT_VIEW, Permission.POSITION_VIEW); }
     private void requireHr() { authorizationService.requireAny(Permission.EMPLOYEE_CREATE, Permission.DEPARTMENT_MANAGE, Permission.POSITION_MANAGE); }
     private void requireOwnerOrHrOrManager() { authorizationService.requireAny(Permission.EMPLOYEE_VIEW, Permission.AI_ANALYZE, Permission.TASK_ASSIGN); }
-    private void requireTaskManager() { authorizationService.requireAny(Permission.TASK_ASSIGN, Permission.TASK_APPROVE, Permission.AI_RECOMMENDATION); }
+    private void requireTaskManager() { authorizationService.requireAny(Permission.TASK_CREATE, Permission.TASK_ASSIGN, Permission.TASK_APPROVE); }
     private void requireSystemAdmin() { authorizationService.require(Permission.SYSTEM_CONFIGURATION); }
     private boolean isPlatformAdminRole(Role role) { return role == Role.PLATFORM_ADMIN || role == Role.SYSTEM_ADMIN || role == Role.SYSTEM; }
     private boolean isBusinessOwnerRole(Role role) { return role == Role.BUSINESS_OWNER || role == Role.OWNER; }
@@ -4986,7 +5046,7 @@ public class ForepService {
         }
     }
     private String defaultOwnerPassword() {
-        return secureTemporaryPassword();
+        return DEFAULT_OWNER_PASSWORD;
     }
     private List<Role> workforceRoles() {
         return List.of(Role.EMPLOYEE, Role.MANAGER, Role.EXECUTIVE);
@@ -5376,6 +5436,7 @@ public class ForepService {
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType, UUID entityId, String result, String ipAddress, String userAgent, String requestId, String metadata, String oldValue, String newValue, OffsetDateTime createdAt) {}
+    public record AuditLogPageView(List<AuditLogView> items, int page, int size, long totalElements, int totalPages) {}
     private record AssignmentPlan(AssignmentType assignmentType, UUID primaryAssigneeId, UUID teamLeaderId, List<UUID> participantIds) {}
 }
 

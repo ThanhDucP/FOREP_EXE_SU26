@@ -511,11 +511,6 @@ public class ForepController {
         return ApiResponse.ok(service.taskAdjustment(id));
     }
 
-    @GetMapping("/ai/action-suggestions")
-    ApiResponse<?> actionSuggestions() {
-        return ApiResponse.ok(service.actionSuggestions());
-    }
-
     @GetMapping("/ai/suggestions")
     ApiResponse<?> aiSuggestions() {
         return ApiResponse.ok(service.aiSuggestions());

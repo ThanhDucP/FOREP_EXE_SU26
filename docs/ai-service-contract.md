@@ -429,24 +429,9 @@ Response:
 }
 ```
 
-## POST /internal/ai/action-suggestions
+## Removed: POST /internal/ai/action-suggestions
 
-Schema action chuan:
-
-```json
-{
-  "suggestions": [
-    {
-      "actionType": "FOLLOW_UP_TASK",
-      "targetEntityType": "TASK",
-      "targetEntityId": "uuid",
-      "title": "Follow-up task qua han",
-      "reason": "Task qua han va tien do con thap.",
-      "confidence": 0.9
-    }
-  ]
-}
-```
+Operational action suggestions are removed from production scope. Backend must not call this internal endpoint, and FE must not expose `/api/v1/ai/action-suggestions`. Keep task assignment recommendation endpoints only.
 
 ## Other Endpoints
 

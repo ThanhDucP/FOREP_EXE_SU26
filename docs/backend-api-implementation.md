@@ -165,9 +165,9 @@ Employees cannot directly finalize `COMPLETED`. Use `submit-completion`, then ta
 - GET `/analytics/employees/{id}/workload`
 - GET `/api/workspace/business-owner/dashboard`
 
-`/api/workspace/business-owner/dashboard` is the production workspace dashboard. Backend calculates chart/card-ready data: `overviewCards.today|week|month`, `dailyReportInsight`, `workloadInsight`, `deadlineRisks`, `blockedTasks`, `taskStatusChart`, `workloadDistributionChart`, `recommendedActions`, `recentlyUpdatedTasks`, `aiRecommendations`, and `metadata`. FE must render these values directly and must not ask AI to calculate task counts, overdue counts, missing reports, workload buckets, or completion rate.
+`/api/workspace/business-owner/dashboard` is the production workspace dashboard. Backend calculates chart/card-ready data: `overviewCards.today|week|month`, `dailyReportInsight`, `workloadInsight`, `deadlineRisks`, `blockedTasks`, `taskStatusChart`, `workloadDistributionChart`, `recentlyUpdatedTasks`, and `metadata`. Operational AI action suggestions are removed from this dashboard. FE must render these values directly and must not ask AI to calculate task counts, overdue counts, missing reports, workload buckets, or completion rate.
 
-`/analytics/owner-dashboard` remains legacy-compatible. Dashboard AI recommendations are read from cached `ai_suggestions` with status `GENERATED`; dashboard refresh does not call the LLM.
+`/analytics/owner-dashboard` remains legacy-compatible. Dashboard refresh does not call the LLM.
 
 ## Platform Admin Dashboard
 
@@ -204,8 +204,9 @@ Rules:
 
 - Public payment status is read by `paymentCode + registrationToken`; frontend success pages cannot activate workspaces.
 - Public payment creation requires an enabled Platform Admin QR setting for the selected method. Missing QR returns a business-rule error asking the user to wait; backend does not create a payment transaction.
-- QR for public users comes from `payment_qr_settings`, not frontend-generated QR and not fake third-party QR generation.
-- Platform Admin can update `MOMO` and `BANK_TRANSFER` QR settings from UI. New payment transactions snapshot the latest QR/settings; old payment instructions are unchanged.
+- Bank QR for public users comes from Platform Admin uploaded QR files, not frontend-generated QR and not fake third-party QR generation.
+- Platform Admin can update bank account info and upload `BANK_TRANSFER` QR from UI. Admin config rejects `qrCodeUrl`, `paymentUrl`, and `deeplink` fields.
+- MoMo uses only real provider config from environment. If the provider is not fully configured, backend rejects payment creation with a waiting/configuration error.
 - Successful verified payment sets `PaymentTransaction.status=SUCCESS`, confirms registration payment, activates workspace, creates Business Owner accounts, and returns generated credentials only in the activation response.
 - Final registration state after workspace/account provisioning is `ACTIVATED`.
 - Activation also creates one `workspace_subscriptions` ACTIVE row. This row is the subscription snapshot for billing/audit: plan id, price, owner/employee limits, start/end/renewal dates, and optional payment transaction id.
@@ -215,8 +216,8 @@ Rules:
 MoMo provider mode:
 
 - If `MOMO_SANDBOX_MODE=false` and all of `MOMO_PAYMENT_ENDPOINT`, `MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY`, `MOMO_RETURN_URL`, and `MOMO_NOTIFY_URL` are configured, backend calls the real MoMo create-payment endpoint with signed HMAC payload.
-- If sandbox mode is true, or any required provider config is missing, backend returns sandbox instructions only and clearly marks the provider payload mode as sandbox/missing-config.
-- FE behavior is identical in both modes: render `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl` when present, then rely on backend public status polling for success.
+- If sandbox mode is true, or any required provider config is missing, backend does not create MoMo stub payments and asks the user to wait for configuration.
+- FE renders `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl` only when backend returns real provider data, then relies on backend public status polling for success.
 
 Seed/demo data:
 
@@ -242,7 +243,6 @@ Backend-only integration. Frontend calls these backend endpoints; backend calls 
 - GET `/ai/business-owner/operational-summary`
 - POST `/ai/tasks/{id}/split`
 - POST `/ai/tasks/{id}/adjust`
-- GET `/ai/action-suggestions`
 - GET `/ai/suggestions`
 - PATCH `/ai/suggestions/{id}/status?status=ACCEPTED|REJECTED`
 - GET `/ai/business-summary/daily`
@@ -260,7 +260,7 @@ Current behavior:
 - Backend enforce `aiUsageLimit` theo goi subscription hien tai bang so luong record `ai_suggestions` trong ky kich hoat workspace. Khi het quota, backend chan truoc khi goi AI.
 - Backend protects AI providers with in-flight request dedupe, a global concurrency limiter, and a circuit breaker. Tunable env vars: `AI_SERVICE_MAX_CONCURRENT_REQUESTS`, `AI_SERVICE_ACQUIRE_TIMEOUT_MILLIS`, `AI_SERVICE_DEDUPE_WAIT_MILLIS`, `AI_SERVICE_RETRY_AFTER_SECONDS`, `AI_SERVICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AI_SERVICE_CIRCUIT_BREAKER_OPEN_MILLIS`.
 - `POST /ai/recommend-assignee` returns deterministic top-3 fallback from backend `candidateScore` if AI providers timeout/fail. Response shape stays the same; fallback is marked in each item's `reason`/`risk`.
-- The AI cards `GET /ai/workload-summary`, `GET /ai/delay-risks`, `GET /ai/action-suggestions`, `GET /ai/daily-reports/insights`, and `GET /ai/daily-reports/missing` return deterministic rule-based fallback when AI providers fail. Fallback payload keeps the normal response shape and adds `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`.
+- The AI cards `GET /ai/workload-summary`, `GET /ai/delay-risks`, `GET /ai/daily-reports/insights`, and `GET /ai/daily-reports/missing` return deterministic rule-based fallback when AI providers fail. Fallback payload keeps the normal response shape and adds `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`. Operational AI action suggestions are removed; do not call `/ai/action-suggestions`.
 - Other AI endpoints do not return mock/rule-based fallback. If AI capacity is exhausted, backend returns HTTP 429:
 
 ```json

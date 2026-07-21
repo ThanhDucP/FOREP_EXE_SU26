@@ -9,8 +9,8 @@ Tài liệu này là yêu cầu chi tiết cho FE mới. FE phải coi backend l
 System role là quyền thật sự trong hệ thống:
 
 - `PLATFORM_ADMIN`: quản trị nền tảng, gói subscription, đăng ký workspace, payment review, workspace activation, owner account provisioning.
-- `BUSINESS_OWNER`: chủ workspace, xem dashboard kinh doanh, cấu hình workspace, xem dữ liệu HR/task/workload/AI theo quyền workspace.
-- `HR`: quản lý nhân sự, hồ sơ nhân viên, phòng ban, business position.
+- `BUSINESS_OWNER`: chủ workspace, quản lý owner/HR accounts, giao task, duyệt task, xem workload, subscription/payment và dashboard; chỉ xem dữ liệu employee/department/business position.
+- `HR`: quản lý nhân sự, hồ sơ nhân viên, phòng ban, business position/import; không quản lý task assignment, owner accounts, subscription/payment.
 - `EXECUTIVE`: xem operation/workload/task/AI ở cấp điều hành; có quyền task manager theo backend service.
 - `MANAGER`: quản lý task, giao việc, workload, AI recommendation.
 - `EMPLOYEE`: xem task được giao, cập nhật tiến độ, gửi daily report.
@@ -159,13 +159,14 @@ Platform Admin:
 Business Owner:
 
 - Dashboard: `AI_SUMMARY`.
-- Tasks: `TASK_VIEW`.
+- Tasks: `TASK_VIEW`, `TASK_CREATE`, `TASK_ASSIGN`, `TASK_APPROVE`, `TASK_UPDATE_OWN`.
 - Workload: `REPORT_VIEW`.
-- AI Center: `AI_ANALYZE` hoặc `AI_RECOMMENDATION`.
+- AI Center: `AI_RECOMMENDATION` cho gợi ý người nhận việc; không còn operational action suggestions.
 - AI History: `AI_HISTORY`.
 - Employees: `EMPLOYEE_VIEW`.
 - Departments: `DEPARTMENT_VIEW`.
 - Business Positions: `POSITION_VIEW`.
+- HR Accounts: `HR_ACCOUNT_MANAGE`.
 - Daily Reports: `REPORT_VIEW`.
 - Notifications: `NOTIFICATION_VIEW`.
 - Workspace Settings: `WORKSPACE_UPDATE`.
@@ -173,9 +174,9 @@ Business Owner:
 
 HR:
 
-- Employees: `EMPLOYEE_VIEW`.
-- Departments: `DEPARTMENT_VIEW`.
-- Business Positions: `POSITION_VIEW`.
+- Employees: `EMPLOYEE_VIEW`, `EMPLOYEE_CREATE`, `EMPLOYEE_UPDATE`, `EMPLOYEE_DEACTIVATE`, `EMPLOYEE_IMPORT`.
+- Departments: `DEPARTMENT_VIEW`, `DEPARTMENT_MANAGE`.
+- Business Positions: `POSITION_VIEW`, `POSITION_MANAGE`.
 - Daily Reports: `REPORT_VIEW`.
 - Notifications: `NOTIFICATION_VIEW`.
 
@@ -315,7 +316,7 @@ Actions:
 
 ### 5.7 Acceptance Criteria
 
-- HR hoặc Business Owner tạo/sửa/activate/deactivate Department được khi có `DEPARTMENT_MANAGE`.
+- HR tạo/sửa/activate/deactivate Department được khi có `DEPARTMENT_MANAGE`; Business Owner chỉ xem vì không có quyền này.
 - User chỉ có `DEPARTMENT_VIEW` xem list/detail nhưng không thấy nút mutate.
 - Department inactive vẫn hiển thị trong record cũ nhưng bị disable trong form mới.
 - Deactivate có confirmation modal nêu rõ ảnh hưởng.
@@ -421,7 +422,7 @@ Không dùng label “System Role” ở màn hình này. Dùng “Permission Gr
 
 ### 6.8 Acceptance Criteria
 
-- HR hoặc Business Owner tạo Business Position “Tech Lead” với `permissionGroup=MANAGER` được khi có `POSITION_MANAGE`.
+- HR tạo Business Position “Tech Lead” với `permissionGroup=MANAGER` được khi có `POSITION_MANAGE`; Business Owner chỉ xem danh mục.
 - FE không gọi “Tech Lead” là system role.
 - Employee được gán Business Position có role do backend trả về.
 - Inactive Business Position không xuất hiện trong select cho employee/task mới.
@@ -526,7 +527,7 @@ Filters:
 
 ### 7.6 Acceptance Criteria
 
-- HR/Business Owner CRUD employee được.
+- HR CRUD employee được; Business Owner chỉ xem employee để giao task/workload và tạo HR account riêng.
 - FE không gửi `role` trong create/update employee.
 - Chọn Business Position tự đồng bộ department.
 - Role hiển thị sau save đúng theo backend.
@@ -1046,8 +1047,6 @@ Backend returns production dashboard data, not AI text:
 - `blockedTasks`: blocked task table.
 - `taskStatusChart`: `{ title, series, total }`.
 - `workloadDistributionChart`: `{ title, series, total }`.
-- `recommendedActions`: backend-computed operational actions.
-- `aiRecommendations`: cached AI suggestions only.
 - `metadata`: data source, generated time, empty-state note.
 
 FE requirements:
@@ -1466,11 +1465,13 @@ Subscription/payment/admin workspace changes:
 - Use `activeSubscription.status`, `startDate`, `endDate`, `renewalDate`, `price`, `maxOwnerAccounts`, and `maxEmployeeAccounts` for current package display when present.
 - Keep `subscriptionPlanId`, `maxUsers`, `maxOwnerAccounts`, and `maxEmployeeAccounts` as compatibility/fallback fields only; do not infer billing history from workspace fields.
 - When admin changes a workspace plan, refetch workspace detail/list because backend creates a new ACTIVE subscription snapshot and closes the old one as `UPGRADED`/`DOWNGRADED`.
-- Payment QR is Platform Admin configured data, not FE-generated data. Add Admin Payment QR Settings screen using `GET /api/admin/payment-qr-settings` and `PUT /api/admin/payment-qr-settings/{paymentMethod}`.
-- Admin can update QR for `MOMO` and `BANK_TRANSFER` any time. New payment instructions use the latest enabled QR; existing payment transactions keep their snapshot.
+- Payment QR is Platform Admin uploaded/managed data, not FE-generated data. Admin Payment Settings uses `GET /api/admin/payment-qr-settings`, `PUT /api/admin/payment-qr-settings/{paymentMethod}`, and multipart upload `POST /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`.
+- Admin payment form must not show or submit `qrCodeUrl`, `paymentUrl`, or `deeplink`; remove the UI fields “URL ảnh QR”, “Payment URL”, and “Deeplink”.
+- Admin can upload/update bank QR any time. New payment instructions use the latest enabled QR snapshot; existing payment transactions keep their snapshot.
+- MoMo UI must use only real provider config/status from backend/env. FE must not let admin type MoMo URL/deeplink/QR URL.
 - MoMo/Bank UI must render returned `providerQrCodeUrl`; FE must not generate fake QR or call third-party QR services client-side.
 - If backend returns missing/unready QR error when public user creates payment, show a blocking message asking the user to wait for admin to update the QR, and keep them on payment method/instruction recovery state.
-- MoMo UI must not depend on sandbox/production mode. Render returned `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl`; trust only public payment polling for `SUCCESS`.
+- MoMo UI must not depend on sandbox/stub mode. Render returned provider fields only when backend returns them from real provider; if backend says MoMo chưa cấu hình, show waiting/error state and do not create fake URLs.
 - Demo seed data now includes 3 active workspaces with 30 employees each, cached AI suggestions, dashboard workload/task data, subscriptions, and payments. QA can use owners `SV0000A`, `MD0000A`, `HC0000A` with initial password `123456`.
 
 ### 18.5 Required FE Query Keys / Cache

@@ -20,8 +20,8 @@ This backend implements a staged workspace registration flow:
    - Body: `{ "paymentMethod": "MOMO" }` or `{ "paymentMethod": "BANK_TRANSFER" }`
    - Creates a `PENDING` `PaymentTransaction`.
    - If the registration already has a non-expired `PENDING`/`PROCESSING` transaction, the backend returns that transaction instead of creating another payment instruction.
-   - Returns a public payment status payload with MoMo payment URL/deeplink/QR information or bank transfer information.
-   - If Platform Admin has not enabled and configured a QR for the selected payment method, backend returns a business-rule error and does not create a payment. Public UI must ask the user to wait for admin to update the QR.
+   - Returns a public payment status payload with real MoMo provider data or bank transfer information plus uploaded bank QR.
+   - If MoMo provider config or Bank QR config is missing, backend returns a business-rule error and does not create a payment. Public UI must ask the user to wait for admin to complete payment setup.
 
 5. `GET /api/public/payments/{paymentCode}/status?token={registrationToken}`
    - Polls payment status for the payment instruction/result pages.
@@ -55,21 +55,24 @@ MoMo uses the real provider API only when all production config values are prese
 - `MOMO_RETURN_URL`
 - `MOMO_NOTIFY_URL`
 
-QR display is controlled by Platform Admin settings, not by frontend QR generation. Public users scan the QR stored in `payment_qr_settings` at the time a payment is created. If no enabled QR exists for `MOMO` or `BANK_TRANSFER`, payment creation is blocked with a clear waiting message.
+Bank QR display is controlled by Platform Admin file upload, not by frontend QR generation. Public users scan the uploaded QR snapshot at the time a bank-transfer payment is created. If no enabled bank QR exists, payment creation is blocked with a clear waiting message.
 
-If MoMo real provider config is complete, backend may create provider payUrl/deeplink, but the QR shown to the user is still the admin-configured QR. If provider config is incomplete, backend uses admin-configured QR only.
+MoMo uses the real provider only. If provider config is incomplete, backend does not create MoMo sandbox/stub instructions and asks the user to wait.
 
 ## Platform Admin QR Settings
 
 - `GET /api/admin/payment-qr-settings`
 - `PUT /api/admin/payment-qr-settings/{paymentMethod}`
+- `POST /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`
+- `DELETE /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`
 - `paymentMethod`: `MOMO` or `BANK_TRANSFER`
-- Body: `{ "qrCodeUrl": "...", "paymentUrl": "...", "deeplink": "...", "bankCode": "...", "bankName": "...", "bankAccountNumber": "...", "bankAccountName": "...", "transferContentPrefix": "...", "enabled": true }`
+- Body: `{ "bankCode": "...", "bankName": "...", "bankAccountNumber": "...", "bankAccountName": "...", "transferContentPrefix": "...", "enabled": true }`
 
 Rules:
 
-- `qrCodeUrl` is required before enabling a method.
-- For bank transfer, `bankAccountNumber` and `bankAccountName` must be present before public payment can be created.
+- Admin config must not submit `qrCodeUrl`, `paymentUrl`, or `deeplink`; backend rejects URL-based payment settings.
+- For bank transfer, `bankAccountNumber`, `bankAccountName`, and uploaded QR file must be present before public payment can be created.
+- For MoMo, admin UI shows provider readiness/status only; URL/deeplink/QR URL are never entered manually.
 - New payments copy the current QR/settings into `PaymentTransaction`; changing QR later does not mutate old payment instructions.
 - Frontend must never generate fake QR codes.
 

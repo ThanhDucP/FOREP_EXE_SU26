@@ -27,9 +27,16 @@ class AuthorizationServiceTest {
     void businessOwnerCanManageHrAccountsButNotDailyHrOperations() {
         assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.HR_ACCOUNT_MANAGE));
         assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.EMPLOYEE_VIEW));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.TASK_CREATE));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.TASK_ASSIGN));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.TASK_APPROVE));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.TASK_UPDATE_OWN));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.REPORT_VIEW));
+        assertTrue(service.hasPermission(Role.BUSINESS_OWNER, Permission.AI_RECOMMENDATION));
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.EMPLOYEE_CREATE));
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.DEPARTMENT_MANAGE));
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.POSITION_MANAGE));
+        assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.AI_ANALYZE));
     }
 
     @Test
@@ -40,5 +47,7 @@ class AuthorizationServiceTest {
         assertTrue(service.hasPermission(Role.HR, Permission.EMPLOYEE_IMPORT));
         assertFalse(service.hasPermission(Role.HR, Permission.PACKAGE_MANAGE));
         assertFalse(service.hasPermission(Role.HR, Permission.PAYMENT_CONFIRM));
+        assertFalse(service.hasPermission(Role.HR, Permission.TASK_ASSIGN));
+        assertFalse(service.hasPermission(Role.HR, Permission.TASK_APPROVE));
     }
 }

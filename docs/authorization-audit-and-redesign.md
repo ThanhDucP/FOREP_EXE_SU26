@@ -1,5 +1,13 @@
 # Authorization Audit And Business Redesign
 
+## 0. Production Override 2026-07-21
+
+- `BUSINESS_OWNER` owns workspace operations: task create/assign/approve/update, monthly workload, HR account creation/status, subscription/payment, workspace profile, and view-only employee/department/business position data.
+- `BUSINESS_OWNER` must not mutate employee records, departments, business positions, role mappings, or platform/payment admin configuration.
+- `HR` owns workforce master data: employee CRUD/import, departments, and business positions; HR must not assign/approve tasks, manage owner accounts, or manage subscription/payment.
+- Operational AI action suggestions are removed. Do not expose `/api/v1/ai/action-suggestions`; keep AI assignee recommendation for task assignment.
+- `/api/admin/audit-logs` supports filtering/pagination by `workspaceId`, `actorId`, `action`, `entityType`, `result`, `from`, `to`, `search`, `page`, and `size`.
+
 ## 1. Authorization Audit Report
 
 ### Current State

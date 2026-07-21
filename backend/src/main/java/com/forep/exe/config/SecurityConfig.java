@@ -58,6 +58,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/admin/payments/**", "/api/v1/payments/**").hasAuthority(permission(Permission.PAYMENT_HISTORY_VIEW))
                         .requestMatchers("/api/admin/subscription-plans/**", "/api/v1/admin/subscription-plans/**").hasAuthority(permission(Permission.PACKAGE_MANAGE))
                         .requestMatchers("/api/admin/workspace-registrations/**", "/api/admin/workspaces/**",
+                                "/api/admin/business-owners/**",
                                 "/api/v1/admin/workspace-registrations/**", "/api/v1/admin/workspaces/**",
                                 "/api/v1/workspace-registrations/**").hasAuthority(permission(Permission.WORKSPACE_MANAGE))
                         .requestMatchers("/api/admin/business-feedback/**", "/api/v1/admin/business-feedback/**").hasAuthority(permission(Permission.FEEDBACK_MANAGE))
@@ -118,8 +119,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/workspace/ai/business-owner/**", "/api/workspace/business-owner/**",
                                 "/api/v1/analytics/owner-dashboard", "/api/v1/ai/workload-summary",
                                 "/api/v1/ai/business-summary/**").hasAuthority(permission(Permission.AI_SUMMARY))
-                        .requestMatchers("/api/workspace/ai-history", "/api/v1/ai/action-suggestions",
-                                "/api/v1/ai/suggestions/**").hasAuthority(permission(Permission.AI_HISTORY))
+                        .requestMatchers("/api/workspace/ai-history", "/api/v1/ai/suggestions/**").hasAuthority(permission(Permission.AI_HISTORY))
                         .requestMatchers("/api/workspace/workload/**", "/api/v1/analytics/workload/**").hasAuthority(permission(Permission.REPORT_VIEW))
                         .requestMatchers(HttpMethod.POST, "/api/v1/daily-reports").hasAuthority(permission(Permission.REPORT_SUBMIT))
                         .requestMatchers(HttpMethod.PATCH, "/api/v1/daily-reports/*/review").hasAuthority(permission(Permission.REPORT_REVIEW))

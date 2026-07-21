@@ -65,11 +65,10 @@ public class MomoPaymentService {
         request.put("lang", "vi");
         request.put("signature", signCreatePaymentRequest(request));
 
-        if (isRealProviderConfigured()) {
-            return createRealProviderPayment(request);
+        if (!isRealProviderConfigured()) {
+            throw new IllegalArgumentException("MoMo chưa được cấu hình. Vui lòng đợi quản trị viên cập nhật phương thức thanh toán.");
         }
-
-        return createSandboxPayment(payment, request);
+        return createRealProviderPayment(request);
     }
 
     private ProviderPaymentResult createRealProviderPayment(Map<String, Object> request) {

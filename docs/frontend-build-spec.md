@@ -32,8 +32,8 @@ Tai lieu nay mo ta day du phan front-end moi can xay cho FOREP EXE sau khi front
 ### Role
 
 - `PLATFORM_ADMIN`: quan tri nen tang, goi subscription, thanh toan, workspace va business owner account khoi tao.
-- `BUSINESS_OWNER`: chu workspace, quan ly nhan vien, task, analytics, AI.
-- `HR`: quan ly ho so nhan su, vi tri cong viec, import nhan vien, tai lieu nhan su.
+- `BUSINESS_OWNER`: chu workspace, quan ly tai khoan owner/HR, task assignment, workload, subscription/payment va dashboard; chi xem employee/department/business position.
+- `HR`: quan ly ho so nhan su, phong ban, business position, import nhan vien; khong giao task va khong quan ly subscription/payment.
 - `EXECUTIVE`: xem operation/workload/AI cap dieu hanh theo workspace policy.
 - `MANAGER`: tao va quan ly task, giao viec ca nhan/nhom, xem workload.
 - `EMPLOYEE`: nhan vien, xem task duoc giao, cap nhat tien do, gui daily report.
@@ -452,9 +452,11 @@ type PaymentTransaction = {
 type PaymentQrSetting = {
   id: string;
   paymentMethod: 'MOMO' | 'BANK_TRANSFER';
-  qrCodeUrl: string;
-  paymentUrl: string | null;
-  deeplink: string | null;
+  qrCodeUrl: null;
+  qrFileId: string | null;
+  qrDisplayUrl: string | null;
+  paymentUrl: null;
+  deeplink: null;
   bankCode: string | null;
   bankName: string | null;
   bankAccountNumber: string | null;
@@ -542,7 +544,7 @@ Flow dang ky workspace public:
 2. Trang chon goi goi `GET /api/public/subscription-plans`, hien thi name, description, price, duration, `maxOwnerAccounts`, `maxEmployeeAccounts`, full features va nut chon goi.
 3. Khi user chon goi, UI goi `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` roi chuyen sang trang chon phuong thuc thanh toan.
 4. Trang chon payment method bat buoc user chon `MOMO` hoac `BANK_TRANSFER`, sau do goi `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`.
-5. Trang payment instruction hien thi theo `PublicPaymentStatus`: MoMo QR/payUrl/deeplink hoac VietQR bank info, amount, paymentCode, status. Khong phu thuoc `orderCode`, `requestId`, `providerTransactionId` o UI public. Neu backend tra ve payment pending con han da ton tai, UI dung lai `paymentCode` do va khong tao them instruction moi.
+5. Trang payment instruction hien thi theo `PublicPaymentStatus`: MoMo provider data neu provider that da cau hinh, hoac bank info + QR file upload do Platform Admin cap nhat; hien amount, paymentCode, status. Khong phu thuoc `orderCode`, `requestId`, `providerTransactionId` o UI public. Neu backend tra ve payment pending con han da ton tai, UI dung lai `paymentCode` do va khong tao them instruction moi.
 6. UI poll `GET /api/public/payments/{paymentCode}/status?token={registrationToken}` moi 3-5 giay den khi status la `SUCCESS`, `FAILED` hoac `EXPIRED`.
 7. Trang ket qua goi them `GET /api/public/workspace-registrations/{id}?token={registrationToken}` de hien thi payment result va workspace activation status.
 8. UI khong cho login owner khi payment chua `SUCCESS`; frontend khong tu tin payment success tu query string/callback client.
@@ -553,11 +555,10 @@ Production payment note: MoMo callback can xac thuc signature bang `MOMO_SECRET_
 
 MoMo provider mode:
 
-- FE khong can biet backend dang real provider hay admin-configured QR mode.
-- QR hien thi cho public user luon la QR do Platform Admin cap nhat trong UI.
-- Neu backend tra `providerPaymentUrl`, hien nut "Mo MoMo".
-- Neu backend tra `providerDeeplink`, hien nut mobile deeplink.
-- Neu backend tra `providerQrCodeUrl`, hien QR.
+- FE khong hien input URL thanh toan/URL anh QR/deeplink trong admin payment settings.
+- Bank transfer QR hien thi cho public user la file QR do Platform Admin upload qua backend.
+- Neu backend tra `providerPaymentUrl`/`providerDeeplink` tu MoMo provider that, co the hien nut mo MoMo; khong cho admin nhap tay cac URL nay.
+- Neu backend tra `providerQrCodeUrl`, hien QR do backend tra ve.
 - Neu backend bao loi thieu QR/chua san sang, payment method page hien message: "Phuong thuc thanh toan nay chua san sang. Vui long doi quan tri vien cap nhat ma QR." va khong tiep tuc tao payment.
 - Khong tu sinh QR trong FE, khong dung QR fake, khong dung QR tu third-party client-side.
 
@@ -565,9 +566,10 @@ Admin payment QR settings:
 
 - `GET /api/admin/payment-qr-settings`
 - `PUT /api/admin/payment-qr-settings/{paymentMethod}`
-- Body: `{ qrCodeUrl, paymentUrl?, deeplink?, bankCode?, bankName?, bankAccountNumber?, bankAccountName?, transferContentPrefix?, enabled }`
-- Platform Admin upload/cap nhat QR cho tung method `MOMO` va `BANK_TRANSFER`.
-- Chi bat `enabled=true` khi QR hop le. Voi `BANK_TRANSFER`, FE bat buoc nhap account number/account name.
+- Body: `{ bankCode?, bankName?, bankAccountNumber?, bankAccountName?, transferContentPrefix?, enabled }`; khong gui `qrCodeUrl`, `paymentUrl`, `deeplink`.
+- Platform Admin chi upload/cap nhat QR cho `BANK_TRANSFER` bang `POST /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`.
+- MoMo chi hien trang thai provider/config tu backend/env; khong co form URL anh QR, payment URL, deeplink.
+- Chi bat `enabled=true` khi bank info hop le va da co QR file. Voi `BANK_TRANSFER`, FE bat buoc nhap account number/account name.
 - Sau khi update QR, invalidate/refetch `paymentQrSettings`; cac payment moi se dung QR moi, payment cu giu snapshot QR tai thoi diem tao.
 
 Workspace subscription snapshot:
@@ -708,7 +710,7 @@ Analytics/workload danh cho `BUSINESS_OWNER`, `EXECUTIVE`, `MANAGER`, va `HR` th
 
 | Man hinh | Method | Path | Data |
 |---|---|---|---|
-| Dashboard owner production | GET | `/api/workspace/business-owner/dashboard` | `{ overviewCards, dailyReportInsight, workloadInsight, deadlineRisks, blockedTasks, taskStatusChart, workloadDistributionChart, recommendedActions, metadata }` |
+| Dashboard owner production | GET | `/api/workspace/business-owner/dashboard` | `{ overviewCards, dailyReportInsight, workloadInsight, deadlineRisks, blockedTasks, taskStatusChart, workloadDistributionChart, recentlyUpdatedTasks, metadata }` |
 | Dashboard owner legacy | GET | `/analytics/owner-dashboard` | compatibility only |
 | Workload toan bo | GET | `/analytics/workload` | `Workload[]` |
 | Workload nhan vien | GET | `/analytics/employees/{id}/workload` | `Workload` |
@@ -730,7 +732,6 @@ Phan lon endpoint AI danh cho BUSINESS_OWNER/EXECUTIVE/MANAGER/HR theo route pol
 | Tao task tu mo ta/bien ban | POST | `/ai/tasks/extract` | `{ text, defaultDeadline }` |
 | De xuat chia nho task | POST | `/ai/tasks/{id}/split` | none |
 | De xuat deadline/priority | POST | `/ai/tasks/{id}/adjust` | none |
-| Goi y action cho owner | GET | `/ai/action-suggestions` | none |
 | Danh sach AI suggestion | GET | `/ai/suggestions` | none |
 | Doi trang thai suggestion | PATCH | `/ai/suggestions/{id}/status?status=ACCEPTED` | query `status` |
 | Tom tat ngay | GET | `/ai/business-summary/daily` | none |
@@ -745,7 +746,7 @@ AI team recommendation note:
 - `recommend-team-members` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_MEMBER`. Backend score dua tren teamMemberScore, skill/domain match, similar task count va workload.
 - FE hien reason/risk de manager/owner hieu tai sao AI de xuat, nhung khong auto assign. User phai bam chon lead/member.
 
-`aiRecommendations` tren owner dashboard la cache tu `ai_suggestions`, khong phai LLM call moi moi lan refresh. Moi item co `{ suggestionId, type, source, outputData, createdAt }`; `source` hien tai la `CACHE`.
+Operational action suggestions have been removed from Owner dashboard and AI Center. FE must not call `/ai/action-suggestions` and must ignore old `ACTION_SUGGESTION` cache rows if any legacy response contains them.
 
 ### Daily reports
 
@@ -832,13 +833,23 @@ Sau login, redirect theo role:
 Navigation BUSINESS_OWNER:
 
 - Dashboard
-- Task
-- Nhan vien
-- Workload
-- AI
+- Tasks / Create / Assign / Approve
+- Monthly Workload
+- HR Accounts
+- Subscription / Payment
 - Bao cao ngay
 - Thong bao
-- Workspace
+- Workspace profile
+- Profile / Doi mat khau
+
+Navigation HR:
+
+- Employees
+- Import Excel
+- Departments
+- Business Positions
+- Reports
+- Profile / Doi mat khau
 
 Navigation EMPLOYEE:
 
@@ -971,7 +982,6 @@ UI blocks:
 - Deadline risk table from `deadlineRisks`.
 - Blocked task table from `blockedTasks`.
 - Bang task cap nhat gan day.
-- Khoi AI recommendation nhanh.
 - Notification unread count.
 
 Buttons:
@@ -1209,7 +1219,6 @@ APIs:
 - `POST /ai/tasks/extract`
 - `POST /ai/tasks/{id}/split`
 - `POST /ai/tasks/{id}/adjust`
-- `GET /ai/action-suggestions`
 - `GET /ai/business-summary/daily`
 - `GET /ai/business-summary/weekly`
 - `GET /ai/business-summary/monthly`
@@ -1220,14 +1229,13 @@ UI sections:
 - Workload summary.
 - Delay risks list.
 - Daily/weekly/monthly business summary.
-- Daily report insights: summary, blockers `{ severity, description }`, actionSuggestions.
+- Daily report insights: summary, blockers `{ severity, description }`.
 - Missing report list with `employeeId`, `employeeName`, `reportDate`, `daysMissing`, `recommendedAction`, `confidence`.
 - Task extraction form from text/minutes.
 - Task split and deadline/priority recommendation for selected task.
-- Owner action suggestions with `actionType`, target entity, reason, confidence trong khoang `0..1`.
 - AI suggestion history.
 
-Fallback note: `recommend-assignee` can return top-3 rule-based recommendations when LLM/provider times out; the list shape is unchanged and each item marks fallback in `reason`/`risk`. `workload-summary`, `delay-risks`, `action-suggestions`, `daily-reports/insights`, and `daily-reports/missing` can also return rule-based data when LLM/provider fails. These card responses keep their normal keys and include `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`; show this as fallback/source metadata, not as confirmed LLM output.
+Fallback note: `recommend-assignee` can return top-3 rule-based recommendations when LLM/provider times out; the list shape is unchanged and each item marks fallback in `reason`/`risk`. `workload-summary`, `delay-risks`, `daily-reports/insights`, and `daily-reports/missing` can also return rule-based data when LLM/provider fails. These card responses keep their normal keys and include `source: "RULE_BASED_FALLBACK"`, `aiProviderFailed: true`, and `fallbackReason`; show this as fallback/source metadata, not as confirmed LLM output. Operational AI action suggestions are removed and FE must not call `/ai/action-suggestions`.
 
 Overload note: AI endpoints without fallback can return HTTP 429 with `AI_RATE_LIMITED` when too many AI calls are running. UI should show a retry-later message, keep the button disabled briefly, and avoid immediate auto-retry loops.
 
@@ -1249,11 +1257,11 @@ Buttons:
 | Thu lai thanh toan | Payment result | Public | `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}` | loading |
 | Dang xuat | User menu | Authenticated | `POST /auth/logout` | loading |
 | Doi mat khau | Profile/User menu | Authenticated | `PATCH /auth/change-password` | form invalid/loading |
-| Them nhan vien | Employees | BUSINESS_OWNER/HR | none, mo modal | none |
-| Luu nhan vien | Employee modal | BUSINESS_OWNER/HR | `POST /employees` hoac `PUT /employees/{id}` | form invalid/loading |
-| Kich hoat | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/status?status=ACTIVE` | user already ACTIVE/loading |
-| Tam ngung | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/status?status=INACTIVE` | user already INACTIVE/loading |
-| Reset mat khau nhan vien | Employees | BUSINESS_OWNER/HR | `PATCH /employees/{id}/reset-password` | loading |
+| Them nhan vien | Employees | HR | none, mo modal | none |
+| Luu nhan vien | Employee modal | HR | `POST /employees` hoac `PUT /employees/{id}` | form invalid/loading |
+| Kich hoat | Employees | HR | `PATCH /employees/{id}/status?status=ACTIVE` | user already ACTIVE/loading |
+| Tam ngung | Employees | HR | `PATCH /employees/{id}/status?status=INACTIVE` | user already INACTIVE/loading |
+| Reset mat khau nhan vien | Employees | HR | `PATCH /employees/{id}/reset-password` | loading |
 | Tao task | Tasks/Dashboard | BUSINESS_OWNER/EXECUTIVE/MANAGER | none, route create | no active employee |
 | Luu task | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /tasks` hoac `PUT /tasks/{id}` | form invalid/loading |
 | Phan tich task | Task form | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/analyze` | thieu title/description/loading |
@@ -1264,7 +1272,6 @@ Buttons:
 | Tao task bang AI | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/extract` | text empty/loading |
 | Chia nho task | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/{id}/split` | loading |
 | De xuat deadline/priority | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `POST /ai/tasks/{id}/adjust` | loading |
-| Xem action AI | AI center | BUSINESS_OWNER/EXECUTIVE/MANAGER/HR | `GET /ai/action-suggestions` | loading |
 | Giao lai | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `PATCH /tasks/{id}/assign` | no assignee/loading |
 | Sua thong tin khach hang | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER/assignee/leader | `PATCH /tasks/{id}/customer-info` | no permission/loading |
 | Huy task | Task detail | BUSINESS_OWNER/EXECUTIVE/MANAGER | `PATCH /tasks/{id}/cancel` | status CANCELLED/COMPLETED/loading |
@@ -1394,7 +1401,7 @@ src/
 - Login/logout hoat dong.
 - Guest register/select plan/create payment/check payment status duoc khong can login.
 - BUSINESS_OWNER xem dashboard duoc.
-- BUSINESS_OWNER/HR CRUD employee duoc.
+- HR CRUD employee duoc; BUSINESS_OWNER chi xem employee de giao task/workload va tao HR account rieng.
 - BUSINESS_OWNER/MANAGER tao/sua/giao/huy task duoc khi co permission tu backend.
 - EMPLOYEE chi thay task duoc giao.
 - User co `TASK_UPDATE_OWN` cap nhat progress, blocker, completion dung quyen duoc.
@@ -1414,7 +1421,7 @@ Bat buoc update trong FE source:
 - Add `Permission` type, `user.permissions`, `login.permissions`, `hasPermission()`, `hasAnyPermission()`.
 - Public pages `pricing`, `workspace registration`, `plan selection`, `payment method`, `payment instruction`, `payment result`, `activation result` khong bi redirect login.
 - Sidebar/menu/button/dialog/action hide theo permission matrix trong `docs/FE.md`.
-- HR screens: Department/Business Position mutation button dung `DEPARTMENT_MANAGE`/`POSITION_MANAGE`; Business Owner co the mutate neu backend tra permission.
+- HR screens: Department/Business Position mutation button dung `DEPARTMENT_MANAGE`/`POSITION_MANAGE`; Business Owner khong duoc hien mutate actions cho master data nay.
 - Task screens: create `TASK_CREATE`, assign `TASK_ASSIGN`, approve/return/cancel `TASK_APPROVE`, employee self update `TASK_UPDATE_OWN`.
 - AI screens: analyze `AI_ANALYZE`, recommendation/explanation `AI_RECOMMENDATION`, owner/platform summary `AI_SUMMARY`, history/suggestions `AI_HISTORY`; HR khong thay AI center neu khong co permission.
 - Platform screens: plans `PACKAGE_MANAGE`, registrations/workspaces `WORKSPACE_MANAGE`, payments `PAYMENT_HISTORY_VIEW`, confirm/reject `PAYMENT_CONFIRM`, QR settings `PAYMENT_QR_MANAGE`, revenue `REVENUE_VIEW`, audit `AUDIT_LOG_VIEW`.

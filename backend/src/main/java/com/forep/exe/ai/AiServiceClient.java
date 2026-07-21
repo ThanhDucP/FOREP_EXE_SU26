@@ -169,10 +169,6 @@ public class AiServiceClient {
         return post("/internal/ai/missing-reports", payload, Map.class);
     }
 
-    public Map<String, Object> actionSuggestions(Map<String, Object> payload) {
-        return post("/internal/ai/action-suggestions", payload, Map.class);
-    }
-
     private boolean isConfigured() {
         return properties.serviceUrl() != null
                 && !properties.serviceUrl().isBlank()
