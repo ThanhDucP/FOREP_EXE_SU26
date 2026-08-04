@@ -116,7 +116,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/workspace/ai/tasks/**", "/api/workspace/ai/workload/risk",
                                 "/api/workspace/ai/employee-report", "/api/v1/ai/tasks/**", "/api/v1/ai/workload/risk",
                                 "/api/v1/ai/employee-report", "/api/v1/ai/delay-risks", "/api/v1/ai/daily-reports/**").hasAuthority(permission(Permission.AI_ANALYZE))
-                        .requestMatchers("/api/workspace/ai/business-owner/**", "/api/workspace/business-owner/**",
+                        .requestMatchers("/api/workspace/ai/business-owner/**", "/api/workspace/business-owner/dashboard",
                                 "/api/v1/analytics/owner-dashboard", "/api/v1/ai/workload-summary",
                                 "/api/v1/ai/business-summary/**").hasAuthority(permission(Permission.AI_SUMMARY))
                         .requestMatchers("/api/workspace/ai-history", "/api/v1/ai/suggestions/**").hasAuthority(permission(Permission.AI_HISTORY))

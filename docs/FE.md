@@ -1,6 +1,19 @@
 # FOREP Frontend Requirements
 
-Tài liệu này là yêu cầu chi tiết cho FE mới. FE phải coi backend là source of truth, không tự suy diễn quyền, không tự tạo dữ liệu giả cho AI/recommendation, và không gọi trực tiếp AI Service.
+Tài liệu này giúp thành viên mới hiểu nhanh giao diện FOREP phải hoạt động như thế nào. Backend là source of truth: frontend không tự suy diễn quyền, không tự tạo dữ liệu giả cho AI/recommendation và không gọi trực tiếp AI Service.
+
+Repository hiện chưa có frontend source. Vì vậy, mọi route và màn hình trong tài liệu này đều được đánh dấu là **Frontend cần triển khai**, không phải mô tả một UI đã tồn tại. Hợp đồng API được ghi là **Đã có trong backend**. Chi tiết schema, loading/error state và acceptance criteria nằm tại [`frontend-build-spec.md`](./frontend-build-spec.md).
+
+## Mục lục
+
+- [1. Nguyên tắc và vai trò](#1-nguyên-tắc-không-được-sai)
+- [2. Permission matrix](#2-permission-matrix-cho-fe)
+- [3. Layout, menu và route guard](#3-app-layout-và-route-guard)
+- [3A. Activation và quản lý tài khoản](#3a-activation-và-quản-lý-tài-khoản)
+- [4-7. Thành phần dùng chung và nghiệp vụ HR](#4-shared-ui-components)
+- [8-13. Task, AI, workload và báo cáo](#8-task-management)
+- [14. Platform Admin cấp tài khoản Owner](#14-platform-admin-owner-account-provisioning)
+- [15-18. Lỗi, cache, nghiệm thu và production delta](#15-error-messages-fe-nên-map-thân-thiện)
 
 ## 1. Nguyên Tắc Không Được Sai
 
@@ -8,8 +21,8 @@ Tài liệu này là yêu cầu chi tiết cho FE mới. FE phải coi backend l
 
 System role là quyền thật sự trong hệ thống:
 
-- `PLATFORM_ADMIN`: quản trị nền tảng, gói subscription, đăng ký workspace, payment review, workspace activation, owner account provisioning.
-- `BUSINESS_OWNER`: chủ workspace, quản lý owner/HR accounts, giao task, duyệt task, xem workload, subscription/payment và dashboard; chỉ xem dữ liệu employee/department/business position.
+- `PLATFORM_ADMIN`: quản trị nền tảng, gói subscription, đăng ký workspace, payment review, workspace activation và Business Owner.
+- `BUSINESS_OWNER`: chủ workspace, xem/cập nhật thông tin workspace, quản lý tài khoản HR, giao/duyệt task, xem workload, báo cáo, trạng thái payment/subscription và dashboard; chỉ xem dữ liệu employee/department/business position.
 - `HR`: quản lý nhân sự, hồ sơ nhân viên, phòng ban, business position/import; không quản lý task assignment, owner accounts, subscription/payment.
 - `EXECUTIVE`: xem operation/workload/task/AI ở cấp điều hành; có quyền task manager theo backend service.
 - `MANAGER`: quản lý task, giao việc, workload, AI recommendation.
@@ -18,6 +31,17 @@ System role là quyền thật sự trong hệ thống:
 Business Position / Job Position là dữ liệu nghiệp vụ trong workspace, không phải system role. Ví dụ: Backend Java Developer, Frontend React Developer, Business Analyst, HR Staff, HR Manager, Tech Lead, Accountant, Sales Staff.
 
 FE tuyệt đối không gọi Developer, BA, HR Staff, Tech Lead là system role. Các vị trí này chỉ nằm trong Business Position.
+
+### 1.1A Bốn vai trò trọng tâm đối với luồng tài khoản
+
+| Vai trò | Trách nhiệm | Được xem/thực hiện | Không được thực hiện |
+|---|---|---|---|
+| Platform Admin | Quản trị toàn hệ thống | Registration, payment, subscription plan, activation, workspace và Business Owner | Nghiệp vụ nhân sự hằng ngày trong workspace |
+| Business Owner | Điều hành tổng thể một workspace | Dashboard, task/workload/report, xem nhân viên/phòng ban/vị trí, quản lý HR cùng workspace | CRUD/import employee, quản lý phòng ban/vị trí, role, payment/subscription mutation hoặc workspace khác |
+| HR | Vận hành nhân sự hằng ngày | Employee CRUD/import, phòng ban, vị trí và báo cáo theo permission | Tạo HR khác, tạo Business Owner, payment, subscription, platform admin hoặc workspace khác |
+| Employee | Thực hiện công việc cá nhân | Task được giao, tiến độ, báo cáo và thông báo theo permission | Quản lý HR, nhân viên, workspace hoặc nền tảng |
+
+`MANAGER` và `EXECUTIVE` vẫn là system role thật trong backend dành cho task/workload. Chúng không làm thay trách nhiệm quản lý tài khoản của bốn vai trò trên.
 
 ### 1.2 PermissionGroup Của Business Position
 
@@ -56,8 +80,11 @@ Mọi response chuẩn:
 FE rule:
 
 - Nếu `errors` khác rỗng, hiển thị `errors[0].message`.
+- `meta` hiện có `requestId` và `timestamp`; dùng `requestId` khi cần hỗ trợ tra soát.
+- Các controller hiện bắt `IllegalArgumentException` thành `BUSINESS_RULE_ERROR` nhưng chưa gắn HTTP status lỗi. Vì vậy frontend phải kiểm tra `errors` ngay cả khi HTTP status là `200`.
+- Validation do Spring trả `400`; response validation hiện chưa được chuẩn hóa chắc chắn theo envelope trên. Frontend phải có fallback đọc message HTTP chung.
 - Nếu HTTP `401`, clear token và redirect login.
-- Nếu HTTP `403` hoặc `BUSINESS_RULE_ERROR`, hiển thị message từ backend, không tự đổi rule ở FE.
+- Nếu HTTP `403`, hiển thị trang không có quyền và không clear token. Nếu có `BUSINESS_RULE_ERROR`, hiển thị message từ backend, không tự đổi rule ở FE.
 - Disable nút khi request đang chạy để tránh double submit.
 - Không show raw AI prompt, token, request/response body kỹ thuật cho user thường.
 
@@ -106,10 +133,12 @@ Role matrix cũ chỉ dùng để hiểu nghiệp vụ. Runtime guard của FE p
 | Audit logs | `AUDIT_LOG_VIEW` |
 | Workspace owner dashboard | `AI_SUMMARY` |
 | Workspace settings edit | `WORKSPACE_UPDATE` |
+| HR account list/create/status | `HR_ACCOUNT_MANAGE` |
 | Employee list/detail | `EMPLOYEE_VIEW` |
 | Employee create | `EMPLOYEE_CREATE` |
 | Employee update/reset password | `EMPLOYEE_UPDATE` |
 | Employee deactivate | `EMPLOYEE_DEACTIVATE` |
+| Employee Excel import | `EMPLOYEE_IMPORT` |
 | Department list/detail | `DEPARTMENT_VIEW` |
 | Department create/update/activate/deactivate | `DEPARTMENT_MANAGE` |
 | Business position list/detail | `POSITION_VIEW` |
@@ -136,11 +165,11 @@ FE phải hide navigation/action theo permission matrix, nhưng backend vẫn l�
 
 `GET /api/v1/auth/me` trả `UserView` gồm `permissions`. FE dùng `user.role` chỉ để redirect mặc định sau login:
 
-- `PLATFORM_ADMIN` hoặc legacy `SYSTEM_ADMIN`/`SYSTEM`: `/platform/dashboard`
+- `PLATFORM_ADMIN` hoặc legacy `SYSTEM_ADMIN`/`SYSTEM`: `/admin/dashboard`
 - `BUSINESS_OWNER` hoặc legacy `OWNER`: `/owner/dashboard`
-- `HR`: `/hr/employees`
-- `EXECUTIVE`: `/operations/tasks`
-- `MANAGER`: `/operations/tasks`
+- `HR`: `/workspace/employees`
+- `EXECUTIVE`: `/manager/tasks`
+- `MANAGER`: `/manager/tasks`
 - `EMPLOYEE`: `/employee/home`
 
 ### 3.2 Navigation Theo Permission
@@ -170,7 +199,7 @@ Business Owner:
 - Daily Reports: `REPORT_VIEW`.
 - Notifications: `NOTIFICATION_VIEW`.
 - Workspace Settings: `WORKSPACE_UPDATE`.
-- Subscription/Upgrade: `SUBSCRIPTION_VIEW`, `SUBSCRIPTION_UPGRADE`, `SUBSCRIPTION_RENEW`.
+- Payment/subscription: chỉ các màn hình read-only khi có `PAYMENT_STATUS_VIEW`, `PAYMENT_HISTORY_VIEW`, `SUBSCRIPTION_VIEW`; không có nút renew/upgrade.
 
 HR:
 
@@ -196,6 +225,150 @@ Employee:
 - My Daily Reports: `REPORT_VIEW`/`REPORT_SUBMIT`.
 - Notifications: `NOTIFICATION_VIEW`.
 - Profile: authenticated user self-view.
+
+### 3.3 Menu theo vai trò
+
+Đây là cách hiểu nhanh theo permission seed hiện tại. Khi chạy thật, sidebar vẫn phải đọc `user.permissions`.
+
+| Menu | Platform Admin | Business Owner | HR | Employee |
+|---|:---:|:---:|:---:|:---:|
+| Platform Dashboard | Có | Không | Không | Không |
+| Workspace Registrations | Có | Không | Không | Không |
+| Payments | Có | Chỉ xem nếu có permission | Không | Không |
+| Subscription Plans | Có | Chỉ xem gói hiện tại | Không | Không |
+| Workspace Dashboard | Không | Có | Không | Không |
+| HR Accounts | Không | Có | Không | Không |
+| Employees | Không | Chỉ xem | Có | Không |
+| Employee Import | Không | Không | Có | Không |
+| Departments | Không | Chỉ xem | Xem và quản lý | Không |
+| Business Positions | Không | Chỉ xem | Xem và quản lý | Không |
+| Tasks/Workload/Reports | Không | Theo permission | Theo permission được trả về | Task/report cá nhân |
+| Platform Settings/Audit | Có | Không | Không | Không |
+
+## 3A. Activation và quản lý tài khoản
+
+### 3A.1 Platform Admin xác nhận payment và kích hoạt workspace
+
+**Đã có trong backend.** Luồng chính của UI mới:
+
+1. Admin mở danh sách registration và chọn một hồ sơ.
+2. Admin xem thông tin doanh nghiệp, người đại diện, Business Owner đăng ký, gói và payment.
+3. Admin xác nhận hoặc từ chối payment. Với luồng chuẩn, `PATCH /api/admin/payments/{paymentId}/confirm` vừa xác nhận payment vừa kích hoạt workspace trong cùng transaction.
+4. Backend tạo đúng một workspace, một active subscription và một Business Owner đầu tiên.
+5. UI refetch registration, payment và workspace để hiển thị trạng thái cuối.
+6. Gửi lại cùng thao tác không được tạo thêm workspace, subscription hoặc owner.
+
+`PATCH /api/admin/workspace-registrations/{id}/approve` cũng chỉ thành công khi payment đã được xác nhận và sẽ kích hoạt registration. API chuẩn `/api/admin` không có nút activation riêng. Endpoint legacy `POST /api/v1/admin/workspace-registrations/{id}/activate` còn tồn tại để tương thích nhưng không phải lựa chọn cho UI mới.
+
+Admin chỉ nhập ghi chú review khi xác nhận/từ chối payment hoặc registration. Admin không được nhập role, permission, password hash, workspace ID tùy ý, subscription ID khác registration hoặc username cho owner do activation tạo ra.
+
+Business Owner đầu tiên dùng họ tên/email/phone và mật khẩu đã nhập ở bước đăng ký. Backend hash mật khẩu bằng BCrypt. Trường hợp này không có mật khẩu tạm để Admin xem và `mustChangePassword=false`.
+
+### 3A.2 Platform Admin tạo thêm Business Owner
+
+**Đã có trong backend.** Tại chi tiết workspace, Admin có thể tạo thêm owner trong giới hạn gói bằng `POST /api/admin/workspaces/{workspaceId}/business-owners` với đúng ba field:
+
+```json
+{
+  "fullName": "Trần Minh Anh",
+  "email": "minhanh@example.com",
+  "phone": "0900000000"
+}
+```
+
+Backend tự lấy workspace từ path, tự gán `BUSINESS_OWNER`, `ACTIVE`, sinh username và mật khẩu tạm. Form không có `username`, `role`, `permissions`, `status`, `temporaryPassword`, `passwordHash` hoặc workspace picker.
+
+### 3A.3 Business Owner tạo tài khoản HR
+
+**Đã có trong backend. Frontend cần triển khai** menu “Tài khoản HR” khi có `HR_ACCOUNT_MANAGE`.
+
+1. Business Owner mở `/workspace/hr-accounts` và xem danh sách HR của workspace hiện tại.
+2. Nhấn “Tạo tài khoản HR”.
+3. Nhập họ tên, email và số điện thoại nếu có.
+4. Gửi `POST /api/workspace/business-owner/hr-accounts`.
+5. Backend lấy workspace từ JWT context, tự gán role `HR`, permission seed, trạng thái `ACTIVE`, username và mật khẩu tạm.
+6. UI hiển thị panel thông tin tài khoản một lần rồi refetch danh sách.
+
+Request hợp lệ:
+
+```json
+{
+  "fullName": "Nguyễn Văn An",
+  "email": "an@example.com",
+  "phone": "0900000000"
+}
+```
+
+Frontend không được gửi:
+
+```json
+{
+  "role": "HR",
+  "permissions": [],
+  "workspaceId": "uuid",
+  "passwordHash": "...",
+  "platformRole": "..."
+}
+```
+
+### 3A.4 Trang danh sách và trạng thái HR
+
+**Đã có trong backend:**
+
+- `GET /api/workspace/business-owner/hr-accounts`
+- `PATCH /api/workspace/business-owner/hr-accounts/{id}/status` với body `{ "status": "ACTIVE" }` hoặc `{ "status": "INACTIVE" }`
+
+Danh sách hiển thị họ tên, username, email, phone, trạng thái và ngày tạo. `lastLoginAt` chưa có trong `UserView`, vì vậy không hiển thị cột “Đăng nhập gần nhất”. Backend chưa có API reset mật khẩu HR, vì vậy không hiển thị hành động reset cho HR.
+
+Business Owner chỉ có thể khóa/mở HR thuộc workspace của mình. HR, Employee và Platform Admin không được dùng API Business Owner này.
+
+### 3A.5 Username do backend sinh
+
+| Loại tài khoản | Format thực tế | Ví dụ |
+|---|---|---|
+| Business Owner | `owner.<workspaceCode>` | `owner.forep` |
+| HR | `hr.<workspaceCode>.<normalizedFullName>` | `hr.forep.nguyenvanan` |
+| Employee | `emp.<workspaceCode>.<normalizedFullName>` | `emp.forep.tranthibich` |
+
+Backend bỏ dấu tiếng Việt (kể cả `đ/Đ`), chuyển chữ thường, bỏ khoảng trắng/ký tự đặc biệt và thêm suffix số khi trùng, ví dụ `owner.forep2`. Frontend không tự sinh username và không tự thử suffix; chỉ hiển thị username cuối cùng backend trả về.
+
+### 3A.6 Mật khẩu tạm thời
+
+- Owner tạo thủ công, HR, Employee và các thao tác reset owner/employee dùng mật khẩu ngẫu nhiên 16 ký tự do backend sinh và BCrypt trước khi lưu.
+- Response tạo tài khoản dùng field `temporaryPassword`, `mustChangePassword` và `credentialsVisibleOnce`; không dùng `initialPassword`.
+- Mật khẩu tạm chỉ xuất hiện trong response tạo/reset tương ứng. Response list/detail không chứa mật khẩu hoặc password hash.
+- UI hiển thị modal/panel một lần, có nút sao chép và cảnh báo lưu an toàn trước khi đóng.
+- Không ghi mật khẩu vào console, analytics, localStorage hoặc sessionStorage.
+- `PATCH /api/v1/auth/change-password` đã có và sẽ chuyển `mustChangePassword` về `false`. Backend hiện chưa chặn mọi API khác cho tới khi đổi mật khẩu; frontend nên chuyển người dùng có cờ này tới trang đổi mật khẩu nhưng không mô tả đây là enforcement phía backend.
+
+### 3A.7 Workspace isolation
+
+- Form tạo HR không có workspace picker và không gửi `workspaceId`.
+- Workspace được backend lấy từ principal/JWT; dữ liệu workspace trong URL hoặc localStorage không phải nguồn xác thực.
+- ID HR trong thao tác status vẫn được backend kiểm tra role `HR` và cùng workspace.
+- Platform Admin dùng workspace ID trong path chỉ tại API admin; workspace user không được tái sử dụng cơ chế này.
+
+### 3A.8 Thông báo tiếng Việt
+
+| Trường hợp | Thông báo UI đề xuất |
+|---|---|
+| Activation thành công | “Workspace đã được kích hoạt và Business Owner đầu tiên đã sẵn sàng.” |
+| Workspace đã activation trước đó | “Workspace đã được kích hoạt trước đó; không có tài khoản mới được tạo.” |
+| Payment chưa hợp lệ | “Payment chưa được xác nhận nên chưa thể kích hoạt workspace.” |
+| Email trùng | “Email này đã được sử dụng cho một tài khoản khác.” |
+| Tạo owner thành công | “Đã tạo Business Owner. Hãy lưu mật khẩu tạm trước khi đóng.” |
+| Tạo HR thành công | “Đã tạo tài khoản HR. Hãy lưu mật khẩu tạm trước khi đóng.” |
+| Không có quyền | “Bạn không có quyền quản lý tài khoản HR.” |
+| HR bị khóa | “Tài khoản HR đã được khóa.” |
+| Workspace hoặc account không hợp lệ | “Không tìm thấy tài khoản trong workspace hiện tại.” |
+| Request lặp | “Yêu cầu đã được xử lý; dữ liệu không bị tạo trùng.” |
+| Lỗi hệ thống | “Hệ thống tạm thời gặp lỗi. Vui lòng thử lại và cung cấp mã yêu cầu nếu cần hỗ trợ.” |
+
+Ưu tiên message backend khi `errors` có dữ liệu; bảng trên là fallback/copy thân thiện, không thay đổi business rule.
+
+### 3A.9 UI guard không phải security
+
+UI ẩn menu/nút bằng permission và route guard chặn điều hướng để cải thiện trải nghiệm. Đây không phải biện pháp bảo mật: người dùng sửa URL hoặc gọi API trực tiếp vẫn phải bị backend kiểm tra JWT, permission, role cứng và workspace scope. Khi backend trả `403` hoặc `BUSINESS_RULE_ERROR`, UI không được giả lập thành công.
 
 ## 4. Shared UI Components
 
@@ -431,12 +604,14 @@ Không dùng label “System Role” ở màn hình này. Dùng “Permission Gr
 
 ### 7.1 APIs
 
-- `GET /api/v1/employees`
-- `POST /api/v1/employees`
-- `GET /api/v1/employees/{id}`
-- `PUT /api/v1/employees/{id}`
-- `PATCH /api/v1/employees/{id}/status?status=ACTIVE|INACTIVE|INVITED`
-- `PATCH /api/v1/employees/{id}/reset-password`
+- `GET /api/workspace/hr/employees`
+- `POST /api/workspace/hr/employees`
+- `GET /api/workspace/hr/employees/{id}`
+- `PUT /api/workspace/hr/employees/{id}`
+- `PATCH /api/workspace/hr/employees/{id}/status` với body `{ "status": "ACTIVE" }` hoặc `{ "status": "INACTIVE" }`
+- Reset password hiện chỉ có endpoint legacy `PATCH /api/v1/employees/{id}/reset-password`
+
+Business Owner chỉ dùng GET nhờ `EMPLOYEE_VIEW`. Các thao tác create/update/status/reset/import đều yêu cầu permission tương ứng và service bắt buộc role HR.
 
 ### 7.2 Create/Update Fields
 
@@ -490,14 +665,14 @@ Sau tạo employee:
 
 - Hiển thị `username`.
 - Hiển thị `employeeCode`.
-- Hiển thị `initialPassword`.
+- Hiển thị `temporaryPassword` ngẫu nhiên nếu `credentialsVisibleOnce=true`.
 - Có nút copy từng field.
-- Có warning: “Initial password is sensitive. Only share with the employee through a secure channel.”
+- Có warning: “Mật khẩu tạm là dữ liệu nhạy cảm và chỉ hiển thị một lần. Hãy chia sẻ qua kênh an toàn.”
 
 Sau reset password:
 
-- Hiển thị `initialPassword` mới trong modal kết quả.
-- Không lưu password vào local state lâu hơn cần thiết.
+- Hiển thị `temporaryPassword` mới trong modal kết quả.
+- Không lưu password vào localStorage/sessionStorage và xóa local component state khi đóng modal.
 
 ### 7.5 List Screen
 
@@ -609,7 +784,7 @@ Human-in-the-loop rule:
 - Individual assignee or team leader submits completion by `PATCH /api/workspace/tasks/{id}/submit-completion`.
 - Manager/Executive/Business Owner confirms by `PATCH /api/workspace/tasks/{id}/approve-completion`.
 - Manager/Executive/Business Owner returns by `PATCH /api/workspace/tasks/{id}/return`.
-- Legacy `PATCH /tasks/{id}/status` must not be used for `ACCEPTED`, `SUBMITTED`, `RETURNED`, or `COMPLETED`.
+- Legacy `PATCH /api/v1/tasks/{id}/status` must not be used for `ACCEPTED`, `SUBMITTED`, `RETURNED`, or `COMPLETED`.
 
 ### 8.5 Assignment Rules
 
@@ -1194,20 +1369,20 @@ Rules:
 
 ### 14.1 UX After Workspace Creation/Activation
 
-After Platform Admin creates or activates a workspace, backend may return generated Business Owner accounts.
+Sau khi payment được xác nhận hoặc registration được duyệt, backend kích hoạt workspace và tạo đúng một Business Owner đầu tiên. Không tự tạo đủ toàn bộ `maxOwnerAccounts`.
 
-Show generated accounts once:
+Nếu một thao tác admin thực sự sinh credential tạm (tạo owner thủ công, reset password hoặc provision legacy workspace thiếu owner), hiển thị một lần:
 
 - Username.
-- Initial password.
+- Temporary password.
 - Full name.
 - Copy button.
-- Export CSV button if implemented.
-- Warning: “These credentials are shown only once. Business Owners must change password on first login.”
+- Warning: “Thông tin này chỉ hiển thị một lần. Hãy lưu và chia sẻ qua kênh an toàn.”
 
-- Username format: `{XX}0000{suffix}`, for example `SV0000A`, `SV0000B`.
-- Default generated password: `123456`.
-- Owner accounts can be created before activation, but login works only after workspace is `ACTIVE` and payment is `CONFIRMED`.
+- Username format: `owner.<workspaceCode>` và suffix số khi trùng.
+- Không có mật khẩu mặc định. Mật khẩu tạm được sinh ngẫu nhiên và lưu dạng BCrypt.
+- Owner đầu tiên từ public registration dùng mật khẩu người đăng ký đã nhập; response activation thường có `temporaryPassword=null`, `credentialsVisibleOnce=false`.
+- Tài khoản workspace chỉ đăng nhập được khi user `ACTIVE`, workspace `ACTIVE`, payment `CONFIRMED` và workspace chưa hết hạn.
 
 ### 14.2 Workspace Detail Fields
 
@@ -1227,16 +1402,16 @@ Show generated accounts once:
 - Owner provisioning timestamp.
 - `ownerAccounts` table: username, full name, email, phone, status, must-change-password, created at, updated at.
 - Row actions: reset password, activate/deactivate account.
-- `generatedOwnerAccounts` modal after create/provision/reset.
+- `generatedOwnerAccounts` dùng `AccountProvisioningView`; chỉ mở modal nếu phần tử có `credentialsVisibleOnce=true` và `temporaryPassword` khác `null`.
 
 ### 14.3 Required Platform Admin Actions
 
-- Create workspace and automatically receive owner credentials.
+- Confirm payment hoặc approve registration rồi refetch kết quả activation.
 - Open business/workspace detail and manage Business Owner accounts.
-- Add Business Owner manually; if username/password are empty, backend uses `{XX}0000{suffix}` and `123456`.
-- Reset Business Owner password to `123456`.
+- Add Business Owner manually bằng `fullName`, `email`, `phone`; backend tự sinh username/password/status.
+- Reset Business Owner password và hiển thị mật khẩu ngẫu nhiên một lần.
 - Activate/deactivate Business Owner account.
-- Re-provision missing Business Owner accounts when package limit increases.
+- Provision một initial owner cho legacy workspace đang thiếu owner; thao tác này không lấp đầy toàn bộ giới hạn gói.
 
 ## 15. Error Messages FE Nên Map Thân Thiện
 
@@ -1253,6 +1428,10 @@ Không hard-code thay backend message, nhưng có thể thêm helper text:
 Suggested query keys:
 
 - `me`
+- `workspaceRegistrations`
+- `adminPayments`
+- `workspaceDetail:{id}`
+- `hrAccounts`
 - `departments`
 - `businessPositions`
 - `employees`
@@ -1268,6 +1447,9 @@ Invalidate:
 - After department mutation: `departments`, `businessPositions`, `employees`, `tasks`.
 - After business position mutation: `businessPositions`, `employees`, `tasks`.
 - After employee mutation: `employees`, `tasks`, `workloadMonthly`.
+- After owner create/reset/status: `workspaceDetail:{id}`, `businessOwners:{workspaceId}`.
+- After HR create/status: `hrAccounts`, `employees`.
+- After payment confirm/registration approve: `workspaceRegistrations`, `adminPayments`, `workspaces`, `workspaceDetail:{id}` và dashboard admin.
 - After task mutation: `tasks`, `taskDetail`, `workloadMonthly`, `notifications`.
 - After AI recommendation: no mutation unless user applies selection; keep recommendation result local to form.
 - After AI estimate/explain/report/summary: invalidate `aiHistory`; keep output scoped to the current screen context.
@@ -1284,6 +1466,8 @@ Authorization:
 
 HR:
 
+- Business Owner có `HR_ACCOUNT_MANAGE` xem/tạo/khóa/mở HR cùng workspace; HR và Employee không thấy menu này.
+- Form HR chỉ có `fullName`, `email`, `phone`; kết quả hiển thị username và mật khẩu tạm một lần.
 - HR creates Department.
 - HR creates Business Position under active Department.
 - PermissionGroup dropdown only has `EMPLOYEE`, `MANAGER`, `EXECUTIVE`.
@@ -1472,7 +1656,7 @@ Subscription/payment/admin workspace changes:
 - MoMo/Bank UI must render returned `providerQrCodeUrl`; FE must not generate fake QR or call third-party QR services client-side.
 - If backend returns missing/unready QR error when public user creates payment, show a blocking message asking the user to wait for admin to update the QR, and keep them on payment method/instruction recovery state.
 - MoMo UI must not depend on sandbox/stub mode. Render returned provider fields only when backend returns them from real provider; if backend says MoMo chưa cấu hình, show waiting/error state and do not create fake URLs.
-- Demo seed data now includes 3 active workspaces with 30 employees each, cached AI suggestions, dashboard workload/task data, subscriptions, and payments. QA can use owners `SV0000A`, `MD0000A`, `HC0000A` with initial password `123456`.
+- Demo seed data cũ có thể còn username/hash lịch sử để QA tương thích. Không dùng các credential seed đó làm quy tắc provisioning hoặc ví dụ production; luồng mới luôn theo `owner.<workspaceCode>` và mật khẩu đăng ký/ngẫu nhiên như mục 3A.
 
 ### 18.5 Required FE Query Keys / Cache
 

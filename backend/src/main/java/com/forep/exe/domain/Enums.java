@@ -9,6 +9,10 @@ public final class Enums {
         SYSTEM_ADMIN, OWNER
     }
 
+    public enum AccountType {
+        BUSINESS_OWNER, HR, EMPLOYEE
+    }
+
     public enum Permission {
         PACKAGE_VIEW,
         PACKAGE_MANAGE,

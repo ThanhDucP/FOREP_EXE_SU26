@@ -6,6 +6,7 @@ import com.forep.exe.ai.AiServiceClient;
 import com.forep.exe.ai.AiServiceClient.AiEmployeeWorkload;
 import com.forep.exe.ai.AiServiceClient.AiRecommendAssigneeInput;
 import com.forep.exe.domain.Enums.AssignmentType;
+import com.forep.exe.domain.Enums.AccountType;
 import com.forep.exe.domain.Enums.AttachmentType;
 import com.forep.exe.domain.Enums.AiHistoryStatus;
 import com.forep.exe.domain.Enums.AiSuggestionStatus;
@@ -126,6 +127,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -164,7 +166,6 @@ import java.util.function.Function;
 public class ForepService {
     private static final Logger log = LoggerFactory.getLogger(ForepService.class);
     private static final String RULE_BASED_FALLBACK_SOURCE = "RULE_BASED_FALLBACK";
-    private static final String DEFAULT_OWNER_PASSWORD = "123456";
     private static final UUID SYSTEM_ENTITY_ID = new UUID(0L, 0L);
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -196,6 +197,7 @@ public class ForepService {
     private final MomoPaymentService momoPaymentService;
     private final BankTransferPaymentService bankTransferPaymentService;
     private final ObjectMapper objectMapper;
+    private final AccountNamingService accountNamingService;
 
     public ForepService(WorkspaceRepository workspaces,
                         UserRepository users,
@@ -222,9 +224,10 @@ public class ForepService {
                         SecurityContext securityContext,
                         AuthorizationService authorizationService,
                         AiServiceClient aiServiceClient,
-                        MomoPaymentService momoPaymentService,
-                        BankTransferPaymentService bankTransferPaymentService,
-                        ObjectMapper objectMapper) {
+                         MomoPaymentService momoPaymentService,
+                         BankTransferPaymentService bankTransferPaymentService,
+                         ObjectMapper objectMapper,
+                         AccountNamingService accountNamingService) {
         this.workspaces = workspaces;
         this.users = users;
         this.tasks = tasks;
@@ -253,6 +256,7 @@ public class ForepService {
         this.momoPaymentService = momoPaymentService;
         this.bankTransferPaymentService = bankTransferPaymentService;
         this.objectMapper = objectMapper;
+        this.accountNamingService = accountNamingService;
     }
 
     public LoginView login(LoginRequest request) {
@@ -338,21 +342,25 @@ public class ForepService {
 
     public CreatedUserAccountView createEmployee(CreateEmployeeRequest request) {
         authorizationService.require(Permission.EMPLOYEE_CREATE);
+        requireHrRole();
         UUID workspaceId = currentUser().workspaceId();
-        if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
+        String email = normalizeEmail(request.email());
+        String phone = normalizePhone(request.phone());
+        if (users.existsByEmailIgnoreCase(email)) {
             throw new IllegalArgumentException("Email đã tồn tại trong workspace.");
         }
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
+        validatePhoneAvailable(workspaceId, phone);
         enforceWorkspaceUserLimit(workspace);
         String employeeCode = nextEmployeeCode(workspace);
-        String username = buildUsername(request.fullName(), employeeCode);
-        String initialPassword = employeeCode;
+        String username = accountNamingService.generateUniqueUsername(AccountType.EMPLOYEE, request.fullName(), accountWorkspaceCode(workspace));
+        String initialPassword = secureTemporaryPassword();
         OffsetDateTime now = OffsetDateTime.now();
         UserEntity employee = new UserEntity();
         employee.setWorkspaceId(workspaceId);
         employee.setFullName(request.fullName());
-        employee.setEmail(request.email());
-        employee.setPhone(request.phone());
+        employee.setEmail(email);
+        employee.setPhone(phone);
         employee.setUsername(username);
         employee.setEmployeeCode(employeeCode);
         employee.setJobTitle(request.jobTitle());
@@ -362,13 +370,16 @@ public class ForepService {
         employee.setSkills(request.skills());
         applyEmployeeProfile(employee, request.departmentId(), request.jobPositionId(), request.dateOfBirth(), request.gender(), request.address(), request.personalSummary(), request.employmentType(), request.workingStatus(), request.employeeLevel(), request.monthlyWorkingCapacityHours(), request.mainExpertise(), request.secondaryExpertise());
         employee.setPasswordHash(passwordEncoder.encode(initialPassword));
+        employee.setMustChangePassword(true);
+        employee.setInitialAccountGenerated(true);
         employee.setRole(roleForBusinessPosition(request.jobPositionId()));
         employee.setStatus(UserStatus.ACTIVE);
         employee.setCreatedAt(now);
         employee.setUpdatedAt(now);
-        UserView created = toUserView(users.save(employee));
+        UserView created = toUserView(saveAccount(employee, "Email, phone or username already exists."));
         workspace.setNextEmployeeNumber(workspace.getNextEmployeeNumber() + 1);
         workspaces.save(workspace);
+        audit(workspaceId, "HR_CREATE_EMPLOYEE_ACCOUNT", "USER", created.id(), null, Map.of("username", username, "email", email));
         return new CreatedUserAccountView(created, username, initialPassword, true);
     }
 
@@ -380,10 +391,19 @@ public class ForepService {
 
     public UserView updateEmployee(UUID employeeId, UpdateEmployeeRequest request) {
         authorizationService.require(Permission.EMPLOYEE_UPDATE);
+        requireHrRole();
         UserEntity employee = requireEmployee(employeeId);
+        String email = normalizeEmail(request.email());
+        String phone = normalizePhone(request.phone());
+        if (users.existsByEmailIgnoreCaseAndIdNot(email, employee.getId())) {
+            throw new IllegalArgumentException("Email already belongs to another account.");
+        }
+        if (phone != null && users.existsByWorkspaceIdAndPhoneAndIdNot(employee.getWorkspaceId(), phone, employee.getId())) {
+            throw new IllegalArgumentException("Phone number already belongs to another account in this workspace.");
+        }
         employee.setFullName(request.fullName());
-        employee.setEmail(request.email());
-        employee.setPhone(request.phone());
+        employee.setEmail(email);
+        employee.setPhone(phone);
         if (request.status() != null) employee.setStatus(request.status());
         employee.setJobTitle(request.jobTitle());
         employee.setSeniorityLevel(request.seniorityLevel());
@@ -393,11 +413,12 @@ public class ForepService {
         applyEmployeeProfile(employee, request.departmentId(), request.jobPositionId(), request.dateOfBirth(), request.gender(), request.address(), request.personalSummary(), request.employmentType(), request.workingStatus(), request.employeeLevel(), request.monthlyWorkingCapacityHours(), request.mainExpertise(), request.secondaryExpertise());
         employee.setRole(roleForBusinessPosition(request.jobPositionId()));
         employee.setUpdatedAt(OffsetDateTime.now());
-        return toUserView(users.save(employee));
+        return toUserView(saveAccount(employee, "Email, phone or username already exists."));
     }
 
     public UserView updateEmployeeStatus(UUID employeeId, UserStatus status) {
         authorizationService.require(Permission.EMPLOYEE_DEACTIVATE);
+        requireHrRole();
         UserEntity employee = requireEmployee(employeeId);
         employee.setStatus(status);
         employee.setUpdatedAt(OffsetDateTime.now());
@@ -406,9 +427,12 @@ public class ForepService {
 
     public CreatedUserAccountView resetEmployeePassword(UUID employeeId) {
         authorizationService.require(Permission.EMPLOYEE_UPDATE);
+        requireHrRole();
         UserEntity employee = requireEmployee(employeeId);
-        String temporaryPassword = hasText(employee.getEmployeeCode()) ? employee.getEmployeeCode() : "Employee" + employee.getId().toString().substring(0, 8);
+        String temporaryPassword = secureTemporaryPassword();
         employee.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        employee.setMustChangePassword(true);
+        employee.setInitialAccountGenerated(true);
         employee.setUpdatedAt(OffsetDateTime.now());
         employee = users.save(employee);
         audit(employee.getWorkspaceId(), "RESET_EMPLOYEE_PASSWORD", "USER", employee.getId(), null, Map.of("employeeCode", employee.getEmployeeCode()));
@@ -417,27 +441,33 @@ public class ForepService {
 
     public List<UserView> hrAccounts() {
         authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        requireBusinessOwnerRole();
         return users.findByWorkspaceIdAndRoleOrderByFullNameAsc(currentUser().workspaceId(), Role.HR).stream()
                 .map(this::toUserView)
                 .toList();
     }
 
-    public GeneratedHrAccountView createInitialHrAccount(CreateHrAccountRequest request) {
+    public AccountProvisioningView createInitialHrAccount(CreateHrAccountRequest request) {
         authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        requireBusinessOwnerRole();
+        validateBusinessOwnerAndHrPermissionSeeds();
         UUID workspaceId = currentUser().workspaceId();
-        if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
-            throw new IllegalArgumentException("Email already exists in this workspace.");
+        String email = normalizeEmail(request.email());
+        String phone = normalizePhone(request.phone());
+        if (users.existsByEmailIgnoreCase(email)) {
+            throw new IllegalArgumentException("Email already exists.");
         }
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
+        validatePhoneAvailable(workspaceId, phone);
         enforceWorkspaceUserLimit(workspace);
-        String username = nextHrUsername(workspace);
+        String username = accountNamingService.generateUniqueUsername(AccountType.HR, request.fullName(), accountWorkspaceCode(workspace));
         String temporaryPassword = secureTemporaryPassword();
         OffsetDateTime now = OffsetDateTime.now();
         UserEntity hr = new UserEntity();
         hr.setWorkspaceId(workspaceId);
         hr.setFullName(request.fullName());
-        hr.setEmail(request.email());
-        hr.setPhone(request.phone());
+        hr.setEmail(email);
+        hr.setPhone(phone);
         hr.setUsername(username);
         hr.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         hr.setMustChangePassword(true);
@@ -446,21 +476,27 @@ public class ForepService {
         hr.setStatus(UserStatus.ACTIVE);
         hr.setCreatedAt(now);
         hr.setUpdatedAt(now);
-        hr = users.save(hr);
+        hr = saveAccount(hr, "Email, phone or username already exists.");
         audit(workspaceId, "BUSINESS_OWNER_CREATE_HR_ACCOUNT", "USER", hr.getId(), null,
-                Map.of("username", username, "email", request.email()));
-        return new GeneratedHrAccountView(hr.getId(), username, temporaryPassword, hr.getFullName(), true);
+                Map.of("username", username, "email", email));
+        return toAccountProvisioningView(hr, temporaryPassword);
     }
 
     public UserView updateHrAccountStatus(UUID hrAccountId, UserStatus status) {
         authorizationService.require(Permission.HR_ACCOUNT_MANAGE);
+        requireBusinessOwnerRole();
+        if (status != UserStatus.ACTIVE && status != UserStatus.INACTIVE) {
+            throw new IllegalArgumentException("HR account status must be ACTIVE or INACTIVE.");
+        }
         UserEntity hr = users.findById(hrAccountId)
                 .filter(user -> currentUser().workspaceId().equals(user.getWorkspaceId()) && user.getRole() == Role.HR)
                 .orElseThrow(() -> new IllegalArgumentException("HR account not found in this workspace."));
+        UserStatus previousStatus = hr.getStatus();
         hr.setStatus(status);
         hr.setUpdatedAt(OffsetDateTime.now());
         hr = users.save(hr);
-        audit(hr.getWorkspaceId(), "BUSINESS_OWNER_UPDATE_HR_STATUS", "USER", hr.getId(), null, Map.of("status", status.name()));
+        audit(hr.getWorkspaceId(), "BUSINESS_OWNER_UPDATE_HR_STATUS", "USER", hr.getId(),
+                Map.of("status", previousStatus.name()), Map.of("status", status.name()));
         return toUserView(hr);
     }
 
@@ -1584,7 +1620,7 @@ public class ForepService {
         workspace.setExpiresAt(request.expirationDate() == null && workspace.getActivatedAt() != null ? workspace.getActivatedAt().plusMonths(plan.getDurationInMonths()) : request.expirationDate());
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
-        List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
+        List<AccountProvisioningView> generatedOwnerAccounts = List.of();
         if (workspace.getStatus() == WorkspaceStatus.ACTIVE || workspace.getActivatedAt() != null) {
             createWorkspaceSubscription(workspace, plan, workspace.getActivatedAt() == null ? now : workspace.getActivatedAt(), null);
         }
@@ -1592,7 +1628,7 @@ public class ForepService {
         workspace.setOwnerAccountProvisionedAt(now);
         workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
         if (!generatedOwnerAccounts.isEmpty()) {
-            workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
+            workspace.setOwnerId(generatedOwnerAccounts.getFirst().id());
         }
         workspace = workspaces.save(workspace);
         audit(workspace.getId(), "ADMIN_CREATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace, generatedOwnerAccounts));
@@ -1601,7 +1637,7 @@ public class ForepService {
 
     public PlatformWorkspaceView adminUpdateWorkspace(UUID workspaceId, AdminUpdateWorkspaceRequest request) {
         requireSystemAdmin();
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
         UUID previousPlanId = workspace.getSubscriptionPlanId();
         boolean planChanged = false;
         if (hasText(request.businessName())) workspace.setBusinessName(request.businessName());
@@ -1655,8 +1691,8 @@ public class ForepService {
 
     public PlatformWorkspaceView adminUpdateWorkspaceStatus(UUID workspaceId, WorkspaceStatus status) {
         requireSystemAdmin();
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
-        List<GeneratedOwnerAccountView> generatedOwnerAccounts = List.of();
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
+        List<AccountProvisioningView> generatedOwnerAccounts = List.of();
         workspace.setStatus(status);
         if (status == WorkspaceStatus.ACTIVE && workspace.getActivatedAt() == null) {
             workspace.setActivatedAt(OffsetDateTime.now());
@@ -1673,7 +1709,7 @@ public class ForepService {
             workspace.setOwnerAccountProvisionedAt(OffsetDateTime.now());
             workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
             if (!generatedOwnerAccounts.isEmpty() && workspace.getOwnerId() == null) {
-                workspace.setOwnerId(generatedOwnerAccounts.getFirst().userId());
+                workspace.setOwnerId(generatedOwnerAccounts.getFirst().id());
             }
         } else if (status == WorkspaceStatus.ACTIVE && workspace.getSubscriptionPlanId() != null) {
             SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
@@ -1687,36 +1723,37 @@ public class ForepService {
         return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
     }
 
-    public CreatedUserAccountView adminCreateBusinessOwner(UUID workspaceId, CreateBusinessOwnerRequest request) {
+    public AccountProvisioningView adminCreateBusinessOwner(UUID workspaceId, CreateBusinessOwnerRequest request) {
         requireSystemAdmin();
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        validateBusinessOwnerPermissionSeeds();
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
         enforceWorkspaceUserLimit(workspace);
         if (ownerAccounts(workspaceId).size() >= workspace.getMaxOwnerAccounts()) {
             throw new IllegalArgumentException("Số tài khoản Business Owner đã đạt giới hạn gói hiện tại.");
         }
-        if (users.existsByWorkspaceIdAndEmailIgnoreCase(workspaceId, request.email())) {
-            throw new IllegalArgumentException("Email đã tồn tại trong workspace.");
+        String email = normalizeEmail(request.email());
+        String phone = normalizePhone(request.phone());
+        if (users.existsByEmailIgnoreCase(email)) {
+            throw new IllegalArgumentException("Email đã tồn tại.");
         }
+        validatePhoneAvailable(workspaceId, phone);
         OffsetDateTime now = OffsetDateTime.now();
-        String username = hasText(request.username()) ? request.username().trim().toUpperCase(Locale.ROOT) : nextOwnerUsername(workspace);
-        if (users.existsByUsernameIgnoreCase(username)) {
-            throw new IllegalArgumentException("Username Business Owner đã tồn tại.");
-        }
-        String temporaryPassword = hasText(request.temporaryPassword()) ? request.temporaryPassword() : defaultOwnerPassword();
+        String username = accountNamingService.generateUniqueUsername(AccountType.BUSINESS_OWNER, workspace.getName(), accountWorkspaceCode(workspace));
+        String temporaryPassword = secureTemporaryPassword();
         UserEntity owner = new UserEntity();
         owner.setWorkspaceId(workspaceId);
         owner.setFullName(request.fullName());
-        owner.setEmail(request.email());
-        owner.setPhone(request.phone());
+        owner.setEmail(email);
+        owner.setPhone(phone);
         owner.setUsername(username);
         owner.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         owner.setMustChangePassword(true);
-        owner.setInitialAccountGenerated(!hasText(request.temporaryPassword()));
+        owner.setInitialAccountGenerated(true);
         owner.setRole(Role.BUSINESS_OWNER);
-        owner.setStatus(request.status() == null ? UserStatus.ACTIVE : request.status());
+        owner.setStatus(UserStatus.ACTIVE);
         owner.setCreatedAt(now);
         owner.setUpdatedAt(now);
-        owner = users.save(owner);
+        owner = saveAccount(owner, "Email, phone or username already exists.");
         if (workspace.getOwnerId() == null) {
             workspace.setOwnerId(owner.getId());
         }
@@ -1724,7 +1761,7 @@ public class ForepService {
         workspace.setOwnerAccountProvisionedAt(workspace.getOwnerAccountProvisionedAt() == null ? now : workspace.getOwnerAccountProvisionedAt());
         workspaces.save(workspace);
         audit(workspaceId, "ADMIN_CREATE_BUSINESS_OWNER", "USER", owner.getId(), null, Map.of("email", owner.getEmail(), "status", owner.getStatus().name()));
-        return new CreatedUserAccountView(toUserView(owner), username, temporaryPassword, true);
+        return toAccountProvisioningView(owner, temporaryPassword);
     }
 
     public List<UserView> adminBusinessOwners(UUID workspaceId) {
@@ -1733,18 +1770,18 @@ public class ForepService {
         return users.findByWorkspaceIdAndRoleInOrderByFullNameAsc(workspaceId, List.of(Role.BUSINESS_OWNER, Role.OWNER)).stream().map(this::toUserView).toList();
     }
 
-    public CreatedUserAccountView adminResetOwnerPassword(UUID ownerId) {
+    public AccountProvisioningView adminResetOwnerPassword(UUID ownerId) {
         requireSystemAdmin();
         UserEntity owner = users.findById(ownerId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy Business Owner."));
         if (!isBusinessOwnerRole(owner.getRole())) throw new IllegalArgumentException("Tài khoản không phải Business Owner.");
-        String temporaryPassword = "123456";
+        String temporaryPassword = secureTemporaryPassword();
         owner.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         owner.setMustChangePassword(true);
         owner.setInitialAccountGenerated(true);
         owner.setUpdatedAt(OffsetDateTime.now());
         owner = users.save(owner);
         audit(owner.getWorkspaceId(), "ADMIN_RESET_OWNER_PASSWORD", "USER", owner.getId(), null, Map.of("email", owner.getEmail()));
-        return new CreatedUserAccountView(toUserView(owner), owner.getUsername(), temporaryPassword, true);
+        return toAccountProvisioningView(owner, temporaryPassword);
     }
 
     public UserView adminUpdateOwnerStatus(UUID ownerId, UserStatus status) {
@@ -1843,6 +1880,10 @@ public class ForepService {
 
     public WorkspaceRegistrationView submitWorkspaceRegistration(WorkspaceRegistrationRequest request) {
         String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
+        String ownerEmail = normalizeEmail(hasText(request.ownerEmail()) ? request.ownerEmail() : request.representativeEmail());
+        if (users.existsByEmailIgnoreCase(ownerEmail)) {
+            throw new IllegalArgumentException("Owner email already belongs to an existing account.");
+        }
         if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent() || workspaceRegistrations.findByWorkspaceIdentifierIgnoreCase(shortCode).isPresent()) {
             throw new IllegalArgumentException("Mã workspace đã tồn tại.");
         }
@@ -1851,18 +1892,16 @@ public class ForepService {
         registration.setBusinessName(request.businessName());
         registration.setWorkspaceName(request.workspaceName());
         registration.setWorkspaceIdentifier(shortCode);
-        registration.setContactEmail(request.contactEmail());
+        registration.setContactEmail(normalizeEmail(request.contactEmail()));
         registration.setContactPhone(request.contactPhone() == null ? "" : request.contactPhone());
         registration.setBusinessAddress(request.businessAddress());
         registration.setRepresentativeFullName(request.representativeFullName());
-        registration.setRepresentativeEmail(request.representativeEmail());
+        registration.setRepresentativeEmail(normalizeEmail(request.representativeEmail()));
         registration.setRepresentativePhone(request.representativePhone());
         registration.setOwnerFullName(hasText(request.ownerFullName()) ? request.ownerFullName() : request.representativeFullName());
-        registration.setOwnerEmail(hasText(request.ownerEmail()) ? request.ownerEmail() : request.representativeEmail());
+        registration.setOwnerEmail(ownerEmail);
         registration.setOwnerPhone(hasText(request.ownerPhone()) ? request.ownerPhone() : request.representativePhone());
-        if (hasText(request.ownerPassword())) {
-            registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
-        }
+        registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
         registration.setPaymentStatus(PaymentStatus.PENDING);
         registration.setRegistrationStatus(RegistrationStatus.PENDING_PLAN_SELECTION);
         registration.setRegistrationToken(uniqueRegistrationToken());
@@ -2217,7 +2256,7 @@ public class ForepService {
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        List<GeneratedOwnerAccountView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note(), null);
+        List<AccountProvisioningView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note(), null);
         return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId), generatedOwnerAccounts);
     }
 
@@ -4703,7 +4742,7 @@ public class ForepService {
         return toPaymentTransactionView(payment);
     }
 
-    private List<GeneratedOwnerAccountView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote, UUID paymentTransactionId) {
+    private List<AccountProvisioningView> activateWorkspaceForRegistration(WorkspaceRegistrationEntity registration, String reviewNote, UUID paymentTransactionId) {
         registration = workspaceRegistrations.findByIdForUpdate(registration.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         if (registration.getWorkspaceId() != null) {
@@ -4735,11 +4774,11 @@ public class ForepService {
 
         createWorkspaceSubscription(workspace, plan, now, paymentTransactionId);
 
-        List<GeneratedOwnerAccountView> owners = provisionOwnerAccounts(workspace, plan, now);
+        List<AccountProvisioningView> owners = provisionInitialOwner(workspace, registration, now);
         workspace.setOwnerAccountProvisionedAt(now);
         workspace.setOwnerAccountCount(owners.size());
         if (!owners.isEmpty()) {
-            workspace.setOwnerId(owners.getFirst().userId());
+            workspace.setOwnerId(owners.getFirst().id());
         }
         workspace = workspaces.save(workspace);
         registration.setWorkspaceId(workspace.getId());
@@ -4810,47 +4849,62 @@ public class ForepService {
         return WorkspaceSubscriptionStatus.CANCELLED;
     }
 
-    public List<GeneratedOwnerAccountView> provisionOwnerAccounts(UUID workspaceId) {
+    public List<AccountProvisioningView> provisionOwnerAccounts(UUID workspaceId) {
         requireSystemAdmin();
-        WorkspaceEntity workspace = requireWorkspace(workspaceId);
+        WorkspaceEntity workspace = requireWorkspaceForUpdate(workspaceId);
         SubscriptionPlanEntity plan = requireSubscriptionPlan(workspace.getSubscriptionPlanId());
         OffsetDateTime now = OffsetDateTime.now();
-        List<GeneratedOwnerAccountView> generated = provisionOwnerAccounts(workspace, plan, now);
+        List<AccountProvisioningView> generated = provisionOwnerAccounts(workspace, plan, now);
         workspace.setOwnerAccountProvisionedAt(now);
         workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
         if (!generated.isEmpty() && workspace.getOwnerId() == null) {
-            workspace.setOwnerId(generated.getFirst().userId());
+            workspace.setOwnerId(generated.getFirst().id());
         }
         workspaces.save(workspace);
         return generated;
     }
 
-    private List<GeneratedOwnerAccountView> provisionOwnerAccounts(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
-        List<GeneratedOwnerAccountView> generated = new ArrayList<>();
-        List<UserEntity> existingOwners = new ArrayList<>(ownerAccounts(workspace.getId()));
-        int baseOwnerCount = existingOwners.size();
-        int missingOwnerAccounts = Math.max(0, plan.getMaxOwnerAccounts() - existingOwners.size());
-        for (int index = 1; index <= missingOwnerAccounts; index++) {
-            String username = nextOwnerUsername(workspace);
-            String password = defaultOwnerPassword();
-            UserEntity owner = new UserEntity();
-            owner.setWorkspaceId(workspace.getId());
-            owner.setFullName((hasText(workspace.getBusinessName()) ? workspace.getBusinessName() : workspace.getName()) + " Owner " + (baseOwnerCount + index));
-            owner.setEmail(username + "@workspace.local");
-            owner.setPhone(workspace.getContactPhone());
-            owner.setUsername(username);
-            owner.setPasswordHash(passwordEncoder.encode(password));
-            owner.setMustChangePassword(true);
-            owner.setInitialAccountGenerated(true);
-            owner.setRole(Role.BUSINESS_OWNER);
-            owner.setStatus(UserStatus.ACTIVE);
-            owner.setCreatedAt(now);
-            owner.setUpdatedAt(now);
-            owner = users.save(owner);
-            existingOwners.add(owner);
-            generated.add(new GeneratedOwnerAccountView(owner.getId(), owner.getUsername(), password, owner.getFullName()));
+    private List<AccountProvisioningView> provisionOwnerAccounts(WorkspaceEntity workspace, SubscriptionPlanEntity plan, OffsetDateTime now) {
+        if (plan.getMaxOwnerAccounts() < 1 || !ownerAccounts(workspace.getId()).isEmpty()) {
+            return List.of();
         }
-        return generated;
+        validateBusinessOwnerPermissionSeeds();
+        String email = normalizeEmail(workspace.getContactEmail());
+        validateNewAccountIdentity(workspace.getId(), email, workspace.getContactPhone());
+        String username = accountNamingService.generateUniqueUsername(AccountType.BUSINESS_OWNER, workspace.getName(), accountWorkspaceCode(workspace));
+        String temporaryPassword = secureTemporaryPassword();
+        UserEntity owner = newOwnerAccount(workspace, hasText(workspace.getBusinessName())
+                ? workspace.getBusinessName() + " Owner"
+                : workspace.getName() + " Owner", email, workspace.getContactPhone(), username,
+                passwordEncoder.encode(temporaryPassword), true, now);
+        owner = saveAccount(owner, "Email, phone or username already exists.");
+        audit(workspace.getId(), "ADMIN_PROVISION_INITIAL_BUSINESS_OWNER", "USER", owner.getId(), null,
+                Map.of("username", username, "email", email));
+        return List.of(toAccountProvisioningView(owner, temporaryPassword));
+    }
+
+    private List<AccountProvisioningView> provisionInitialOwner(WorkspaceEntity workspace,
+                                                                 WorkspaceRegistrationEntity registration,
+                                                                 OffsetDateTime now) {
+        if (!ownerAccounts(workspace.getId()).isEmpty()) {
+            return List.of();
+        }
+        validateBusinessOwnerPermissionSeeds();
+        String email = normalizeEmail(registration.getOwnerEmail());
+        validateNewAccountIdentity(workspace.getId(), email, registration.getOwnerPhone());
+        String username = accountNamingService.generateUniqueUsername(AccountType.BUSINESS_OWNER, workspace.getName(), accountWorkspaceCode(workspace));
+        boolean generatedPassword = !hasText(registration.getOwnerPasswordHash());
+        String temporaryPassword = generatedPassword ? secureTemporaryPassword() : null;
+        String passwordHash = generatedPassword ? passwordEncoder.encode(temporaryPassword) : registration.getOwnerPasswordHash();
+        String fullName = hasText(registration.getOwnerFullName())
+                ? registration.getOwnerFullName()
+                : registration.getRepresentativeFullName();
+        UserEntity owner = newOwnerAccount(workspace, fullName, email, registration.getOwnerPhone(), username,
+                passwordHash, generatedPassword, now);
+        owner = saveAccount(owner, "Email, phone or username already exists.");
+        audit(workspace.getId(), "ACTIVATION_CREATE_INITIAL_BUSINESS_OWNER", "USER", owner.getId(), null,
+                Map.of("username", username, "email", email));
+        return List.of(toAccountProvisioningView(owner, temporaryPassword));
     }
 
     private void validatePlanValues(BigDecimal price, Integer maxOwnerAccounts, Integer maxEmployeeAccounts) {
@@ -5017,6 +5071,105 @@ public class ForepService {
         }
     }
 
+    private WorkspaceEntity requireWorkspaceForUpdate(UUID workspaceId) {
+        return workspaces.findByIdForUpdate(workspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace not found."));
+    }
+
+    private void requireBusinessOwnerRole() {
+        AuthenticatedUser user = currentUser();
+        if (!isBusinessOwnerRole(user.role()) || user.workspaceId() == null) {
+            throw new IllegalArgumentException("Only a Business Owner with workspace context can manage HR accounts.");
+        }
+    }
+
+    private void requireHrRole() {
+        AuthenticatedUser user = currentUser();
+        if (user.role() != Role.HR || user.workspaceId() == null) {
+            throw new IllegalArgumentException("Only HR can manage employee accounts.");
+        }
+    }
+
+    private void validateBusinessOwnerPermissionSeeds() {
+        authorizationService.requireRolePermissionsConfigured(Role.BUSINESS_OWNER,
+                Permission.WORKSPACE_VIEW, Permission.WORKSPACE_UPDATE, Permission.EMPLOYEE_VIEW,
+                Permission.DEPARTMENT_VIEW, Permission.POSITION_VIEW, Permission.HR_ACCOUNT_MANAGE,
+                Permission.TASK_VIEW, Permission.AI_SUMMARY, Permission.AI_HISTORY,
+                Permission.REPORT_VIEW, Permission.FEEDBACK_CREATE);
+    }
+
+    private void validateBusinessOwnerAndHrPermissionSeeds() {
+        validateBusinessOwnerPermissionSeeds();
+        authorizationService.requireRolePermissionsConfigured(Role.HR,
+                Permission.WORKSPACE_VIEW, Permission.EMPLOYEE_VIEW, Permission.EMPLOYEE_CREATE,
+                Permission.EMPLOYEE_UPDATE, Permission.EMPLOYEE_DEACTIVATE, Permission.EMPLOYEE_IMPORT,
+                Permission.DEPARTMENT_VIEW, Permission.DEPARTMENT_MANAGE,
+                Permission.POSITION_VIEW, Permission.POSITION_MANAGE);
+    }
+
+    private String normalizeEmail(String email) {
+        if (!hasText(email)) {
+            throw new IllegalArgumentException("Email is required.");
+        }
+        return email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizePhone(String phone) {
+        return hasText(phone) ? phone.trim() : null;
+    }
+
+    private void validateNewAccountIdentity(UUID workspaceId, String email, String phone) {
+        if (users.existsByEmailIgnoreCase(email)) {
+            throw new IllegalArgumentException("Email already belongs to an existing account.");
+        }
+        validatePhoneAvailable(workspaceId, phone);
+    }
+
+    private void validatePhoneAvailable(UUID workspaceId, String phone) {
+        if (hasText(phone) && users.existsByWorkspaceIdAndPhone(workspaceId, phone.trim())) {
+            throw new IllegalArgumentException("Phone number already belongs to an account in this workspace.");
+        }
+    }
+
+    private String accountWorkspaceCode(WorkspaceEntity workspace) {
+        if (hasText(workspace.getOrganizationAbbreviation())) return workspace.getOrganizationAbbreviation();
+        if (hasText(workspace.getShortCode())) return workspace.getShortCode();
+        return workspace.getName();
+    }
+
+    private UserEntity saveAccount(UserEntity account, String duplicateMessage) {
+        try {
+            return users.saveAndFlush(account);
+        } catch (DataIntegrityViolationException exception) {
+            throw new IllegalArgumentException(duplicateMessage, exception);
+        }
+    }
+
+    private UserEntity newOwnerAccount(WorkspaceEntity workspace, String fullName, String email, String phone,
+                                       String username, String passwordHash, boolean generatedPassword,
+                                       OffsetDateTime now) {
+        UserEntity owner = new UserEntity();
+        owner.setWorkspaceId(workspace.getId());
+        owner.setFullName(fullName);
+        owner.setEmail(email);
+        owner.setPhone(normalizePhone(phone));
+        owner.setUsername(username);
+        owner.setPasswordHash(passwordHash);
+        owner.setMustChangePassword(generatedPassword);
+        owner.setInitialAccountGenerated(generatedPassword);
+        owner.setRole(Role.BUSINESS_OWNER);
+        owner.setStatus(UserStatus.ACTIVE);
+        owner.setCreatedAt(now);
+        owner.setUpdatedAt(now);
+        return owner;
+    }
+
+    private AccountProvisioningView toAccountProvisioningView(UserEntity account, String temporaryPassword) {
+        return new AccountProvisioningView(account.getId(), account.getUsername(), account.getFullName(),
+                account.getEmail(), account.getRole(), account.getStatus(), account.getWorkspaceId(),
+                temporaryPassword, account.isMustChangePassword(), temporaryPassword != null);
+    }
+
     private AuthenticatedUser currentUser() { return securityContext.currentUser(); }
     private void requireOwner() { authorizationService.require(Permission.WORKSPACE_UPDATE); }
     private void requireOwnerOrHr() { authorizationService.requireAny(Permission.EMPLOYEE_VIEW, Permission.DEPARTMENT_VIEW, Permission.POSITION_VIEW); }
@@ -5043,10 +5196,8 @@ public class ForepService {
     }
     private void enforceWorkspaceUserLimit(WorkspaceEntity workspace) {
         if (currentWorkspaceUserCount(workspace.getId()) >= workspace.getMaxUsers()) {
+            throw new IllegalArgumentException("Workspace user limit has been reached.");
         }
-    }
-    private String defaultOwnerPassword() {
-        return DEFAULT_OWNER_PASSWORD;
     }
     private List<Role> workforceRoles() {
         return List.of(Role.EMPLOYEE, Role.MANAGER, Role.EXECUTIVE);
@@ -5139,49 +5290,6 @@ public class ForepService {
         return shortCode;
     }
 
-    private String workspaceOwnerAbbreviation(WorkspaceEntity workspace) {
-        if (hasText(workspace.getOrganizationAbbreviation())) {
-            return normalizeOwnerAbbreviation(workspace.getOrganizationAbbreviation());
-        }
-        if (hasText(workspace.getShortCode())) {
-            return normalizeOwnerAbbreviation(workspace.getShortCode());
-        }
-        return normalizeOwnerAbbreviation(nextAvailableShortCode(workspace.getName()));
-    }
-
-    private String normalizeOwnerAbbreviation(String value) {
-        String normalized = normalizeAccountText(value).replaceAll("[^a-z0-9]", "").toUpperCase(Locale.ROOT);
-        if (normalized.isBlank()) {
-            return "XX";
-        }
-        if (normalized.length() == 1) {
-            return (normalized + normalized).substring(0, 2);
-        }
-        return normalized.substring(0, 2);
-    }
-
-    private String nextOwnerUsername(WorkspaceEntity workspace) {
-        String abbreviation = workspaceOwnerAbbreviation(workspace);
-        int candidateSequence = 1;
-        while (candidateSequence <= 702) {
-            String username = abbreviation + "0000" + ownerAccountSuffix(candidateSequence);
-            if (!users.existsByUsernameIgnoreCase(username)) {
-                return username;
-            }
-            candidateSequence++;
-        }
-        throw new IllegalArgumentException("Không thể tạo username Business Owner duy nhất.");
-    }
-
-    private String nextHrUsername(WorkspaceEntity workspace) {
-        String prefix = "hr" + workspaceOwnerAbbreviation(workspace).toLowerCase(Locale.ROOT);
-        for (int sequence = 1; sequence <= 9999; sequence++) {
-            String username = prefix + String.format("%04d", sequence);
-            if (!users.existsByUsernameIgnoreCase(username)) return username;
-        }
-        throw new IllegalArgumentException("Could not allocate a unique HR username.");
-    }
-
     private String secureTemporaryPassword() {
         String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
         StringBuilder value = new StringBuilder(16);
@@ -5189,17 +5297,6 @@ public class ForepService {
             value.append(alphabet.charAt(SECURE_RANDOM.nextInt(alphabet.length())));
         }
         return value.toString();
-    }
-
-    private String ownerAccountSuffix(int sequence) {
-        int number = sequence;
-        StringBuilder suffix = new StringBuilder();
-        while (number > 0) {
-            number--;
-            suffix.insert(0, (char) ('A' + (number % 26)));
-            number /= 26;
-        }
-        return suffix.toString();
     }
 
     private List<UserEntity> ownerAccounts(UUID workspaceId) {
@@ -5341,23 +5438,6 @@ public class ForepService {
         return shortCode + String.format("%04d", employeeNumber);
     }
 
-    private String buildUsername(String fullName, String employeeCode) {
-        String[] parts = Arrays.stream(normalizeAccountText(fullName).split("\\s+"))
-                .filter(part -> !part.isBlank())
-                .toArray(String[]::new);
-        String namePart;
-        if (parts.length == 0) {
-            namePart = "user";
-        } else {
-            StringBuilder builder = new StringBuilder(parts[parts.length - 1]);
-            for (int index = 0; index < parts.length - 1; index++) {
-                builder.append(parts[index].charAt(0));
-            }
-            namePart = builder.toString();
-        }
-        return (namePart + employeeCode).toLowerCase(Locale.ROOT);
-    }
-
     private String normalizeAccountText(String value) {
         String source = (value == null ? "" : value)
                 .replace('\u0111', 'd')
@@ -5389,9 +5469,9 @@ public class ForepService {
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
-    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<GeneratedOwnerAccountView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
+    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
     private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { UUID workspaceId = workspaceRegistrations.findById(item.getWorkspaceRegistrationId()).map(WorkspaceRegistrationEntity::getWorkspaceId).orElse(null); return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), workspaceId, item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderName(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getQrDisplayData(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getPaymentConfigurationSnapshot(), item.getRawProviderResponse(), item.getStatus(), item.getPaidAt(), item.getConfirmedAt(), item.getConfirmedBy(), item.getExpiredAt(), item.getFailureReason(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
@@ -5400,15 +5480,16 @@ public class ForepService {
 
     public record WorkspaceView(UUID id, String name, String shortCode, String logo, String address, UUID ownerId, OffsetDateTime createdAt) {}
     public record UserView(UUID id, UUID workspaceId, String fullName, String email, String phone, String username, String employeeCode, Role role, List<String> permissions, String avatar, String avatarFileId, UserStatus status, String jobTitle, SeniorityLevel seniorityLevel, Integer skillRating, Integer yearsOfExperience, String skills, UUID departmentId, UUID jobPositionId, LocalDate dateOfBirth, String gender, String address, String personalSummary, EmploymentType employmentType, WorkingStatus workingStatus, EmployeeLevel employeeLevel, Integer monthlyWorkingCapacityHours, String mainExpertise, String secondaryExpertise, boolean mustChangePassword, boolean initialAccountGenerated, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record CreatedUserAccountView(UserView user, String username, String initialPassword, boolean credentialsVisibleOnce) {}
+    public record CreatedUserAccountView(UserView user, String username, String temporaryPassword, boolean credentialsVisibleOnce) {}
     public record TaskView(UUID id, UUID workspaceId, String title, String requirements, String description, String customerPhone, String customerEmail, String customerDescription, AssignmentType assignmentType, UUID assigneeId, UUID creatorId, TaskPriority priority, OffsetDateTime deadline, OffsetDateTime startDate, BigDecimal estimatedHours, Integer difficulty, String requiredSkills, UUID requiredJobPositionId, String taskDomain, UUID projectId, UUID departmentId, List<TaskAssigneeView> participants, List<TaskAttachmentView> attachments, int progressPercent, TaskStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt, OffsetDateTime completedAt) {}
     public record TaskAssigneeView(UUID id, UUID taskId, UUID employeeId, TaskParticipantRole participantRole, boolean leader, BigDecimal allocatedHours, OffsetDateTime createdAt) {}
     public record TaskAttachmentView(UUID id, UUID taskId, String fileName, String fileUrl, String contentType, Long fileSize, AttachmentType attachmentType, UUID uploadedBy, OffsetDateTime createdAt) {}
     public record DepartmentView(UUID id, UUID workspaceId, String name, String code, String description, DepartmentStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record JobPositionView(UUID id, UUID workspaceId, String title, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, String requiredSkills, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessPositionView(UUID id, UUID workspaceId, String name, String code, PermissionGroup permissionGroup, UUID departmentId, String departmentName, String description, JobPositionStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record GeneratedOwnerAccountView(UUID userId, String username, String initialPassword, String fullName) {}
-    public record GeneratedHrAccountView(UUID userId, String username, String initialPassword, String fullName, boolean credentialsVisibleOnce) {}
+    public record AccountProvisioningView(UUID id, String username, String fullName, String email, Role role,
+                                          UserStatus status, UUID workspaceId, String temporaryPassword,
+                                          boolean mustChangePassword, boolean credentialsVisibleOnce) {}
     public record AiHistoryView(UUID id, String callerName, String callerRole, String calledFunction, AiHistoryStatus status, OffsetDateTime calledAt) {}
     public record TaskUpdateView(UUID id, UUID taskId, UUID userId, int progressPercent, String content, String attachment, UpdateType updateType, OffsetDateTime createdAt) {}
     public record DailyReportView(UUID id, UUID workspaceId, UUID userId, LocalDate reportDate, String todayCompleted, String currentWork, String blockers, String tomorrowPlan, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
@@ -5430,8 +5511,8 @@ public class ForepService {
     public record PaymentQrFileView(UUID fileId, String fileName, String contentType, long size, String displayUrl, OffsetDateTime createdAt) {}
     public record PaymentQrFileContent(String contentType, byte[] content) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
-    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<GeneratedOwnerAccountView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
+    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

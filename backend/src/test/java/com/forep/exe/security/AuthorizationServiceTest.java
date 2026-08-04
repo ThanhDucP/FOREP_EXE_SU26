@@ -9,16 +9,18 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class AuthorizationServiceTest {
     private AuthorizationService service;
+    private RolePermissionRepository repository;
 
     @BeforeEach
     void setUp() {
-        RolePermissionRepository repository = mock(RolePermissionRepository.class);
+        repository = mock(RolePermissionRepository.class);
         when(repository.findByRoleAndEnabledTrue(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
         service = new AuthorizationService(repository, mock(SecurityContext.class));
     }
@@ -37,6 +39,8 @@ class AuthorizationServiceTest {
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.DEPARTMENT_MANAGE));
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.POSITION_MANAGE));
         assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.AI_ANALYZE));
+        assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.SUBSCRIPTION_RENEW));
+        assertFalse(service.hasPermission(Role.BUSINESS_OWNER, Permission.SUBSCRIPTION_UPGRADE));
     }
 
     @Test
@@ -49,5 +53,13 @@ class AuthorizationServiceTest {
         assertFalse(service.hasPermission(Role.HR, Permission.PAYMENT_CONFIRM));
         assertFalse(service.hasPermission(Role.HR, Permission.TASK_ASSIGN));
         assertFalse(service.hasPermission(Role.HR, Permission.TASK_APPROVE));
+        assertFalse(service.hasPermission(Role.HR, Permission.ROLE_MANAGE));
+        assertFalse(service.hasPermission(Role.HR, Permission.HR_ACCOUNT_MANAGE));
+    }
+
+    @Test
+    void missingRequiredPermissionSeedIsDetected() {
+        assertThrows(IllegalStateException.class,
+                () -> service.requireRolePermissionsConfigured(Role.BUSINESS_OWNER, Permission.HR_ACCOUNT_MANAGE));
     }
 }

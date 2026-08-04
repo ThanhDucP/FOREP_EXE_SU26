@@ -6,6 +6,7 @@ import com.forep.exe.persistence.RolePermissionRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.EnumMap;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,17 @@ public class AuthorizationService {
 
     public boolean hasPermission(Role role, Permission permission) {
         return permissionsFor(role).contains(permission);
+    }
+
+    public void requireRolePermissionsConfigured(Role role, Permission... requiredPermissions) {
+        Role normalizedRole = normalize(role);
+        List<Permission> missing = Arrays.stream(requiredPermissions)
+                .filter(permission -> !rolePermissions.existsByRoleAndPermissionAndEnabledTrue(normalizedRole, permission))
+                .toList();
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException("Missing enabled permission seed for " + normalizedRole.name() + ": "
+                    + missing.stream().map(Enum::name).sorted().toList());
+        }
     }
 
     public void require(Permission permission) {
@@ -100,8 +112,6 @@ public class AuthorizationService {
                 Permission.PAYMENT_STATUS_VIEW,
                 Permission.PAYMENT_HISTORY_VIEW,
                 Permission.SUBSCRIPTION_VIEW,
-                Permission.SUBSCRIPTION_RENEW,
-                Permission.SUBSCRIPTION_UPGRADE,
                 Permission.EMPLOYEE_VIEW,
                 Permission.DEPARTMENT_VIEW,
                 Permission.POSITION_VIEW,
@@ -130,7 +140,6 @@ public class AuthorizationService {
                 Permission.DEPARTMENT_MANAGE,
                 Permission.POSITION_VIEW,
                 Permission.POSITION_MANAGE,
-                Permission.ROLE_MANAGE,
                 Permission.EMPLOYEE_IMPORT,
                 Permission.REPORT_VIEW,
                 Permission.REPORT_REVIEW,

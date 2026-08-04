@@ -44,7 +44,8 @@ class PublicRegistrationSecurityTest {
                                   "workspaceName": "FOREP Workspace",
                                   "contactEmail": "contact@example.com",
                                   "representativeFullName": "Nguyen Van A",
-                                  "representativeEmail": "owner@example.com"
+                                  "representativeEmail": "owner@example.com",
+                                  "ownerPassword": "OwnerPass!2026"
                                 }
                                 """))
                 .andExpect(status().isOk());

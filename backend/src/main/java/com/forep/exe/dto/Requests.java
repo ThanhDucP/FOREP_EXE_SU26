@@ -397,10 +397,7 @@ public final class Requests {
     public record CreateBusinessOwnerRequest(
             @NotBlank String fullName,
             @Email @NotBlank String email,
-            String username,
-            String temporaryPassword,
-            String phone,
-            UserStatus status
+            String phone
     ) {
     }
 
@@ -416,7 +413,7 @@ public final class Requests {
             String ownerFullName,
             @Email String ownerEmail,
             String ownerPhone,
-            String ownerPassword,
+            @NotBlank @Size(min = 8, max = 72) String ownerPassword,
             @NotBlank String representativeFullName,
             @Email @NotBlank String representativeEmail,
             String representativePhone,
