@@ -8,9 +8,6 @@ import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.http.CacheControl;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 
 import java.util.UUID;
 
@@ -67,23 +64,8 @@ public class PublicRegistrationController {
         return ApiResponse.ok(service.publicPaymentStatus(paymentCode, token));
     }
 
-    @GetMapping("/public/payment-files/{fileId}")
-    ResponseEntity<byte[]> paymentQrFile(@PathVariable UUID fileId) {
-        var file = service.paymentQrFile(fileId);
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .contentType(MediaType.parseMediaType(file.contentType()))
-                .contentLength(file.content().length)
-                .body(file.content());
-    }
-
     @PostMapping("/payment-callbacks/momo")
     ApiResponse<?> momoCallback(@RequestBody PaymentCallbackRequest request) {
         return ApiResponse.ok(service.handleMomoCallback(request));
-    }
-
-    @PostMapping("/payment-callbacks/bank")
-    ApiResponse<?> bankCallback(@RequestBody PaymentCallbackRequest request) {
-        return ApiResponse.ok(service.handleBankTransferCallback(request));
     }
 }

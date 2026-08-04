@@ -36,7 +36,27 @@ Khi Gemini va Groq deu fail, AI Service tra HTTP 502:
 
 ## POST /internal/ai/recommend-assignee
 
-Backend da loc ACTIVE employee, tinh workload/risk/candidateScore va sort candidate. AI Service chi sinh `reason`/`risk` va validate output.
+Backend da loc ACTIVE employee, hard-filter department/business position/level/seniority/capacity, tinh workload projection/risk/candidateScore va sort candidate. AI Service chi sinh `reason`/`risk` va validate output; AI khong duoc sort lai, khong duoc goi y employee `eligibilityStatus = NOT_ELIGIBLE`.
+
+Request root fields:
+
+```json
+{
+  "title": "Build payment UI",
+  "requirements": "React UI, MoMo status, audit log",
+  "startDate": "2026-08-04T09:00:00+07:00",
+  "deadline": "2026-08-08T18:00:00+07:00",
+  "estimatedHours": 24,
+  "priority": "HIGH",
+  "assignmentType": "TEAM",
+  "teamSize": 3,
+  "departmentId": "uuid",
+  "requiredJobPositionId": "uuid",
+  "requiredEmployeeLevel": "MIDDLE",
+  "requiredSeniorityLevel": "JUNIOR",
+  "employees": []
+}
+```
 
 Request employee item co them:
 
@@ -52,17 +72,49 @@ Request employee item co them:
   "status": "ACTIVE",
   "jobTitle": "Frontend Developer",
   "seniorityLevel": "MIDDLE",
+  "employeeLevel": "MIDDLE",
   "skillRating": 4,
   "yearsOfExperience": 3,
   "skills": "React, TypeScript, UI",
+  "monthlyCapacityHours": 168,
+  "currentMonthlyHours": 64,
+  "newTaskAllocatedHours": 8,
+  "projectedMonthlyHours": 72,
+  "projectedUtilizationRatio": 0.43,
+  "projectedWorkloadLevel": "LIGHT",
+  "eligibilityStatus": "ELIGIBLE",
+  "eligibilityReasons": [],
   "candidateScore": 85,
   "scoreComponents": {
     "candidateScore": 85,
-    "profilePenalty": 6,
-    "taskProfileMatchScore": 8
+    "departmentSuitabilityScore": 100,
+    "businessPositionSuitabilityScore": 100,
+    "employeeLevelFitScore": 100,
+    "seniorityFitScore": 100,
+    "skillMatchScore": 80,
+    "workloadAvailabilityScore": 85,
+    "performanceScore": 76,
+    "projectedUtilizationRatio": 0.43,
+    "projectedWorkloadLevel": "LIGHT",
+    "performanceMetrics": {
+      "totalAssignedTasks": 8,
+      "completedTasks": 5,
+      "completionRate": 0.63,
+      "onTimeCompletionRate": 0.8,
+      "riskRate": 0.1,
+      "averageActiveProgress": 55
+    }
   }
 }
 ```
+
+Scoring contract:
+
+- Department/business position/employee level/seniority la eligibility filters khi FE/BE co input tuong ung.
+- Candidate bi loai neu khong dung department/position bat buoc, level/seniority thap hon yeu cau, khong dang `WORKING`, hoac projected utilization vuot 120%.
+- Candidate `WARNING` khi projected utilization vuot 85% hoac vuot 100% nhung chua den hard block; AI phai dua `eligibilityReasons` vao risk.
+- `performanceScore` do BE tinh tu completion rate, on-time completion rate, risk rate cua active tasks, va average active progress; AI chi giai thich.
+- `projectedMonthlyHours = currentMonthlyHours + newTaskAllocatedHours` theo thang co tai cao nhat trong khoang startDate-deadline; new task hours duoc chia theo working days va so participant/teamSize.
 
 Timeout/provider config:
 

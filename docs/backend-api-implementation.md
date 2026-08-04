@@ -196,17 +196,15 @@ Production public flow uses:
 - POST `/api/public/workspace-registrations/{id}/payments?token={registrationToken}`
 - GET `/api/public/payments/{paymentCode}/status?token={registrationToken}`
 - POST `/api/payment-callbacks/momo`
-- POST `/api/payment-callbacks/bank`
-- GET `/api/admin/payment-qr-settings`
-- PUT `/api/admin/payment-qr-settings/{paymentMethod}`
+- GET `/api/admin/momo-payment-setting`
+- PUT `/api/admin/momo-payment-setting`
 
 Rules:
 
 - Public payment status is read by `paymentCode + registrationToken`; frontend success pages cannot activate workspaces.
-- Public payment creation requires an enabled Platform Admin QR setting for the selected method. Missing QR returns a business-rule error asking the user to wait; backend does not create a payment transaction.
-- Bank QR for public users comes from Platform Admin uploaded QR files, not frontend-generated QR and not fake third-party QR generation.
-- Platform Admin can update bank account info and upload `BANK_TRANSFER` QR from UI. Admin config rejects `qrCodeUrl`, `paymentUrl`, and `deeplink` fields.
-- MoMo uses only real provider config from environment. If the provider is not fully configured, backend rejects payment creation with a waiting/configuration error.
+- Public payment creation supports only `MOMO` and requires enabled Platform Admin MoMo provider config. Missing config returns a business-rule error asking the user to wait; backend does not create a payment transaction.
+- Platform Admin configures MoMo from UI with `providerEndpoint`, `partnerCode`, `accessKey`, `secretKey`, `returnUrl`, `notifyUrl`, `transferContentPrefix`, and `enabled`. Admin config rejects `qrCodeUrl`, `paymentUrl`, and `deeplink` fields.
+- If the provider is not fully configured, backend rejects payment creation with a waiting/configuration error.
 - Successful verified payment sets `PaymentTransaction.status=SUCCESS`, confirms registration payment, activates workspace, creates Business Owner accounts, and returns generated credentials only in the activation response.
 - Final registration state after workspace/account provisioning is `ACTIVATED`.
 - Activation also creates one `workspace_subscriptions` ACTIVE row. This row is the subscription snapshot for billing/audit: plan id, price, owner/employee limits, start/end/renewal dates, and optional payment transaction id.
@@ -215,8 +213,8 @@ Rules:
 
 MoMo provider mode:
 
-- If `MOMO_SANDBOX_MODE=false` and all of `MOMO_PAYMENT_ENDPOINT`, `MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY`, `MOMO_RETURN_URL`, and `MOMO_NOTIFY_URL` are configured, backend calls the real MoMo create-payment endpoint with signed HMAC payload.
-- If sandbox mode is true, or any required provider config is missing, backend does not create MoMo stub payments and asks the user to wait for configuration.
+- If all admin MoMo fields are configured and enabled, backend calls the real MoMo create-payment endpoint with signed HMAC payload.
+- If any required provider config is missing, backend does not create MoMo stub payments and asks the user to wait for configuration.
 - FE renders `providerPaymentUrl`, `providerDeeplink`, and `providerQrCodeUrl` only when backend returns real provider data, then relies on backend public status polling for success.
 
 Seed/demo data:
@@ -254,7 +252,10 @@ Current behavior:
 
 - If `AI_SERVICE_URL` and `AI_SERVICE_TOKEN` are configured and AI service is reachable, backend calls AI service.
 - Weekly/monthly business summary call LLM through `/internal/ai/business-summary`; they are not internal rule summaries.
-- Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, co `candidateScore` va `scoreComponents`; AI tu nhan dien `requiredRole`, `roleFit`, `roleFitReason` tu title/requirements va profile ung vien, sau do backend validate lai employeeId/fullName/workload/score theo candidate input.
+- Assignee recommendation ranking/eligibility do backend tinh: chi employee ACTIVE, workspace-scoped, working status hop le; hard-filter `departmentId`, `requiredJobPositionId`, `requiredEmployeeLevel`, `requiredSeniorityLevel`, va projected capacity khi request co input tuong ung. Backend tinh `candidateScore`, `scoreComponents`, `eligibilityStatus`, `eligibilityReasons`, `performanceMetrics`, `currentMonthlyHours`, `newTaskAllocatedHours`, `projectedMonthlyHours`, `projectedUtilizationRatio`, `projectedWorkloadLevel`.
+- Cong thuc workload projection: lay thang co tai cao nhat trong khoang `startDate -> deadline`; `projectedMonthlyHours = currentMonthlyHours + estimatedHours chia theo working days va so nguoi tham gia/teamSize`; vuot 85% capacity la `WARNING`, vuot 100% co risk cao, vuot 120% bi loai khoi candidate.
+- Cong thuc performance score: backend dung completion rate, on-time completion rate, risk rate cua active overdue/blocked tasks va average active progress. AI khong duoc tinh lai performance, chi giai thich cac so backend gui.
+- AI tu nhan dien `requiredRole`, `roleFit`, `roleFitReason` tu title/requirements va profile ung vien, sau do backend validate lai employeeId/fullName/workload/score theo candidate input; AI khong duoc sort lai hoac chen ung vien moi.
 - Task/domain analysis runs before recommendation when FE/backend lacks `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`. Backend sends only real active departments, active business positions, and workspace skills to AI, then maps AI text output back to real workspace IDs before scoring.
 - Estimate-hours, recommendation explanation, recommendation-result explanation, workload-risk explanation, employee-report draft, owner operational summary, and platform system summary are exposed through backend only. Backend enforces permission, AI quota, AI history, and suggestion persistence before calling AI Service.
 - Backend enforce `aiUsageLimit` theo goi subscription hien tai bang so luong record `ai_suggestions` trong ky kich hoat workspace. Khi het quota, backend chan truoc khi goi AI.

@@ -23,6 +23,16 @@ public class PaymentQrSettingEntity extends BaseEntity {
     private String paymentUrl;
     @Column(columnDefinition = "text")
     private String deeplink;
+    @Column(columnDefinition = "text")
+    private String providerEndpoint;
+    private String partnerCode;
+    private String accessKey;
+    @Column(columnDefinition = "text")
+    private String secretKey;
+    @Column(columnDefinition = "text")
+    private String returnUrl;
+    @Column(columnDefinition = "text")
+    private String notifyUrl;
     private String bankCode;
     private String bankName;
     private String bankAccountNumber;
@@ -47,6 +57,18 @@ public class PaymentQrSettingEntity extends BaseEntity {
     public void setPaymentUrl(String paymentUrl) { this.paymentUrl = paymentUrl; }
     public String getDeeplink() { return deeplink; }
     public void setDeeplink(String deeplink) { this.deeplink = deeplink; }
+    public String getProviderEndpoint() { return providerEndpoint; }
+    public void setProviderEndpoint(String providerEndpoint) { this.providerEndpoint = providerEndpoint; }
+    public String getPartnerCode() { return partnerCode; }
+    public void setPartnerCode(String partnerCode) { this.partnerCode = partnerCode; }
+    public String getAccessKey() { return accessKey; }
+    public void setAccessKey(String accessKey) { this.accessKey = accessKey; }
+    public String getSecretKey() { return secretKey; }
+    public void setSecretKey(String secretKey) { this.secretKey = secretKey; }
+    public String getReturnUrl() { return returnUrl; }
+    public void setReturnUrl(String returnUrl) { this.returnUrl = returnUrl; }
+    public String getNotifyUrl() { return notifyUrl; }
+    public void setNotifyUrl(String notifyUrl) { this.notifyUrl = notifyUrl; }
     public String getBankCode() { return bankCode; }
     public void setBankCode(String bankCode) { this.bankCode = bankCode; }
     public String getBankName() { return bankName; }

@@ -265,7 +265,13 @@ public final class Requests {
             String taskDomain,
             UUID departmentId,
             UUID requiredJobPositionId,
-            String requiredSkills
+            String requiredSkills,
+            EmployeeLevel requiredEmployeeLevel,
+            SeniorityLevel requiredSeniorityLevel,
+            AssignmentType assignmentType,
+            @Min(1) Integer teamSize,
+            TaskPriority priority,
+            OffsetDateTime startDate
     ) {
     }
 
@@ -432,10 +438,12 @@ public final class Requests {
             String qrCodeUrl,
             String paymentUrl,
             String deeplink,
-            String bankCode,
-            String bankName,
-            String bankAccountNumber,
-            String bankAccountName,
+            String providerEndpoint,
+            String partnerCode,
+            String accessKey,
+            String secretKey,
+            String returnUrl,
+            String notifyUrl,
             String transferContentPrefix,
             boolean enabled
     ) {

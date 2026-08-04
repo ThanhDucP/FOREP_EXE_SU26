@@ -78,6 +78,7 @@ import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
+import com.forep.exe.service.MomoPaymentService.MomoProviderConfig;
 import com.forep.exe.persistence.AiSuggestionEntity;
 import com.forep.exe.persistence.AiSuggestionRepository;
 import com.forep.exe.persistence.AiHistoryEntity;
@@ -98,8 +99,6 @@ import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.PaymentQrSettingEntity;
 import com.forep.exe.persistence.PaymentQrSettingRepository;
-import com.forep.exe.persistence.PaymentQrFileEntity;
-import com.forep.exe.persistence.PaymentQrFileRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
 import com.forep.exe.persistence.TaskAssigneeEntity;
@@ -133,14 +132,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import javax.imageio.ImageIO;
 import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.time.Duration;
@@ -182,7 +177,6 @@ public class ForepService {
     private final WorkspaceSubscriptionRepository workspaceSubscriptions;
     private final PaymentTransactionRepository paymentTransactions;
     private final PaymentQrSettingRepository paymentQrSettings;
-    private final PaymentQrFileRepository paymentQrFiles;
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
     private final TaskAttachmentRepository taskAttachments;
@@ -195,7 +189,6 @@ public class ForepService {
     private final AuthorizationService authorizationService;
     private final AiServiceClient aiServiceClient;
     private final MomoPaymentService momoPaymentService;
-    private final BankTransferPaymentService bankTransferPaymentService;
     private final ObjectMapper objectMapper;
     private final AccountNamingService accountNamingService;
 
@@ -212,7 +205,6 @@ public class ForepService {
                         WorkspaceSubscriptionRepository workspaceSubscriptions,
                         PaymentTransactionRepository paymentTransactions,
                         PaymentQrSettingRepository paymentQrSettings,
-                        PaymentQrFileRepository paymentQrFiles,
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
                         TaskAttachmentRepository taskAttachments,
@@ -224,10 +216,9 @@ public class ForepService {
                         SecurityContext securityContext,
                         AuthorizationService authorizationService,
                         AiServiceClient aiServiceClient,
-                         MomoPaymentService momoPaymentService,
-                         BankTransferPaymentService bankTransferPaymentService,
-                         ObjectMapper objectMapper,
-                         AccountNamingService accountNamingService) {
+                        MomoPaymentService momoPaymentService,
+                        ObjectMapper objectMapper,
+                        AccountNamingService accountNamingService) {
         this.workspaces = workspaces;
         this.users = users;
         this.tasks = tasks;
@@ -241,7 +232,6 @@ public class ForepService {
         this.workspaceSubscriptions = workspaceSubscriptions;
         this.paymentTransactions = paymentTransactions;
         this.paymentQrSettings = paymentQrSettings;
-        this.paymentQrFiles = paymentQrFiles;
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
         this.taskAttachments = taskAttachments;
@@ -254,7 +244,6 @@ public class ForepService {
         this.authorizationService = authorizationService;
         this.aiServiceClient = aiServiceClient;
         this.momoPaymentService = momoPaymentService;
-        this.bankTransferPaymentService = bankTransferPaymentService;
         this.objectMapper = objectMapper;
         this.accountNamingService = accountNamingService;
     }
@@ -1270,6 +1259,12 @@ public class ForepService {
                     effectiveRequest.estimatedHours() == null ? 0 : effectiveRequest.estimatedHours().doubleValue(),
                     effectiveRequest.departmentId(),
                     effectiveRequest.requiredJobPositionId(),
+                    effectiveRequest.requiredEmployeeLevel(),
+                    effectiveRequest.requiredSeniorityLevel(),
+                    effectiveRequest.assignmentType(),
+                    effectiveRequest.teamSize(),
+                    effectiveRequest.priority(),
+                    effectiveRequest.startDate() == null ? null : effectiveRequest.startDate().toString(),
                     candidates
             ));
             normalized = normalizeRecommendations(recommendations, candidates);
@@ -1993,13 +1988,16 @@ public class ForepService {
         PaymentTransactionEntity payment = new PaymentTransactionEntity();
         payment.setWorkspaceRegistrationId(registration.getId());
         payment.setSubscriptionPlanId(plan.getId());
-        payment.setPaymentMethod(request.paymentMethod());
+        if (request.paymentMethod() != PaymentMethod.MOMO) {
+            throw new IllegalArgumentException("Only MoMo payment is supported.");
+        }
+        payment.setPaymentMethod(PaymentMethod.MOMO);
         payment.setAmount(plan.getPrice());
         payment.setCurrency("VND");
         payment.setPaymentCode(uniquePaymentCode());
         payment.setOrderCode(uniqueOrderCode());
         payment.setRequestId(uniqueRequestId());
-        PaymentQrSettingEntity qrSetting = requireEnabledPaymentQrSetting(request.paymentMethod());
+        PaymentQrSettingEntity qrSetting = requireEnabledMomoPaymentSetting();
         payment.setTransferContent(transferContent(qrSetting, registration, payment));
         payment.setPaymentConfigurationSnapshot(paymentConfigurationSnapshot(qrSetting));
         payment.setStatus(PaymentTransactionStatus.PENDING);
@@ -2007,34 +2005,16 @@ public class ForepService {
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
 
-        ProviderPaymentResult providerResult;
-        if (request.paymentMethod() == PaymentMethod.MOMO) {
-            if (!momoPaymentService.isRealProviderConfigured()) {
-                throw new IllegalArgumentException("MoMo payment provider is not configured.");
-            }
-            providerResult = momoPaymentService.createPayment(payment);
-            payment.setProviderName("MOMO");
-        } else {
-            providerResult = bankTransferPaymentService.createPayment(
-                    payment,
-                    qrSetting.getBankCode(),
-                    qrSetting.getBankName(),
-                    qrSetting.getBankAccountNumber(),
-                    qrSetting.getBankAccountName()
-            );
-            if (qrSetting.getQrFileId() != null) {
-                providerResult = withUploadedBankQr(providerResult, qrSetting.getQrFileId());
-            }
-            payment.setProviderName(qrSetting.getQrFileId() == null ? "VIETQR" : "BANK_TRANSFER");
-        }
+        ProviderPaymentResult providerResult = momoPaymentService.createPayment(payment, momoProviderConfig(qrSetting));
+        payment.setProviderName("MOMO");
         payment.setProviderPaymentUrl(providerResult.paymentUrl());
         payment.setProviderDeeplink(providerResult.deeplink());
         payment.setProviderQrCodeUrl(providerResult.qrCodeUrl());
         payment.setQrDisplayData(providerResult.qrCodeUrl());
-        payment.setBankCode(providerResult.bankCode());
-        payment.setBankName(providerResult.bankName());
-        payment.setBankAccountNumber(providerResult.bankAccountNumber());
-        payment.setBankAccountName(providerResult.bankAccountName());
+        payment.setBankCode(null);
+        payment.setBankName(null);
+        payment.setBankAccountNumber(null);
+        payment.setBankAccountName(null);
         payment.setRawProviderRequest(providerResult.rawRequest());
         payment.setRawProviderResponse(providerResult.rawResponse());
         payment = paymentTransactions.save(payment);
@@ -2051,107 +2031,65 @@ public class ForepService {
         return toPaymentTransactionView(requirePayment(paymentId));
     }
 
-    public List<PaymentQrSettingView> adminPaymentQrSettings() {
+    public PaymentQrSettingView adminMomoPaymentSetting() {
         requireSystemAdmin();
-        return paymentQrSettings.findAll(Sort.by(Sort.Direction.ASC, "paymentMethod")).stream()
-                .map(this::toPaymentQrSettingView)
-                .toList();
+        OffsetDateTime now = OffsetDateTime.now();
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseGet(() -> {
+            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
+            item.setPaymentMethod(PaymentMethod.MOMO);
+            item.setEnabled(false);
+            item.setCreatedAt(now);
+            item.setUpdatedAt(now);
+            return paymentQrSettings.save(item);
+        });
+        return toPaymentQrSettingView(setting);
     }
 
-    public PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
+    public PaymentQrSettingView updateMomoPaymentSetting(UpdatePaymentQrSettingRequest request) {
+        return updatePaymentQrSetting(PaymentMethod.MOMO, request);
+    }
+
+    private PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
         requireSystemAdmin();
         if (hasText(request.qrCodeUrl()) || hasText(request.paymentUrl()) || hasText(request.deeplink())) {
-            throw new IllegalArgumentException("Payment URLs are not accepted in admin configuration. Upload a bank QR image or configure the real MoMo provider.");
+            throw new IllegalArgumentException("Payment URLs are not accepted in admin configuration. Configure the real MoMo provider instead.");
+        }
+        if (paymentMethod != PaymentMethod.MOMO) {
+            throw new IllegalArgumentException("Only MoMo payment configuration is supported.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseGet(() -> {
             PaymentQrSettingEntity item = new PaymentQrSettingEntity();
-            item.setPaymentMethod(paymentMethod);
+            item.setPaymentMethod(PaymentMethod.MOMO);
             item.setCreatedAt(now);
             return item;
         });
         setting.setQrCodeUrl(null);
+        setting.setQrFileId(null);
         setting.setPaymentUrl(null);
         setting.setDeeplink(null);
-        if (paymentMethod == PaymentMethod.MOMO) {
-            setting.setBankCode(null);
-            setting.setBankName(null);
-            setting.setBankAccountNumber(null);
-            setting.setBankAccountName(null);
-        } else {
-            setting.setBankCode(blankToNull(request.bankCode()));
-            setting.setBankName(blankToNull(request.bankName()));
-            setting.setBankAccountNumber(blankToNull(request.bankAccountNumber()));
-            setting.setBankAccountName(blankToNull(request.bankAccountName()));
-            if (request.enabled() && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
-                throw new IllegalArgumentException("Bank code, account number and account name are required before enabling bank transfer.");
-            }
+        setting.setBankCode(null);
+        setting.setBankName(null);
+        setting.setBankAccountNumber(null);
+        setting.setBankAccountName(null);
+        setting.setProviderEndpoint(blankToNull(request.providerEndpoint()));
+        setting.setPartnerCode(blankToNull(request.partnerCode()));
+        setting.setAccessKey(blankToNull(request.accessKey()));
+        if (hasText(request.secretKey())) {
+            setting.setSecretKey(request.secretKey().trim());
+        }
+        setting.setReturnUrl(blankToNull(request.returnUrl()));
+        setting.setNotifyUrl(blankToNull(request.notifyUrl()));
+        if (request.enabled() && !momoPaymentService.isRealProviderConfigured(momoProviderConfig(setting))) {
+            throw new IllegalArgumentException("MoMo provider configuration is incomplete.");
         }
         setting.setTransferContentPrefix(blankToNull(request.transferContentPrefix()));
         setting.setEnabled(request.enabled());
         setting.setUpdatedBy(currentUser().userId());
         setting.setUpdatedAt(now);
         setting = paymentQrSettings.save(setting);
-        audit(null, "ADMIN_UPDATE_PAYMENT_QR_SETTING", "PAYMENT_QR_SETTING", setting.getId(), null, toPaymentQrSettingView(setting));
+        audit(null, "ADMIN_UPDATE_MOMO_PAYMENT_SETTING", "MOMO_PAYMENT_SETTING", setting.getId(), null, toPaymentQrSettingView(setting));
         return toPaymentQrSettingView(setting);
-    }
-
-    public PaymentQrFileView uploadPaymentQrImage(PaymentMethod paymentMethod, MultipartFile file) {
-        requireSystemAdmin();
-        if (paymentMethod != PaymentMethod.BANK_TRANSFER) {
-            throw new IllegalArgumentException("Only bank transfer configuration accepts an uploaded QR image.");
-        }
-        byte[] content = validatedQrImage(file);
-        OffsetDateTime now = OffsetDateTime.now();
-        PaymentQrFileEntity stored = new PaymentQrFileEntity();
-        stored.setFileName(uniqueQrFileName(file.getContentType()));
-        stored.setContentType(normalizedImageContentType(file.getContentType()));
-        stored.setFileSize(content.length);
-        stored.setContent(content);
-        stored.setUploadedBy(currentUser().userId());
-        stored.setCreatedAt(now);
-        stored = paymentQrFiles.save(stored);
-
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod).orElseGet(() -> {
-            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
-            item.setPaymentMethod(paymentMethod);
-            item.setEnabled(false);
-            item.setCreatedAt(now);
-            return item;
-        });
-        setting.setQrCodeUrl(null);
-        setting.setQrFileId(stored.getId());
-        setting.setUpdatedBy(currentUser().userId());
-        setting.setUpdatedAt(now);
-        paymentQrSettings.save(setting);
-        audit(null, "ADMIN_UPLOAD_BANK_QR_IMAGE", "PAYMENT_QR_FILE", stored.getId(), null,
-                Map.of("fileName", stored.getFileName(), "size", stored.getFileSize()));
-        return toPaymentQrFileView(stored);
-    }
-
-    public PaymentQrSettingView removePaymentQrImage(PaymentMethod paymentMethod) {
-        requireSystemAdmin();
-        if (paymentMethod != PaymentMethod.BANK_TRANSFER) {
-            throw new IllegalArgumentException("MoMo QR data is generated by the provider and cannot be removed here.");
-        }
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod)
-                .orElseThrow(() -> new IllegalArgumentException("Payment configuration not found."));
-        UUID oldFileId = setting.getQrFileId();
-        setting.setQrFileId(null);
-        setting.setQrCodeUrl(null);
-        setting.setUpdatedBy(currentUser().userId());
-        setting.setUpdatedAt(OffsetDateTime.now());
-        setting = paymentQrSettings.save(setting);
-        audit(null, "ADMIN_REMOVE_BANK_QR_IMAGE", "PAYMENT_QR_SETTING", setting.getId(),
-                Map.of("fileId", oldFileId == null ? "" : oldFileId.toString()), null);
-        return toPaymentQrSettingView(setting);
-    }
-
-    @Transactional(readOnly = true)
-    public PaymentQrFileContent paymentQrFile(UUID fileId) {
-        PaymentQrFileEntity file = paymentQrFiles.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("Payment QR image not found."));
-        return new PaymentQrFileContent(file.getContentType(), file.getContent());
     }
 
     public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
@@ -2170,25 +2108,18 @@ public class ForepService {
 
     public PaymentTransactionView handleMomoCallback(PaymentCallbackRequest request) {
         PaymentTransactionEntity payment = requirePaymentByCallback(request);
+        if (payment.getPaymentMethod() != PaymentMethod.MOMO) {
+            throw new IllegalArgumentException("Only MoMo callbacks are supported.");
+        }
+        PaymentQrSettingEntity setting = requireEnabledMomoPaymentSetting();
         Map<String, Object> payload = paymentCallbackPayload(request);
-        if (!momoPaymentService.verifyCallbackSignature(payload, request.signature())) {
+        if (!momoPaymentService.verifyCallbackSignature(payload, request.signature(), momoProviderConfig(setting))) {
             throw new IllegalArgumentException("Invalid MoMo callback signature.");
         }
         assertCallbackAmountMatches(payment, request);
         payment.setProviderTransactionId(blankToNull(request.providerTransactionId()));
         boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
         return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
-    }
-
-    public PaymentTransactionView handleBankTransferCallback(PaymentCallbackRequest request) {
-        PaymentTransactionEntity payment = requirePaymentByCallback(request);
-        Map<String, Object> payload = paymentCallbackPayload(request);
-        if (!bankTransferPaymentService.verifyCallbackSignature(payload, request.signature())) {
-            throw new IllegalArgumentException("Invalid bank transfer callback signature.");
-        }
-        assertCallbackAmountMatches(payment, request);
-        payment.setProviderTransactionId(blankToNull(request.providerTransactionId()));
-        return confirmPayment(payment.getId(), false, request.rawPayload());
     }
 
     public PaymentTransactionView adminConfirmPayment(UUID paymentId, ReviewRegistrationRequest request) {
@@ -2546,7 +2477,13 @@ public class ForepService {
                 taskDomain,
                 departmentId,
                 jobPositionId,
-                requiredSkills
+                requiredSkills,
+                request.requiredEmployeeLevel(),
+                request.requiredSeniorityLevel(),
+                request.assignmentType(),
+                request.teamSize(),
+                request.priority(),
+                request.startDate()
         );
     }
 
@@ -2680,6 +2617,120 @@ public class ForepService {
         return output;
     }
 
+    private record WorkloadProjection(BigDecimal currentMonthlyHours, BigDecimal newTaskAllocatedHours, BigDecimal projectedMonthlyHours, BigDecimal monthlyCapacityHours, double projectedUtilizationRatio, String projectedWorkloadLevel) {}
+
+    private record EligibilityResult(String status, List<String> reasons) {}
+
+    private WorkloadProjection workloadProjection(UserEntity employee, List<TaskEntity> scopedTasks, RecommendAssigneeRequest request) {
+        BigDecimal capacity = BigDecimal.valueOf(employee.getMonthlyWorkingCapacityHours() == null ? 168 : employee.getMonthlyWorkingCapacityHours());
+        LocalDate start = request == null || request.startDate() == null ? LocalDate.now() : request.startDate().toLocalDate();
+        LocalDate end = request == null || request.deadline() == null ? start : request.deadline().toLocalDate();
+        if (end.isBefore(start)) end = start;
+        List<YearMonth> months = monthsBetween(start, end);
+        BigDecimal maxCurrent = BigDecimal.ZERO;
+        BigDecimal maxNewTask = BigDecimal.ZERO;
+        BigDecimal maxProjected = BigDecimal.ZERO;
+        for (YearMonth month : months) {
+            BigDecimal current = scopedTasks.stream()
+                    .filter(this::isOpenTask)
+                    .filter(task -> taskParticipants(task).contains(employee.getId()))
+                    .map(task -> allocatedHoursInMonth(task, month, taskParticipants(task).size()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal additional = newTaskAllocatedHoursInMonth(request, month);
+            BigDecimal projected = current.add(additional);
+            if (projected.compareTo(maxProjected) > 0) {
+                maxCurrent = current;
+                maxNewTask = additional;
+                maxProjected = projected;
+            }
+        }
+        double ratio = capacity.signum() == 0 ? 0 : maxProjected.doubleValue() / capacity.doubleValue();
+        return new WorkloadProjection(maxCurrent, maxNewTask, maxProjected, capacity, ratio, projectedWorkloadLevel(ratio));
+    }
+
+    private BigDecimal newTaskAllocatedHoursInMonth(RecommendAssigneeRequest request, YearMonth month) {
+        if (request == null || request.estimatedHours() == null || request.estimatedHours().compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+        LocalDate start = request.startDate() == null ? LocalDate.now() : request.startDate().toLocalDate();
+        LocalDate end = request.deadline() == null ? start : request.deadline().toLocalDate();
+        if (end.isBefore(start)) end = start;
+        List<LocalDate> workingDays = workingDays(start, end);
+        long workingDaysInMonth = workingDays.stream().filter(day -> YearMonth.from(day).equals(month)).count();
+        if (workingDaysInMonth == 0 || workingDays.isEmpty()) return BigDecimal.ZERO;
+        BigDecimal totalForParticipant = request.estimatedHours()
+                .divide(BigDecimal.valueOf(recommendationParticipantCount(request)), 2, java.math.RoundingMode.HALF_UP);
+        return totalForParticipant.multiply(BigDecimal.valueOf(workingDaysInMonth))
+                .divide(BigDecimal.valueOf(workingDays.size()), 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private int recommendationParticipantCount(RecommendAssigneeRequest request) {
+        if (request == null || request.assignmentType() != AssignmentType.TEAM) return 1;
+        return Math.max(1, request.teamSize() == null ? 1 : request.teamSize());
+    }
+
+    private List<YearMonth> monthsBetween(LocalDate start, LocalDate end) {
+        List<YearMonth> months = new ArrayList<>();
+        YearMonth current = YearMonth.from(start);
+        YearMonth last = YearMonth.from(end);
+        while (!current.isAfter(last)) {
+            months.add(current);
+            current = current.plusMonths(1);
+        }
+        return months;
+    }
+
+    private String projectedWorkloadLevel(double ratio) {
+        if (ratio < 0.25) return "IDLE";
+        if (ratio < 0.60) return "LIGHT";
+        if (ratio <= 0.85) return "OK";
+        if (ratio <= 1.0) return "WARNING";
+        if (ratio <= 1.2) return "OVERLOADED";
+        return "HARD_OVERLOAD";
+    }
+
+    private int projectedOverloadPenalty(double ratio) {
+        if (ratio > 1.2) return 60;
+        if (ratio > 1.0) return 40;
+        if (ratio > 0.85) return 18;
+        return 0;
+    }
+
+    private EligibilityResult eligibilityResult(UserEntity employee, RecommendAssigneeRequest request, WorkloadProjection projection) {
+        List<String> reasons = new ArrayList<>();
+        boolean hardBlock = false;
+        if (employee.getWorkingStatus() != null && employee.getWorkingStatus() != WorkingStatus.WORKING) {
+            hardBlock = true;
+            reasons.add("Employee is not currently working.");
+        }
+        if (request != null && request.departmentId() != null && !request.departmentId().equals(employee.getDepartmentId())) {
+            hardBlock = true;
+            reasons.add("Department does not match required department.");
+        }
+        if (request != null && request.requiredJobPositionId() != null && !request.requiredJobPositionId().equals(employee.getJobPositionId())) {
+            hardBlock = true;
+            reasons.add("Business position does not match required position.");
+        }
+        if (request != null && request.requiredEmployeeLevel() != null && employeeLevelRank(employee.getEmployeeLevel()) < employeeLevelRank(request.requiredEmployeeLevel())) {
+            hardBlock = true;
+            reasons.add("Employee level is below required level.");
+        }
+        if (request != null && request.requiredSeniorityLevel() != null && seniorityRank(employee.getSeniorityLevel()) < seniorityRank(request.requiredSeniorityLevel())) {
+            hardBlock = true;
+            reasons.add("Seniority is below required seniority.");
+        }
+        if (projection.projectedUtilizationRatio() > 1.2) {
+            hardBlock = true;
+            reasons.add("Projected workload exceeds 120% capacity after adding this task.");
+        } else if (projection.projectedUtilizationRatio() > 1.0) {
+            reasons.add("Projected workload exceeds monthly capacity after adding this task.");
+        } else if (projection.projectedUtilizationRatio() > 0.85) {
+            reasons.add("Projected workload is above 85% capacity after adding this task.");
+        }
+        if (hardBlock) return new EligibilityResult("NOT_ELIGIBLE", reasons);
+        return new EligibilityResult(reasons.isEmpty() ? "ELIGIBLE" : "WARNING", reasons);
+    }
+
     private List<AiEmployeeWorkload> assigneeCandidates(RecommendAssigneeRequest request) {
         UUID workspaceId = currentUser().workspaceId();
         List<TaskEntity> scopedTasks = tasks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
@@ -2687,7 +2738,11 @@ public class ForepService {
                 .filter(employee -> employee.getStatus() == UserStatus.ACTIVE)
                 .map(employee -> {
                     WorkloadView workload = workloadForEmployee(employee, scopedTasks);
-                    Map<String, Object> scoreComponents = scoreComponents(workload, employee, request);
+                    WorkloadProjection projection = workloadProjection(employee, scopedTasks, request);
+                    Map<String, Object> scoreComponents = scoreComponents(workload, employee, scopedTasks, request, projection);
+                    EligibilityResult eligibility = eligibilityResult(employee, request, projection);
+                    scoreComponents.put("eligibilityStatus", eligibility.status());
+                    scoreComponents.put("eligibilityReasons", eligibility.reasons());
                     int leadershipScore = leadershipScore(employee, scopedTasks, request, scoreComponents);
                     int teamMemberScore = teamMemberScore(employee, scopedTasks, request, scoreComponents);
                     long leadTaskCount = leadTasks(employee, scopedTasks).size();
@@ -2717,6 +2772,15 @@ public class ForepService {
                             employee.getJobPositionId(),
                             businessPosition == null ? null : businessPosition.getTitle(),
                             businessPosition == null ? null : businessPosition.getPermissionGroup(),
+                            employee.getEmployeeLevel(),
+                            employee.getMonthlyWorkingCapacityHours() == null ? 168 : employee.getMonthlyWorkingCapacityHours(),
+                            projection.currentMonthlyHours().doubleValue(),
+                            projection.newTaskAllocatedHours().doubleValue(),
+                            projection.projectedMonthlyHours().doubleValue(),
+                            projection.projectedUtilizationRatio(),
+                            projection.projectedWorkloadLevel(),
+                            eligibility.status(),
+                            eligibility.reasons(),
                             (int) scoreComponents.get("candidateScore"),
                             leadershipScore,
                             teamMemberScore,
@@ -2728,11 +2792,12 @@ public class ForepService {
                             scoreComponents
                     );
                 })
+                .filter(candidate -> !"NOT_ELIGIBLE".equals(candidate.eligibilityStatus()))
                 .sorted(Comparator.comparing(AiEmployeeWorkload::candidateScore).reversed())
                 .toList();
     }
 
-    private Map<String, Object> scoreComponents(WorkloadView workload, UserEntity employee, RecommendAssigneeRequest request) {
+    private Map<String, Object> scoreComponents(WorkloadView workload, UserEntity employee, List<TaskEntity> scopedTasks, RecommendAssigneeRequest request, WorkloadProjection projection) {
         int levelPenalty = switch (workload.workloadLevel()) {
             case NO_WORK -> 0;
             case LOW -> 4;
@@ -2751,8 +2816,11 @@ public class ForepService {
         int businessPositionSuitabilityScore = businessPositionSuitabilityScore(request, employee);
         int skillMatchScore = clampScore((int) Math.round(taskProfileMatchScore * 100.0 / 30.0));
         int workloadAvailabilityScore = workloadAvailabilityScore(workload);
-        int performanceScore = performanceScore(workload);
+        int performanceScore = performanceScore(employee, scopedTasks);
+        int employeeLevelFitScore = employeeLevelFitScore(request, employee);
+        int seniorityFitScore = seniorityFitScore(request, employee);
         int domainExperienceScore = clampScore(domainMatchScore(request, employee) * 5);
+        int projectedOverloadPenalty = projectedOverloadPenalty(projection.projectedUtilizationRatio());
         boolean taskNeedsProfileFit = request != null && hasText(request.title() + " " + request.requirements());
         boolean employeeHasProfile = hasText(employee.getJobTitle()) || hasText(employee.getSkills());
         int profileMismatchPenalty = taskNeedsProfileFit && employeeHasProfile && taskProfileMatchScore == 0 ? 55 : 0;
@@ -2763,8 +2831,9 @@ public class ForepService {
         double overduePenalty = workload.overdueTasks() * 18.0;
         double blockedPenalty = workload.blockedTasks() * 12.0;
         double workloadPenalty = workload.estimatedWorkload().doubleValue() / 2.0;
-        int structuralFitBonus = departmentMatchScore + jobPositionMatchScore;
-        int candidateScore = (int) Math.max(0, Math.min(100, Math.round(100 - openPenalty - overduePenalty - blockedPenalty - workloadPenalty - levelPenalty - profilePenalty - profileMismatchPenalty - missingProfilePenalty - departmentMismatchPenalty - jobPositionMismatchPenalty + taskProfileMatchScore + structuralFitBonus)));
+        int levelFitBonus = (employeeLevelFitScore + seniorityFitScore) / 10;
+        int structuralFitBonus = departmentMatchScore + jobPositionMatchScore + levelFitBonus;
+        int candidateScore = (int) Math.max(0, Math.min(100, Math.round(100 - openPenalty - overduePenalty - blockedPenalty - workloadPenalty - levelPenalty - profilePenalty - projectedOverloadPenalty - profileMismatchPenalty - missingProfilePenalty - departmentMismatchPenalty - jobPositionMismatchPenalty + taskProfileMatchScore + structuralFitBonus)));
         if (profileMismatchPenalty > 0) {
             candidateScore = Math.min(candidateScore, 30);
         } else if (missingProfilePenalty > 0) {
@@ -2789,12 +2858,23 @@ public class ForepService {
         components.put("skillRatingPenalty", skillRatingPenalty);
         components.put("experiencePenalty", experiencePenalty);
         components.put("profilePenalty", profilePenalty);
+        components.put("projectedOverloadPenalty", projectedOverloadPenalty);
+        components.put("currentMonthlyHours", projection.currentMonthlyHours());
+        components.put("newTaskAllocatedHours", projection.newTaskAllocatedHours());
+        components.put("projectedMonthlyHours", projection.projectedMonthlyHours());
+        components.put("monthlyCapacityHours", projection.monthlyCapacityHours());
+        components.put("projectedUtilizationRatio", projection.projectedUtilizationRatio());
+        components.put("projectedWorkloadLevel", projection.projectedWorkloadLevel());
         components.put("taskProfileMatchScore", taskProfileMatchScore);
         components.put("departmentSuitabilityScore", departmentSuitabilityScore);
         components.put("businessPositionSuitabilityScore", businessPositionSuitabilityScore);
+        components.put("levelFitBonus", levelFitBonus);
+        components.put("employeeLevelFitScore", employeeLevelFitScore);
+        components.put("seniorityFitScore", seniorityFitScore);
         components.put("skillMatchScore", skillMatchScore);
         components.put("workloadAvailabilityScore", workloadAvailabilityScore);
         components.put("performanceScore", performanceScore);
+        components.put("performanceMetrics", performanceMetrics(employee, scopedTasks));
         components.put("domainExperienceScore", domainExperienceScore);
         return components;
     }
@@ -2865,12 +2945,76 @@ public class ForepService {
         return clampScore((int) Math.round(base - workload.overdueTasks() * 12 - workload.blockedTasks() * 8));
     }
 
-    private int performanceScore(WorkloadView workload) {
-        long total = workload.completedTasks() + workload.overdueTasks() + workload.blockedTasks();
-        if (total == 0) return 50;
-        double completionRate = workload.completedTasks() * 1.0 / total;
-        double riskRate = (workload.overdueTasks() + workload.blockedTasks()) * 1.0 / total;
-        return clampScore((int) Math.round(completionRate * 100 - riskRate * 40));
+    private int employeeLevelFitScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.requiredEmployeeLevel() == null) return 50;
+        int diff = employeeLevelRank(employee.getEmployeeLevel()) - employeeLevelRank(request.requiredEmployeeLevel());
+        if (diff < 0) return 0;
+        if (diff == 0) return 100;
+        if (diff <= 2) return 90;
+        return 80;
+    }
+
+    private int seniorityFitScore(RecommendAssigneeRequest request, UserEntity employee) {
+        if (request == null || request.requiredSeniorityLevel() == null) return 50;
+        int diff = seniorityRank(employee.getSeniorityLevel()) - seniorityRank(request.requiredSeniorityLevel());
+        if (diff < 0) return 0;
+        if (diff == 0) return 100;
+        if (diff <= 2) return 90;
+        return 80;
+    }
+
+    private int employeeLevelRank(EmployeeLevel level) {
+        return level == null ? -1 : level.ordinal();
+    }
+
+    private int seniorityRank(SeniorityLevel level) {
+        return level == null ? -1 : level.ordinal();
+    }
+
+    private int performanceScore(UserEntity employee, List<TaskEntity> scopedTasks) {
+        Map<String, Object> metrics = performanceMetrics(employee, scopedTasks);
+        long totalAssigned = ((Number) metrics.get("totalAssignedTasks")).longValue();
+        if (totalAssigned == 0) return 50;
+        double completionRate = ((Number) metrics.get("completionRate")).doubleValue();
+        double onTimeRate = ((Number) metrics.get("onTimeCompletionRate")).doubleValue();
+        double riskRate = ((Number) metrics.get("riskRate")).doubleValue();
+        double averageProgress = ((Number) metrics.get("averageActiveProgress")).doubleValue();
+        return clampScore((int) Math.round(completionRate * 55 + onTimeRate * 25 + averageProgress * 0.20 - riskRate * 35));
+    }
+
+    private Map<String, Object> performanceMetrics(UserEntity employee, List<TaskEntity> scopedTasks) {
+        List<TaskEntity> assignedTasks = scopedTasks.stream()
+                .filter(task -> taskParticipants(task).contains(employee.getId()))
+                .toList();
+        long completed = assignedTasks.stream().filter(task -> task.getStatus() == TaskStatus.COMPLETED).count();
+        long onTimeCompleted = assignedTasks.stream()
+                .filter(task -> task.getStatus() == TaskStatus.COMPLETED)
+                .filter(task -> task.getCompletedAt() != null && !task.getCompletedAt().isAfter(task.getDeadline()))
+                .count();
+        long active = assignedTasks.stream().filter(this::isOpenTask).count();
+        long blocked = assignedTasks.stream().filter(task -> task.getStatus() == TaskStatus.BLOCKED).count();
+        long overdue = assignedTasks.stream().filter(this::isOverdue).count();
+        double averageActiveProgress = assignedTasks.stream()
+                .filter(this::isOpenTask)
+                .mapToInt(TaskEntity::getProgressPercent)
+                .average()
+                .orElse(0);
+        long completionBase = assignedTasks.stream().filter(task -> task.getStatus() != TaskStatus.CANCELLED).count();
+        double completionRate = completionBase == 0 ? 0 : completed * 1.0 / completionBase;
+        double onTimeRate = completed == 0 ? 0 : onTimeCompleted * 1.0 / completed;
+        double riskRate = active == 0 ? 0 : (blocked + overdue) * 1.0 / active;
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("totalAssignedTasks", assignedTasks.size());
+        metrics.put("completedTasks", completed);
+        metrics.put("activeTasks", active);
+        metrics.put("blockedTasks", blocked);
+        metrics.put("overdueTasks", overdue);
+        metrics.put("onTimeCompletedTasks", onTimeCompleted);
+        metrics.put("completionRate", completionRate);
+        metrics.put("onTimeCompletionRate", onTimeRate);
+        metrics.put("riskRate", riskRate);
+        metrics.put("averageActiveProgress", averageActiveProgress);
+        return metrics;
     }
 
     private List<TaskEntity> leadTasks(UserEntity employee, List<TaskEntity> scopedTasks) {
@@ -3045,6 +3189,15 @@ public class ForepService {
                 candidate.businessPositionId(),
                 candidate.businessPositionName(),
                 candidate.permissionGroup(),
+                candidate.employeeLevel(),
+                candidate.monthlyCapacityHours(),
+                candidate.currentMonthlyHours(),
+                candidate.newTaskAllocatedHours(),
+                candidate.projectedMonthlyHours(),
+                candidate.projectedUtilizationRatio(),
+                candidate.projectedWorkloadLevel(),
+                candidate.eligibilityStatus(),
+                candidate.eligibilityReasons(),
                 numberComponent(candidate, "departmentSuitabilityScore"),
                 numberComponent(candidate, "businessPositionSuitabilityScore"),
                 numberComponent(candidate, "leadExperienceScore"),
@@ -3053,6 +3206,9 @@ public class ForepService {
                 numberComponent(candidate, "similarTaskExperienceScore"),
                 numberComponent(candidate, "workloadAvailabilityScore"),
                 numberComponent(candidate, "performanceScore"),
+                numberComponent(candidate, "employeeLevelFitScore"),
+                numberComponent(candidate, "seniorityFitScore"),
+                candidate.scoreComponents().getOrDefault("performanceMetrics", Map.of()),
                 candidate.leadTaskCount(),
                 candidate.leadCompletionRate(),
                 candidate.similarTaskCount(),
@@ -4372,62 +4528,6 @@ public class ForepService {
         return hasText(value) ? value.trim() : null;
     }
 
-    private byte[] validatedQrImage(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("QR image file is required.");
-        }
-        if (file.getSize() > 5L * 1024 * 1024) {
-            throw new IllegalArgumentException("QR image must not exceed 5 MB.");
-        }
-        String contentType = normalizedImageContentType(file.getContentType());
-        try {
-            byte[] content = file.getBytes();
-            if (!matchesImageSignature(contentType, content)) {
-                throw new IllegalArgumentException("QR image content does not match its declared MIME type.");
-            }
-            var image = ImageIO.read(new ByteArrayInputStream(content));
-            if (!"image/webp".equals(contentType) && image == null) {
-                throw new IllegalArgumentException("QR image is corrupt or unsupported.");
-            }
-            if (image != null && (image.getWidth() < 128 || image.getHeight() < 128 || image.getWidth() > 4096 || image.getHeight() > 4096)) {
-                throw new IllegalArgumentException("QR image dimensions must be between 128 and 4096 pixels.");
-            }
-            return content;
-        } catch (IOException exception) {
-            throw new IllegalArgumentException("Could not read QR image.", exception);
-        }
-    }
-
-    private String normalizedImageContentType(String contentType) {
-        String normalized = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        if ("image/jpg".equals(normalized)) normalized = "image/jpeg";
-        if (!List.of("image/png", "image/jpeg", "image/webp").contains(normalized)) {
-            throw new IllegalArgumentException("Only PNG, JPG, JPEG and WEBP QR images are accepted.");
-        }
-        return normalized;
-    }
-
-    private boolean matchesImageSignature(String contentType, byte[] content) {
-        if (content.length < 12) return false;
-        if ("image/png".equals(contentType)) {
-            return (content[0] & 0xff) == 0x89 && content[1] == 0x50 && content[2] == 0x4e && content[3] == 0x47;
-        }
-        if ("image/jpeg".equals(contentType)) {
-            return (content[0] & 0xff) == 0xff && (content[1] & 0xff) == 0xd8 && (content[content.length - 2] & 0xff) == 0xff && (content[content.length - 1] & 0xff) == 0xd9;
-        }
-        return content[0] == 'R' && content[1] == 'I' && content[2] == 'F' && content[3] == 'F'
-                && content[8] == 'W' && content[9] == 'E' && content[10] == 'B' && content[11] == 'P';
-    }
-
-    private String uniqueQrFileName(String contentType) {
-        String extension = switch (normalizedImageContentType(contentType)) {
-            case "image/png" -> ".png";
-            case "image/webp" -> ".webp";
-            default -> ".jpg";
-        };
-        return "bank-qr-" + UUID.randomUUID() + extension;
-    }
-
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -4436,18 +4536,21 @@ public class ForepService {
         }
     }
 
-    private PaymentQrSettingEntity requireEnabledPaymentQrSetting(PaymentMethod paymentMethod) {
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(paymentMethod)
-                .orElseThrow(() -> new IllegalArgumentException("Payment method is not configured."));
+    private PaymentQrSettingEntity requireEnabledMomoPaymentSetting() {
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO)
+                .orElseThrow(() -> new IllegalArgumentException("MoMo payment method is not configured."));
         if (!setting.isEnabled()) {
-            throw new IllegalArgumentException("Payment method is disabled.");
+            throw new IllegalArgumentException("MoMo payment method is disabled.");
         }
-        if (paymentMethod == PaymentMethod.BANK_TRANSFER
+        if (false
                 && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
             throw new IllegalArgumentException("Thông tin tài khoản ngân hàng chưa đầy đủ. Vui lòng đợi quản trị viên cập nhật.");
         }
-        if (paymentMethod == PaymentMethod.BANK_TRANSFER && setting.getQrFileId() == null) {
+        if (false) {
             throw new IllegalArgumentException("Mã QR ngân hàng chưa được cấu hình. Vui lòng đợi quản trị viên cập nhật.");
+        }
+        if (!momoPaymentService.isRealProviderConfigured(momoProviderConfig(setting))) {
+            throw new IllegalArgumentException("MoMo payment provider is not fully configured.");
         }
         return setting;
     }
@@ -4461,27 +4564,25 @@ public class ForepService {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("configurationId", setting.getId());
         snapshot.put("paymentMethod", setting.getPaymentMethod());
-        snapshot.put("bankCode", setting.getBankCode());
-        snapshot.put("bankName", setting.getBankName());
-        snapshot.put("accountNumber", setting.getBankAccountNumber());
-        snapshot.put("accountName", setting.getBankAccountName());
+        snapshot.put("providerEndpoint", setting.getProviderEndpoint());
+        snapshot.put("partnerCode", setting.getPartnerCode());
+        snapshot.put("accessKeyConfigured", hasText(setting.getAccessKey()));
+        snapshot.put("secretKeyConfigured", hasText(setting.getSecretKey()));
+        snapshot.put("returnUrl", setting.getReturnUrl());
+        snapshot.put("notifyUrl", setting.getNotifyUrl());
         snapshot.put("transferContentPrefix", setting.getTransferContentPrefix());
-        snapshot.put("qrFileId", setting.getQrFileId());
         snapshot.put("configuredAt", setting.getUpdatedAt());
         return toJson(snapshot);
     }
 
-    private ProviderPaymentResult withUploadedBankQr(ProviderPaymentResult providerResult, UUID qrFileId) {
-        return new ProviderPaymentResult(
-                providerResult.paymentUrl(),
-                providerResult.deeplink(),
-                "/api/public/payment-files/" + qrFileId,
-                providerResult.bankCode(),
-                providerResult.bankName(),
-                providerResult.bankAccountNumber(),
-                providerResult.bankAccountName(),
-                providerResult.rawRequest(),
-                providerResult.rawResponse()
+    private MomoProviderConfig momoProviderConfig(PaymentQrSettingEntity setting) {
+        return new MomoProviderConfig(
+                setting.getProviderEndpoint(),
+                setting.getPartnerCode(),
+                setting.getAccessKey(),
+                setting.getSecretKey(),
+                setting.getReturnUrl(),
+                setting.getNotifyUrl()
         );
     }
 
@@ -5464,8 +5565,7 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getQrCodeUrl(), item.getQrFileId(), item.getQrFileId() == null ? null : "/api/public/payment-files/" + item.getQrFileId(), item.getPaymentUrl(), item.getDeeplink(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentQrFileView toPaymentQrFileView(PaymentQrFileEntity item) { return new PaymentQrFileView(item.getId(), item.getFileName(), item.getContentType(), item.getFileSize(), "/api/public/payment-files/" + item.getId(), item.getCreatedAt()); }
+    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getProviderEndpoint(), item.getPartnerCode(), item.getAccessKey(), hasText(item.getSecretKey()), item.getReturnUrl(), item.getNotifyUrl(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
@@ -5496,9 +5596,9 @@ public class ForepService {
     public record NotificationView(UUID id, UUID workspaceId, UUID userId, String type, String title, String message, String relatedEntityType, UUID relatedEntityId, boolean isRead, OffsetDateTime createdAt) {}
     public record WorkloadView(UUID employeeId, String fullName, long openTasks, long inProgressTasks, long blockedTasks, long completedTasks, long overdueTasks, BigDecimal estimatedWorkload, double workloadScore, WorkloadLevel workloadLevel) {}
     public record MonthlyWorkloadView(UUID employeeId, String fullName, int year, int month, BigDecimal allocatedHours, BigDecimal capacityHours, double utilizationRatio, String workloadLevel, String workloadLabel) {}
-    public record AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk, UUID departmentId, UUID businessPositionId, String businessPositionName, PermissionGroup permissionGroup, int departmentSuitabilityScore, int businessPositionSuitabilityScore, int leadExperienceScore, int domainExperienceScore, int skillMatchScore, int similarTaskExperienceScore, int workloadAvailabilityScore, int performanceScore, long previousLeaderCount, double leadCompletionRate, int similarTaskCount, Map<String, Object> scoreComponents) {
+    public record AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk, UUID departmentId, UUID businessPositionId, String businessPositionName, PermissionGroup permissionGroup, EmployeeLevel employeeLevel, Integer monthlyCapacityHours, double currentMonthlyHours, double newTaskAllocatedHours, double projectedMonthlyHours, double projectedUtilizationRatio, String projectedWorkloadLevel, String eligibilityStatus, List<String> eligibilityReasons, int departmentSuitabilityScore, int businessPositionSuitabilityScore, int leadExperienceScore, int domainExperienceScore, int skillMatchScore, int similarTaskExperienceScore, int workloadAvailabilityScore, int performanceScore, int employeeLevelFitScore, int seniorityFitScore, Object performanceMetrics, long previousLeaderCount, double leadCompletionRate, int similarTaskCount, Map<String, Object> scoreComponents) {
         public AssigneeRecommendationView(UUID employeeId, String fullName, int score, WorkloadLevel workloadLevel, String requiredRole, String roleFit, String roleFitReason, String reason, String risk) {
-            this(employeeId, fullName, score, workloadLevel, requiredRole, roleFit, roleFitReason, reason, risk, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Map.of());
+            this(employeeId, fullName, score, workloadLevel, requiredRole, roleFit, roleFitReason, reason, risk, null, null, null, null, null, null, 0, 0, 0, 0, null, "ELIGIBLE", List.of(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Map.of(), 0, 0, 0, Map.of());
         }
     }
     public record OwnerDashboardView(long totalTasks, long activeTasks, long completedTasks, long overdueTasks, List<WorkloadView> employeeWorkload, List<TaskView> recentlyUpdatedTasks, List<DashboardAiRecommendationView> aiRecommendations) {}
@@ -5507,9 +5607,7 @@ public class ForepService {
     public record LoginView(String token, UserView user, List<String> permissions) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String qrCodeUrl, UUID qrFileId, String qrDisplayUrl, String paymentUrl, String deeplink, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentQrFileView(UUID fileId, String fileName, String contentType, long size, String displayUrl, OffsetDateTime createdAt) {}
-    public record PaymentQrFileContent(String contentType, byte[] content) {}
+    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String providerEndpoint, String partnerCode, String accessKey, boolean secretKeyConfigured, String returnUrl, String notifyUrl, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

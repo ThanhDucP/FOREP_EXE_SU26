@@ -7,6 +7,7 @@ import re
 import socket
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -254,27 +255,29 @@ def recommend_assignee(payload: RecommendAssigneeRequest) -> list[AssigneeRecomm
             "employeeId and fullName must exactly match one ACTIVE input employee. "
             "Never invent or modify employeeId, fullName, or workloadLevel. "
             "Use candidateScore from input as score; do not recalculate score. "
-            "First use departmentId and requiredJobPositionId from the backend payload as hard priority signals when they are present. "
-            "If departmentId is present, prefer employees whose department matches it. "
-            "If requiredJobPositionId is present, prefer employees whose job position matches it. "
+            "departmentId and requiredJobPositionId remain primary structural fit signals when present. "
+            "The backend already hard-filters departmentId, requiredJobPositionId, requiredEmployeeLevel, requiredSeniorityLevel, working status, and projected capacity. "
+            "Never recommend employees whose eligibilityStatus is NOT_ELIGIBLE. "
+            "If eligibilityStatus is WARNING, include eligibilityReasons in risk. "
+            "First explain departmentId, requiredJobPositionId, requiredEmployeeLevel, and requiredSeniorityLevel from the backend payload when they are present. "
             "Then infer requiredRole: the professional role and expertise required by the task from title and requirements, using natural language reasoning instead of a hardcoded role list. "
             "After structural fit, compare requiredRole with each employee's jobTitle and skills before considering workload. "
             "Set roleFit to STRONG only when jobTitle/skills clearly fit requiredRole, PARTIAL when related but incomplete, and UNCERTAIN when profile data is missing or ambiguous. "
-            "roleFitReason must briefly explain the comparison between department/position, requiredRole, and the employee profile. "
+            "roleFitReason must briefly explain the comparison between department/position, required level/seniority, requiredRole, and the employee profile. "
             "Do not recommend employees whose professional role clearly does not fit the task, even if their workload is low or candidateScore is high. "
             "If no employee has a clearly suitable role, return the closest candidates and explain that role fit is uncertain. "
             "Use jobTitle, seniorityLevel, skillRating, yearsOfExperience, and skills to judge professional fit only when those fields are present. "
             "Never infer missing skills, seniority, job role, or experience from employee name. "
             "If professional profile fields are missing, say the recommendation is based on workload and risk data only. "
-            "Explain score using scoreComponents in this order: departmentSuitabilityScore, businessPositionSuitabilityScore, skillMatchScore or leadExperienceScore, domainExperienceScore/similarTaskExperienceScore, workloadAvailabilityScore, performanceScore. "
+            "Explain score using scoreComponents in this order: departmentSuitabilityScore, businessPositionSuitabilityScore, employeeLevelFitScore, seniorityFitScore, skillMatchScore or leadExperienceScore, domainExperienceScore/similarTaskExperienceScore, workloadAvailabilityScore, projectedUtilizationRatio/projectedWorkloadLevel, performanceScore. "
             "When the provided candidate data includes leadershipScore, teamMemberScore, leadTaskCount, leadCompletionRate, similarTaskCount, or domainMatchScore, use these fields explicitly to justify team leader or team member suitability. "
-            "For team leader suitability, explanation order must be department suitability, business position suitability, previous team leader experience, domain experience, skill match, workload/overload risk, then general performance. "
-            "For team member suitability, explanation order must be department suitability, business position suitability, skill match, similar task experience, workload/overload risk, then general performance. "
+            "For team leader suitability, explanation order must be department suitability, business position suitability, level/seniority fit, previous team leader experience, domain experience, skill match, projected workload/overload risk, then general performance. "
+            "For team member suitability, explanation order must be department suitability, business position suitability, level/seniority fit, skill match, similar task experience, projected workload/overload risk, then general performance. "
             "The backend ranking is final; never reorder candidates or change scores. "
             "Prefer lower workload levels in this order: NO_WORK, LOW, NORMAL, HIGH, OVERLOADED. "
             "Avoid OVERLOADED unless every candidate is OVERLOADED. "
             "Do not rank severe overdue candidates above cleaner suitable candidates. "
-            "risk must mention overdue, blocker, workload, deadline risk, or 'Không có rủi ro lớn'. "
+            "risk must mention overdue, blocker, current workload, projected monthly hours versus capacity, deadline risk, or 'Không có rủi ro lớn'. "
             "reason and risk must be Vietnamese with full accents. Do not assign the task."
         ),
         data=payload.model_dump(by_alias=True),
@@ -383,7 +386,7 @@ def explain_workload_risk(payload: WorkloadRiskRequest) -> WorkloadRiskResponse:
             "\"message\":\"string\",\"numbers\":{\"existingHours\":0,\"newTaskHours\":0,\"totalHours\":0,"
             "\"capacityHours\":0,\"usagePercentage\":0}}],\"recommendation\":\"string\"}. "
             "Do not recalculate numbers. Use the numbers provided by backend. "
-            "If any month is Quá tải or usagePercentage > 100, overallRisk should be HIGH unless backendOverallRisk is provided."
+            "If any month is QuÃ¡ táº£i or usagePercentage > 100, overallRisk should be HIGH unless backendOverallRisk is provided."
         ),
         data=payload.model_dump(by_alias=True),
         feature="WORKLOAD_RISK",
@@ -392,7 +395,7 @@ def explain_workload_risk(payload: WorkloadRiskRequest) -> WorkloadRiskResponse:
     response.monthly_warnings = _validate_workload_warnings(response.monthly_warnings, payload)
     if payload.backend_overall_risk:
         response.overall_risk = payload.backend_overall_risk
-    elif any(item.usage_percentage > 100 or item.workload_status == "Quá tải" for item in payload.monthly_workload_evaluation):
+    elif any(item.usage_percentage > 100 or item.workload_status == "QuÃ¡ táº£i" for item in payload.monthly_workload_evaluation):
         response.overall_risk = "HIGH"
     return response
 
@@ -1243,7 +1246,11 @@ def _short_message(exception: Exception) -> str:
 
 
 def _parse_recommendations(items: list[Any], payload: RecommendAssigneeRequest) -> list[AssigneeRecommendation]:
-    employees = {employee.employee_id: employee for employee in payload.employees if employee.status == "ACTIVE"}
+    employees = {
+        employee.employee_id: employee
+        for employee in payload.employees
+        if employee.status == "ACTIVE" and employee.eligibility_status != "NOT_ELIGIBLE"
+    }
     parsed: list[AssigneeRecommendation] = []
     for item in items:
         if not isinstance(item, dict):
@@ -1291,16 +1298,16 @@ def _workload_insights(payload: WorkloadSummaryRequest) -> list[str]:
     idle = [item for item in payload.employees if item.workload_level == "NO_WORK"]
     overdue = [item for item in payload.employees if item.overdue_tasks > 0]
     if total == 0:
-        return ["Chưa có dữ liệu nhân sự để đánh giá mức tải."]
+        return ["ChÆ°a cÃ³ dá»¯ liá»‡u nhÃ¢n sá»± Ä‘á»ƒ Ä‘Ã¡nh giÃ¡ má»©c táº£i."]
     insights = [
-        f"Đang theo dõi {total} nhân viên; {len(overloaded)} quá tải, {len(high)} tải cao, {len(idle)} chưa có task mở.",
+        f"Äang theo dÃµi {total} nhÃ¢n viÃªn; {len(overloaded)} quÃ¡ táº£i, {len(high)} táº£i cao, {len(idle)} chÆ°a cÃ³ task má»Ÿ.",
     ]
     if overdue:
-        insights.append(f"Có {len(overdue)} nhân viên đang gắn với task quá hạn, cần owner kiểm tra tiến độ.")
+        insights.append(f"CÃ³ {len(overdue)} nhÃ¢n viÃªn Ä‘ang gáº¯n vá»›i task quÃ¡ háº¡n, cáº§n owner kiá»ƒm tra tiáº¿n Ä‘á»™.")
     if idle:
-        insights.append("Có nhân sự tải thấp, có thể cân nhắc phân bổ việc mới nếu kỹ năng phù hợp.")
+        insights.append("CÃ³ nhÃ¢n sá»± táº£i tháº¥p, cÃ³ thá»ƒ cÃ¢n nháº¯c phÃ¢n bá»• viá»‡c má»›i náº¿u ká»¹ nÄƒng phÃ¹ há»£p.")
     if not overloaded and not overdue:
-        insights.append("Chưa thấy tín hiệu quá tải hoặc quá hạn nổi bật trong dữ liệu hiện tại.")
+        insights.append("ChÆ°a tháº¥y tÃ­n hiá»‡u quÃ¡ táº£i hoáº·c quÃ¡ háº¡n ná»•i báº­t trong dá»¯ liá»‡u hiá»‡n táº¡i.")
     return insights
 
 
@@ -1309,29 +1316,29 @@ def _workload_actions(payload: WorkloadSummaryRequest) -> list[str]:
     idle = [item.full_name for item in payload.employees if item.workload_level == "NO_WORK"]
     actions: list[str] = []
     if overloaded:
-        actions.append("Rà soát task đang mở của nhóm quá tải trước khi giao thêm việc.")
+        actions.append("RÃ  soÃ¡t task Ä‘ang má»Ÿ cá»§a nhÃ³m quÃ¡ táº£i trÆ°á»›c khi giao thÃªm viá»‡c.")
     if idle:
-        actions.append("Kiểm tra kỹ năng của nhóm đang rảnh để cân bằng lại phân bổ công việc.")
+        actions.append("Kiá»ƒm tra ká»¹ nÄƒng cá»§a nhÃ³m Ä‘ang ráº£nh Ä‘á»ƒ cÃ¢n báº±ng láº¡i phÃ¢n bá»• cÃ´ng viá»‡c.")
     if any(item.overdue_tasks > 0 for item in payload.employees):
-        actions.append("Ưu tiên follow-up các task quá hạn và yêu cầu cập nhật ETA.")
+        actions.append("Æ¯u tiÃªn follow-up cÃ¡c task quÃ¡ háº¡n vÃ  yÃªu cáº§u cáº­p nháº­t ETA.")
     if not actions:
-        actions.append("Tiếp tục theo dõi workload định kỳ và cập nhật task/report đầy đủ.")
+        actions.append("Tiáº¿p tá»¥c theo dÃµi workload Ä‘á»‹nh ká»³ vÃ  cáº­p nháº­t task/report Ä‘áº§y Ä‘á»§.")
     return actions
 
 
 def _delay_risk_summary(risks: list[DelayRisk]) -> str:
     if not risks:
-        return "Chưa phát hiện task có tín hiệu trễ hạn rõ ràng từ dữ liệu hiện tại."
+        return "ChÆ°a phÃ¡t hiá»‡n task cÃ³ tÃ­n hiá»‡u trá»… háº¡n rÃµ rÃ ng tá»« dá»¯ liá»‡u hiá»‡n táº¡i."
     high = sum(1 for item in risks if item.risk_level == "HIGH")
     medium = sum(1 for item in risks if item.risk_level == "MEDIUM")
-    return f"Có {len(risks)} task cần owner kiểm tra, gồm {high} rủi ro cao và {medium} rủi ro trung bình."
+    return f"CÃ³ {len(risks)} task cáº§n owner kiá»ƒm tra, gá»“m {high} rá»§i ro cao vÃ  {medium} rá»§i ro trung bÃ¬nh."
 
 
 def _action_summary(suggestions: list[ActionSuggestion]) -> str:
     if not suggestions:
-        return "Chưa có hành động khẩn cấp; owner nên tiếp tục theo dõi workload, deadline và daily report."
+        return "ChÆ°a cÃ³ hÃ nh Ä‘á»™ng kháº©n cáº¥p; owner nÃªn tiáº¿p tá»¥c theo dÃµi workload, deadline vÃ  daily report."
     top = suggestions[0]
-    return f"Có {len(suggestions)} khuyến nghị hành động; ưu tiên trước: {top.title}."
+    return f"CÃ³ {len(suggestions)} khuyáº¿n nghá»‹ hÃ nh Ä‘á»™ng; Æ°u tiÃªn trÆ°á»›c: {top.title}."
 
 
 def _recommendation_explanation_json(payload: RecommendationExplanationRequest, expected_type: str) -> dict[str, Any]:
@@ -1367,6 +1374,12 @@ def _ranked_ids(payload: RecommendationExplanationRequest) -> list[str]:
     return [candidate.employee_id for candidate in sorted(payload.candidates, key=lambda item: item.rank)]
 
 
+def _ascii_lower(value: str) -> str:
+    normalized = unicodedata.normalize("NFD", value or "")
+    without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return without_accents.replace("đ", "d").replace("Đ", "D").lower()
+
+
 def _validate_individual_candidates(items, payload: RecommendationExplanationRequest):
     allowed = _candidate_by_id(payload)
     expected_order = _ranked_ids(payload)
@@ -1378,7 +1391,7 @@ def _validate_individual_candidates(items, payload: RecommendationExplanationReq
         item.rank = candidate.rank
         item.numbers = _candidate_numbers(candidate, item.numbers)
         if candidate.similar_task_count == 0:
-            item.strengths = [text for text in item.strengths if "tương tự" not in text.lower()]
+            item.strengths = [text for text in item.strengths if "tuong tu" not in _ascii_lower(text)]
         valid.append(item)
     return sorted(valid, key=lambda item: expected_order.index(item.employee_id) if item.employee_id in expected_order else 999)
 
@@ -1399,7 +1412,7 @@ def _validate_leader_candidates(items, payload: RecommendationExplanationRequest
         item.leadership_evidence.domain_match = candidate.domain_match
         item.leadership_evidence.similar_project_count = candidate.similar_project_count
         if previous_lead_count <= 0:
-            item.strengths = [text for text in item.strengths if "đã dẫn" not in text.lower() and "lead" not in text.lower()]
+            item.strengths = [text for text in item.strengths if "da dan" not in _ascii_lower(text) and "lead" not in _ascii_lower(text)]
         valid.append(item)
     return sorted(valid, key=lambda item: expected_order.index(item.employee_id) if item.employee_id in expected_order else 999)
 
@@ -1508,7 +1521,8 @@ def _candidate_score(employee) -> int:
     skill_penalty = {5: 0, 4: 2, 3: 6, 2: 12, 1: 20}.get(max(1, min(5, int(skill_rating))) if skill_rating else 0, 4)
     years = employee.years_of_experience
     experience_penalty = 4 if years is None else (0 if years >= 5 else 2 if years >= 3 else 6 if years >= 1 else 10)
-    return max(0, min(100, int(round(100 - penalty - level_penalty - seniority_penalty - skill_penalty - experience_penalty))))
+    projected_penalty = 60 if employee.projected_utilization_ratio > 1.2 else 40 if employee.projected_utilization_ratio > 1 else 18 if employee.projected_utilization_ratio > 0.85 else 0
+    return max(0, min(100, int(round(100 - penalty - level_penalty - seniority_penalty - skill_penalty - experience_penalty - projected_penalty))))
 
 
 def _allowed_action_ids(tasks, reports, workload, include_workspace: bool = False) -> set[str]:

@@ -78,7 +78,6 @@ Khong hien `PLATFORM_ADMIN`, `BUSINESS_OWNER`, hoac `HR` trong dropdown permissi
 ### PaymentMethod
 
 - `MOMO`: thanh toan MoMo.
-- `BANK_TRANSFER`: chuyen khoan ngan hang/VietQR.
 
 ### PaymentTransactionStatus
 
@@ -385,6 +384,28 @@ type AssigneeRecommendation = {
   roleFitReason: string | null;
   reason: string;
   risk: string;
+  departmentId: string | null;
+  businessPositionId: string | null;
+  businessPositionName: string | null;
+  permissionGroup: 'EMPLOYEE' | 'MANAGER' | 'EXECUTIVE' | null;
+  employeeLevel: 'INTERN' | 'FRESHER' | 'JUNIOR' | 'MIDDLE' | 'SENIOR' | 'LEAD' | 'MANAGER' | null;
+  monthlyCapacityHours: number | null;
+  currentMonthlyHours: number;
+  newTaskAllocatedHours: number;
+  projectedMonthlyHours: number;
+  projectedUtilizationRatio: number;
+  projectedWorkloadLevel: 'IDLE' | 'LIGHT' | 'OK' | 'WARNING' | 'OVERLOADED' | 'HARD_OVERLOAD' | null;
+  eligibilityStatus: 'ELIGIBLE' | 'WARNING' | 'NOT_ELIGIBLE';
+  eligibilityReasons: string[];
+  departmentSuitabilityScore: number;
+  businessPositionSuitabilityScore: number;
+  employeeLevelFitScore: number;
+  seniorityFitScore: number;
+  skillMatchScore: number;
+  workloadAvailabilityScore: number;
+  performanceScore: number;
+  performanceMetrics: Record<string, unknown>;
+  scoreComponents: Record<string, unknown>;
 };
 
 type SubscriptionPlan = {
@@ -486,7 +507,7 @@ type PaymentTransaction = {
   id: string;
   workspaceRegistrationId: string;
   subscriptionPlanId: string;
-  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
+  paymentMethod: 'MOMO';
   amount: number;
   currency: 'VND';
   paymentCode: string;
@@ -510,16 +531,13 @@ type PaymentTransaction = {
 
 type PaymentQrSetting = {
   id: string;
-  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
-  qrCodeUrl: null;
-  qrFileId: string | null;
-  qrDisplayUrl: string | null;
-  paymentUrl: null;
-  deeplink: null;
-  bankCode: string | null;
-  bankName: string | null;
-  bankAccountNumber: string | null;
-  bankAccountName: string | null;
+  paymentMethod: 'MOMO';
+  providerEndpoint: string | null;
+  partnerCode: string | null;
+  accessKey: string | null;
+  secretKeyConfigured: boolean;
+  returnUrl: string | null;
+  notifyUrl: string | null;
   transferContentPrefix: string | null;
   enabled: boolean;
   updatedBy: string | null;
@@ -532,7 +550,7 @@ type PublicPaymentStatus = {
   workspaceId: string | null;
   registrationPaymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
   registrationStatus: string;
-  paymentMethod: 'MOMO' | 'BANK_TRANSFER';
+  paymentMethod: 'MOMO';
   amount: number;
   currency: 'VND';
   paymentCode: string;
@@ -595,7 +613,7 @@ Auth store bat buoc:
 | Gui thong tin dang ky workspace | POST | `/api/public/workspace-registrations` | `WorkspaceRegistrationRequest` ben duoi | public |
 | Xem ho so dang ky | GET | `/api/public/workspace-registrations/{id}?token={registrationToken}` | none | public |
 | Chon goi dang ky | PATCH | `/api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` | `{ subscriptionPlanId }` | public |
-| Tao giao dich thanh toan | POST | `/api/public/workspace-registrations/{id}/payments?token={registrationToken}` | `{ paymentMethod: 'MOMO' \| 'BANK_TRANSFER' }` | public |
+| Tao giao dich thanh toan | POST | `/api/public/workspace-registrations/{id}/payments?token={registrationToken}` | `{ paymentMethod: 'MOMO' }` | public |
 | Xem payment public | GET | `/api/public/payments/{paymentCode}/status?token={registrationToken}` | none | public |
 | Xem workspace | GET | `/api/v1/workspaces/current` | none | `WORKSPACE_VIEW` |
 | Sua workspace | PUT | `/api/v1/workspaces/current` | `{ name, shortCode, logo, address }` | `WORKSPACE_UPDATE` |
@@ -607,8 +625,8 @@ Flow dang ky workspace public:
 1. Trang workspace registration nhap thong tin doanh nghiep, nguoi dai dien va thong tin Business Owner dau tien, goi `POST /api/public/workspace-registrations`, sau do chuyen sang trang chon goi bang `registrationId` va `registrationToken`.
 2. Trang chon goi goi `GET /api/public/subscription-plans`, hien thi name, description, price, duration, `maxOwnerAccounts`, `maxEmployeeAccounts`, full features va nut chon goi.
 3. Khi user chon goi, UI goi `PATCH /api/public/workspace-registrations/{id}/select-plan?token={registrationToken}` roi chuyen sang trang chon phuong thuc thanh toan.
-4. Trang chon payment method bat buoc user chon `MOMO` hoac `BANK_TRANSFER`, sau do goi `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`.
-5. Trang payment instruction hien thi theo `PublicPaymentStatus`: MoMo provider data neu provider that da cau hinh, hoac bank info + QR file upload do Platform Admin cap nhat; hien amount, paymentCode, status. Khong phu thuoc `orderCode`, `requestId`, `providerTransactionId` o UI public. Neu backend tra ve payment pending con han da ton tai, UI dung lai `paymentCode` do va khong tao them instruction moi.
+4. Trang payment method chi hien `MOMO`, sau do goi `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`.
+5. Trang payment instruction hien thi theo `PublicPaymentStatus`: MoMo provider data neu provider that da cau hinh; hien amount, paymentCode, status. Khong phu thuoc `orderCode`, `requestId`, `providerTransactionId` o UI public. Neu backend tra ve payment pending con han da ton tai, UI dung lai `paymentCode` do va khong tao them instruction moi.
 6. UI poll `GET /api/public/payments/{paymentCode}/status?token={registrationToken}` moi 3-5 giay den khi status la `SUCCESS`, `FAILED` hoac `EXPIRED`.
 7. Trang ket qua goi them `GET /api/public/workspace-registrations/{id}?token={registrationToken}` de hien thi payment result va workspace activation status.
 8. UI khong cho login owner khi payment chua `SUCCESS`; frontend khong tu tin payment success tu query string/callback client.
@@ -641,26 +659,38 @@ UI khong hien `subscriptionPlanId`/`maxUsers` trong form thong tin dau tien; pla
 
 Neu khong thanh toan, user public khong tao duoc workspace/account. Chi Platform Admin moi duoc tao workspace truc tiep qua API admin legacy; canonical `/api/admin` hien khong co create-workspace truc tiep.
 
-Production payment note: MoMo callback can xac thuc signature bang `MOMO_SECRET_KEY`. Neu chua co secret, backend chi chap nhan callback khi `MOMO_SANDBOX_MODE=true`; production phai de `false`.
+Production payment note: MoMo callback can xac thuc signature bang `secretKey` do Platform Admin cau hinh trong UI. Backend khong dung bank transfer, khong dung sandbox/stub URL.
 
 MoMo provider mode:
 
 - FE khong hien input URL thanh toan/URL anh QR/deeplink trong admin payment settings.
-- Bank transfer QR hien thi cho public user la file QR do Platform Admin upload qua backend.
-- Neu backend tra `providerPaymentUrl`/`providerDeeplink` tu MoMo provider that, co the hien nut mo MoMo; khong cho admin nhap tay cac URL nay.
-- Neu backend tra `providerQrCodeUrl`, hien QR do backend tra ve.
-- Neu backend bao loi thieu QR/chua san sang, payment method page hien message: "Phuong thuc thanh toan nay chua san sang. Vui long doi quan tri vien cap nhat ma QR." va khong tiep tuc tao payment.
+- Neu backend tra `providerPaymentUrl`/`providerDeeplink`/`providerQrCodeUrl` tu MoMo provider that, FE duoc render cac truong nay cho user thanh toan.
+- Neu backend bao MoMo chua cau hinh/chua san sang, payment method page hien message: "MoMo chua san sang. Vui long doi quan tri vien cap nhat cau hinh thanh toan." va khong tiep tuc tao payment.
 - Khong tu sinh QR trong FE, khong dung QR fake, khong dung QR tu third-party client-side.
 
-Admin payment QR settings:
+Admin MoMo payment setting:
 
-- `GET /api/admin/payment-qr-settings`
-- `PUT /api/admin/payment-qr-settings/{paymentMethod}`
-- Body: `{ bankCode?, bankName?, bankAccountNumber?, bankAccountName?, transferContentPrefix?, enabled }`; khong gui `qrCodeUrl`, `paymentUrl`, `deeplink`.
-- Platform Admin chi upload/cap nhat QR cho `BANK_TRANSFER` bang `POST /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`.
-- MoMo chi hien trang thai provider/config tu backend/env; khong co form URL anh QR, payment URL, deeplink.
-- Chi bat `enabled=true` khi bank info hop le va da co QR file. Voi `BANK_TRANSFER`, FE bat buoc nhap account number/account name.
-- Sau khi update QR, invalidate/refetch `paymentQrSettings`; cac payment moi se dung QR moi, payment cu giu snapshot QR tai thoi diem tao.
+- `GET /api/admin/momo-payment-setting`
+- `PUT /api/admin/momo-payment-setting`
+- Body: `{ providerEndpoint, partnerCode, accessKey, secretKey?, returnUrl, notifyUrl, transferContentPrefix?, enabled }`.
+- `secretKey` la password field: FE chi gui khi admin nhap/cap nhat, khong hien lai gia tri cu; dung `secretKeyConfigured` de hien trang thai da cau hinh.
+- Khong co upload QR, khong co bank account fields, khong co `BANK_TRANSFER`, khong gui `qrCodeUrl`, `paymentUrl`, `deeplink`.
+- Sau khi update, invalidate/refetch `momoPaymentSetting`; cac payment moi se dung cau hinh moi, payment cu giu snapshot cau hinh tai thoi diem tao.
+
+Admin MoMo setup UX requirement:
+
+- Dat menu/page la `Thanh toan MoMo`, khong dat `QR ngan hang` hay `Payment QR` de tranh hieu nham.
+- Dau trang co status card lon: `Chua cau hinh`, `Thieu thong tin`, `Da cau hinh - dang tat`, `San sang nhan thanh toan`, kem last updated va nguoi cap nhat neu backend co `updatedBy/updatedAt`.
+- Status card hien checklist 6 muc: `Endpoint`, `Partner Code`, `Access Key`, `Secret Key`, `Return URL`, `Notify/IPN URL`; muc nao thieu hien icon warning va text ngan gon.
+- Form chia 3 nhom: `Thong tin merchant` (`partnerCode`, `accessKey`, `secretKey`), `URL tich hop` (`providerEndpoint`, `returnUrl`, `notifyUrl`), `Van hanh` (`transferContentPrefix`, `enabled`).
+- `secretKey` la write-only: neu `secretKeyConfigured=true`, hien badge `Da luu secret`, input placeholder `Nhap secret moi neu muon doi`; khong gui `secretKey` khi input rong.
+- Toggle `enabled` bi disable neu form thieu bat ky field bat buoc nao; khi enable lan dau, hien confirm modal "Bat MoMo se cho phep user tao giao dich that".
+- FE validate truoc khi submit: URL phai la `https://` tren production, endpoint/returnUrl/notifyUrl khong duoc rong, `partnerCode`/`accessKey` khong duoc co khoang trang dau/cuoi, `transferContentPrefix` toi da 30 ky tu.
+- `notifyUrl` nen hien helper/copy text: `Backend IPN callback phai tro ve /api/payment-callbacks/momo`; neu FE biet API base URL thi hien nut copy full callback URL.
+- Sau khi save thanh cong, refetch va hien toast ro rang: `Da luu cau hinh MoMo`; neu backend bao thieu config, scroll den checklist va highlight field loi.
+- Khong hien nut/link "Mo thanh toan MoMo" trong admin setting; URL/deeplink/QR chi duoc render o public payment instruction sau khi backend tao transaction thanh cong.
+- Them nut secondary `Xem nhat ky cau hinh` dieu huong den System Logs filter `action=ADMIN_UPDATE_MOMO_PAYMENT_SETTING`; giup admin doi soat ai da thay doi config.
+- Neu can test ket noi tren UI, yeu cau BE bo sung endpoint rieng `POST /api/admin/momo-payment-setting/test` hoac `POST /api/admin/momo-payment-setting/validate`; truoc khi co endpoint nay, FE khong duoc fake test success.
 
 Workspace subscription snapshot:
 
@@ -817,9 +847,9 @@ Phan lon endpoint AI danh cho BUSINESS_OWNER/EXECUTIVE/MANAGER/HR theo route pol
 | Chuc nang | Method | Path | Body hoac query |
 |---|---|---|---|
 | Phan tich domain task | POST | `/api/v1/ai/tasks/analyze` | `{ taskTitle, taskDescription, projectDescription, departmentName, startDate, deadline }` |
-| Goi y nguoi nhan | POST | `/api/v1/ai/recommend-assignee` | `{ title, requirements, deadline, estimatedHours, departmentId, requiredJobPositionId, requiredSkills, taskDomain }` |
-| Goi y team lead | POST | `/api/v1/ai/recommend-team-leaders` | `{ title, requirements, deadline, estimatedHours }` |
-| Goi y thanh vien nhom | POST | `/api/v1/ai/recommend-team-members` | `{ title, requirements, deadline, estimatedHours }` |
+| Goi y nguoi nhan | POST | `/api/v1/ai/recommend-assignee` | `{ title, requirements, startDate, deadline, estimatedHours, priority, assignmentType, teamSize, departmentId, requiredJobPositionId, requiredEmployeeLevel, requiredSeniorityLevel, requiredSkills, taskDomain }` |
+| Goi y team lead | POST | `/api/v1/ai/recommend-team-leaders` | `{ title, requirements, startDate, deadline, estimatedHours, priority, assignmentType: "TEAM", teamSize, departmentId, requiredJobPositionId, requiredEmployeeLevel, requiredSeniorityLevel, requiredSkills, taskDomain }` |
+| Goi y thanh vien nhom | POST | `/api/v1/ai/recommend-team-members` | `{ title, requirements, startDate, deadline, estimatedHours, priority, assignmentType: "TEAM", teamSize, departmentId, requiredJobPositionId, requiredEmployeeLevel, requiredSeniorityLevel, requiredSkills, taskDomain }` |
 | Tom tat workload | GET | `/api/v1/ai/workload-summary` | none |
 | Rui ro tre han | GET | `/api/v1/ai/delay-risks` | none |
 | Phan tich daily reports | GET | `/api/v1/ai/daily-reports/insights` | none |
@@ -837,9 +867,10 @@ Phan lon endpoint AI danh cho BUSINESS_OWNER/EXECUTIVE/MANAGER/HR theo route pol
 
 AI team recommendation note:
 
-- `recommend-team-leaders` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_LEADER`. Backend score dua tren leadershipScore, lich su lam leader, lead completion rate, domain match, similar task count va workload.
-- `recommend-team-members` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_MEMBER`. Backend score dua tren teamMemberScore, skill/domain match, similar task count va workload.
+- `recommend-team-leaders` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_LEADER`. Backend score dua tren department/business position, employee level, seniority, leadershipScore, lich su lam leader, lead completion rate, domain match, similar task count va projected workload.
+- `recommend-team-members` tra `AssigneeRecommendation[]` voi `requiredRole = TEAM_MEMBER`. Backend score dua tren department/business position, employee level, seniority, skill/domain match, similar task count, performance metrics va projected workload.
 - FE hien reason/risk de manager/owner hieu tai sao AI de xuat, nhung khong auto assign. User phai bam chon lead/member.
+- FE khong sort lai danh sach recommendation; thu tu BE la final. `eligibilityStatus = WARNING` phai hien chip canh bao kem `eligibilityReasons`; BE da loai `NOT_ELIGIBLE` nen neu gap gia tri nay trong du lieu cu thi disable nut chon.
 
 Operational action suggestions have been removed from Owner dashboard and AI Center. FE must not call `/api/v1/ai/action-suggestions` and must ignore old `ACTION_SUGGESTION` cache rows if any legacy response contains them.
 
@@ -1049,7 +1080,6 @@ Card goi can hien:
 Fields:
 
 - Radio/card `MOMO`.
-- Radio/card `BANK_TRANSFER`.
 
 Submit `POST /api/public/workspace-registrations/{id}/payments?token={registrationToken}`, sau do dieu huong den trang instruction bang `paymentCode`. Neu backend tra ve payment pending con han, dung lai `paymentCode` duoc tra ve va khong tao them payment client-side.
 
@@ -1066,13 +1096,6 @@ MoMo UI:
 - Hien nut mo `providerPaymentUrl` neu co.
 - Hien deeplink neu co.
 - Hien amount, paymentCode, status.
-
-Bank/VietQR UI:
-
-- Hien `providerQrCodeUrl`.
-- Hien bankName, bankCode, bankAccountNumber, bankAccountName.
-- Hien amount va transferContent.
-- Hien status.
 
 #### Payment result
 
@@ -1292,7 +1315,8 @@ Fields:
 - Start date: optional date-time.
 - Estimated hours: required number >= 1.
 - Difficulty: optional 1-5.
-- Required skills, required business position, task domain, department: optional nhung nen co de AI recommend chinh xac. Neu thieu, backend se goi AI task/domain analysis va map ve active department/business-position ID that.
+- Required skills, required business position, required employee level, required seniority, task domain, department: optional nhung nen co de AI recommend chinh xac. Neu thieu, backend se goi AI task/domain analysis va map ve active department/business-position ID that.
+- Khi bam goi y AI, FE gui ca `startDate`, `deadline`, `estimatedHours`, `assignmentType`, `teamSize`, `priority`, `departmentId`, `requiredJobPositionId`, `requiredEmployeeLevel`, `requiredSeniorityLevel`. Backend se tinh projected monthly workload = current task hours + hours cua task moi chia theo working days/so nguoi.
 
 Buttons:
 
@@ -1305,7 +1329,10 @@ Buttons:
 
 AI recommendation panel:
 
-- Hien thi score, workloadLevel, reason, risk.
+- Hien thi score, workloadLevel, reason, risk, role fit, projected monthly hours/capacity va projectedWorkloadLevel.
+- Hien chip `ELIGIBLE/WARNING`; neu `WARNING`, render tung `eligibilityReasons` trong accordion ngan. Khong cho chon candidate `NOT_ELIGIBLE` neu co data legacy.
+- Hien breakdown: departmentSuitabilityScore, businessPositionSuitabilityScore, employeeLevelFitScore, seniorityFitScore, skillMatchScore, workloadAvailabilityScore, performanceScore.
+- Hien performanceMetrics o dang so lieu ngan: totalAssignedTasks, completedTasks, completionRate, onTimeCompletionRate, riskRate, averageActiveProgress.
 - Neu response co `requiredRole`, `roleFit`, `roleFitReason`, hien thi de owner thay AI da doi chieu vai tro chuyen mon voi task.
 - Nut `Chon nguoi nay` set `assigneeId` neu task ca nhan, set `teamLeaderId` neu `requiredRole = TEAM_LEADER`, hoac them vao `teamMemberIds` neu `requiredRole = TEAM_MEMBER`.
 - Khong auto-submit task khi chon goi y.

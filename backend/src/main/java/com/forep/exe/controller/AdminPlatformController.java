@@ -3,7 +3,6 @@ package com.forep.exe.controller;
 import com.forep.exe.ai.AiProviderException;
 import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
-import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
@@ -15,8 +14,6 @@ import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
 import com.forep.exe.service.ForepService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.OffsetDateTime;
@@ -76,26 +73,14 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.adminPayment(paymentId));
     }
 
-    @GetMapping("/payment-qr-settings")
-    ApiResponse<?> paymentQrSettings() {
-        return ApiResponse.ok(service.adminPaymentQrSettings());
+    @GetMapping("/momo-payment-setting")
+    ApiResponse<?> momoPaymentSetting() {
+        return ApiResponse.ok(service.adminMomoPaymentSetting());
     }
 
-    @PutMapping("/payment-qr-settings/{paymentMethod}")
-    ApiResponse<?> updatePaymentQrSetting(@PathVariable PaymentMethod paymentMethod,
-                                          @RequestBody @Valid UpdatePaymentQrSettingRequest request) {
-        return ApiResponse.ok(service.updatePaymentQrSetting(paymentMethod, request));
-    }
-
-    @PostMapping(value = "/payment-qr-settings/{paymentMethod}/qr-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    ApiResponse<?> uploadPaymentQrImage(@PathVariable PaymentMethod paymentMethod,
-                                        @RequestPart("file") MultipartFile file) {
-        return ApiResponse.ok(service.uploadPaymentQrImage(paymentMethod, file));
-    }
-
-    @DeleteMapping("/payment-qr-settings/{paymentMethod}/qr-image")
-    ApiResponse<?> removePaymentQrImage(@PathVariable PaymentMethod paymentMethod) {
-        return ApiResponse.ok(service.removePaymentQrImage(paymentMethod));
+    @PutMapping("/momo-payment-setting")
+    ApiResponse<?> updateMomoPaymentSetting(@RequestBody @Valid UpdatePaymentQrSettingRequest request) {
+        return ApiResponse.ok(service.updateMomoPaymentSetting(request));
     }
 
     @PatchMapping("/workspace-registrations/{id}/approve")

@@ -961,16 +961,22 @@ On task form:
 {
   "title": "Build payment reconciliation API",
   "requirements": "Implement endpoint and validation",
+  "startDate": "2026-07-20T09:00:00+07:00",
   "deadline": "2026-07-30T17:00:00+07:00",
   "estimatedHours": 24,
+  "priority": "HIGH",
+  "assignmentType": "TEAM",
+  "teamSize": 3,
   "taskDomain": "Backend Payment",
   "departmentId": "uuid",
   "requiredJobPositionId": "uuid",
+  "requiredEmployeeLevel": "MIDDLE",
+  "requiredSeniorityLevel": "JUNIOR",
   "requiredSkills": "Java, Spring Boot, PostgreSQL"
 }
 ```
 
-If FE omits `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`, backend may run AI task/domain analysis internally and map output to real active workspace IDs before scoring.
+If FE omits `departmentId`, `requiredJobPositionId`, `requiredSkills`, or `taskDomain`, backend may run AI task/domain analysis internally and map output to real active workspace IDs before scoring. FE should still send `startDate`, `deadline`, `estimatedHours`, `assignmentType`, `teamSize`, `priority`, `requiredEmployeeLevel`, and `requiredSeniorityLevel` when available because backend uses them for projected workload and eligibility.
 
 ### 10.3 Recommendation Response Fields
 
@@ -989,6 +995,15 @@ Each item can include:
 - `businessPositionId`
 - `businessPositionName`
 - `permissionGroup`
+- `employeeLevel`
+- `monthlyCapacityHours`
+- `currentMonthlyHours`
+- `newTaskAllocatedHours`
+- `projectedMonthlyHours`
+- `projectedUtilizationRatio`
+- `projectedWorkloadLevel`
+- `eligibilityStatus`
+- `eligibilityReasons`
 - `departmentSuitabilityScore`
 - `businessPositionSuitabilityScore`
 - `leadExperienceScore`
@@ -997,6 +1012,9 @@ Each item can include:
 - `similarTaskExperienceScore`
 - `workloadAvailabilityScore`
 - `performanceScore`
+- `employeeLevelFitScore`
+- `seniorityFitScore`
+- `performanceMetrics`
 - `previousLeaderCount`
 - `leadCompletionRate`
 - `similarTaskCount`
@@ -1011,14 +1029,26 @@ Columns/cards:
 - Department.
 - Business position.
 - Permission group.
+- Employee level.
+- Monthly capacity hours.
+- Current monthly hours.
+- New task allocated hours.
+- Projected monthly hours.
+- Projected utilization ratio.
+- Projected workload level.
+- Eligibility status.
+- Eligibility reasons.
 - Final score.
 - Workload level.
 - Department suitability score.
 - Business position suitability score.
+- Employee level fit score.
+- Seniority fit score.
 - Skill match score.
 - Domain experience score.
 - Workload availability score.
 - Performance score.
+- Performance metrics.
 - AI explanation.
 - Risk.
 - Select button.
@@ -1041,6 +1071,14 @@ Columns/cards:
 - Final leader score.
 - Department suitability score.
 - Business position suitability score.
+- Employee level.
+- Employee level fit score.
+- Seniority fit score.
+- Projected monthly hours.
+- Monthly capacity hours.
+- Projected utilization ratio.
+- Projected workload level.
+- Eligibility status and reasons.
 - Previous leader count.
 - Lead completion rate.
 - Lead experience score.
@@ -1069,11 +1107,19 @@ Columns/cards:
 - Final member score.
 - Department suitability score.
 - Business position suitability score.
+- Employee level.
+- Employee level fit score.
+- Seniority fit score.
 - Skill match score.
 - Similar task count.
 - Similar task experience score.
 - Workload availability score.
 - Performance score.
+- Projected monthly hours.
+- Monthly capacity hours.
+- Projected utilization ratio.
+- Projected workload level.
+- Eligibility status and reasons.
 - Workload level.
 - Reason.
 - Risk.
@@ -1091,31 +1137,43 @@ Team leader explanation order:
 
 1. Department suitability.
 2. Business position suitability.
-3. Previous team leader experience.
-4. Domain experience.
-5. Skill match.
-6. Workload and overload risk.
-7. General performance.
+3. Required employee level and seniority fit.
+4. Previous team leader experience.
+5. Domain experience.
+6. Skill match.
+7. Projected workload and overload risk.
+8. General performance.
 
 Team member explanation order:
 
 1. Department suitability.
 2. Business position suitability.
-3. Skill match.
-4. Similar task/domain experience.
-5. Workload and overload risk.
-6. General performance.
+3. Required employee level and seniority fit.
+4. Skill match.
+5. Similar task/domain experience.
+6. Projected workload and overload risk.
+7. General performance.
 
 Backend ranking is final. LLM explanation must not reorder candidates.
 
-### 10.8 Empty/Fallback States
+### 10.8 UI Rules For Eligibility And Projected Workload
+
+- FE must not sort recommendation candidates; render the backend order exactly.
+- `ELIGIBLE`: show normal selectable state.
+- `WARNING`: show yellow warning chip and render each `eligibilityReasons` line in the candidate detail panel.
+- `NOT_ELIGIBLE`: disable select button if legacy data ever returns it; show red blocked chip and reasons.
+- Utilization display: show `projectedMonthlyHours / monthlyCapacityHours` and percentage from `projectedUtilizationRatio`.
+- Visual thresholds: `> 0.85` warning, `> 1.0` danger, `> 1.2` blocked/should not be selectable.
+- Performance metrics must be rendered from backend values only: `totalAssignedTasks`, `completedTasks`, `activeTasks`, `blockedTasks`, `overdueTasks`, `completionRate`, `onTimeCompletionRate`, `riskRate`, `averageActiveProgress`.
+
+### 10.9 Empty/Fallback States
 
 - No candidates: show “No active employees match this workspace/task context.”
 - AI provider fallback: show backend returned recommendations, but badge “Rule-based fallback”.
 - Overloaded candidate: keep candidate visible but highlight risk.
 - Missing task fields: disable recommendation buttons until title, requirements, deadline are present.
 
-### 10.9 Recommendation Explanation
+### 10.10 Recommendation Explanation
 
 Use `POST /api/workspace/ai/recommendations/explain` after backend returns a ranked recommendation list.
 
@@ -1611,10 +1669,13 @@ Task create assistant:
 Recommendation:
 
 - Use `/api/workspace/ai/recommendations/individual`, `/team-leaders`, `/team-members`.
-- FE sends real task context when available: `departmentId`, `requiredJobPositionId`, `requiredSkills`, `taskDomain`.
+- FE sends real task context when available: `startDate`, `deadline`, `estimatedHours`, `priority`, `assignmentType`, `teamSize`, `departmentId`, `requiredJobPositionId`, `requiredEmployeeLevel`, `requiredSeniorityLevel`, `requiredSkills`, `taskDomain`.
 - If missing, backend may run AI analysis internally; FE still renders backend ranking as source of truth.
 - Do not re-sort recommendation candidates client-side.
 - Render score breakdown, risk, reason, current workload, matched skills/position/department.
+- Render eligibility and capacity: `eligibilityStatus`, `eligibilityReasons`, `currentMonthlyHours`, `newTaskAllocatedHours`, `projectedMonthlyHours`, `monthlyCapacityHours`, `projectedUtilizationRatio`, `projectedWorkloadLevel`.
+- Render level/performance signals: `employeeLevel`, `employeeLevelFitScore`, `seniorityFitScore`, `performanceScore`, `performanceMetrics`.
+- Disable select action for `NOT_ELIGIBLE` legacy rows; show warning state for `WARNING` rows.
 
 AI explanation and helper actions:
 
@@ -1649,14 +1710,19 @@ Subscription/payment/admin workspace changes:
 - Use `activeSubscription.status`, `startDate`, `endDate`, `renewalDate`, `price`, `maxOwnerAccounts`, and `maxEmployeeAccounts` for current package display when present.
 - Keep `subscriptionPlanId`, `maxUsers`, `maxOwnerAccounts`, and `maxEmployeeAccounts` as compatibility/fallback fields only; do not infer billing history from workspace fields.
 - When admin changes a workspace plan, refetch workspace detail/list because backend creates a new ACTIVE subscription snapshot and closes the old one as `UPGRADED`/`DOWNGRADED`.
-- Payment QR is Platform Admin uploaded/managed data, not FE-generated data. Admin Payment Settings uses `GET /api/admin/payment-qr-settings`, `PUT /api/admin/payment-qr-settings/{paymentMethod}`, and multipart upload `POST /api/admin/payment-qr-settings/BANK_TRANSFER/qr-image`.
+- Payment settings are MoMo-only and managed by Platform Admin. Admin Payment Settings uses `GET /api/admin/momo-payment-setting` and `PUT /api/admin/momo-payment-setting`.
 - Admin payment form must not show or submit `qrCodeUrl`, `paymentUrl`, or `deeplink`; remove the UI fields “URL ảnh QR”, “Payment URL”, and “Deeplink”.
-- Admin can upload/update bank QR any time. New payment instructions use the latest enabled QR snapshot; existing payment transactions keep their snapshot.
-- MoMo UI must use only real provider config/status from backend/env. FE must not let admin type MoMo URL/deeplink/QR URL.
-- MoMo/Bank UI must render returned `providerQrCodeUrl`; FE must not generate fake QR or call third-party QR services client-side.
-- If backend returns missing/unready QR error when public user creates payment, show a blocking message asking the user to wait for admin to update the QR, and keep them on payment method/instruction recovery state.
+- Admin configures `providerEndpoint`, `partnerCode`, `accessKey`, write-only `secretKey`, `returnUrl`, `notifyUrl`, `transferContentPrefix`, and `enabled`. FE must not show bank account or QR upload fields.
+- MoMo UI must use only real provider config/status from backend. FE must not let admin type MoMo payment URL/deeplink/QR URL.
+- MoMo UI may render returned `providerQrCodeUrl` only when it comes from backend/provider; FE must not generate fake QR or call third-party QR services client-side.
+- If backend returns missing/unready MoMo config error when public user creates payment, show a blocking message asking the user to wait for admin to update payment setup.
 - MoMo UI must not depend on sandbox/stub mode. Render returned provider fields only when backend returns them from real provider; if backend says MoMo chưa cấu hình, show waiting/error state and do not create fake URLs.
-- Demo seed data cũ có thể còn username/hash lịch sử để QA tương thích. Không dùng các credential seed đó làm quy tắc provisioning hoặc ví dụ production; luồng mới luôn theo `owner.<workspaceCode>` và mật khẩu đăng ký/ngẫu nhiên như mục 3A.
+- Admin MoMo setup UI must be a guided setup page, not a raw config form: show a top status card, 6-item readiness checklist, grouped merchant/callback/operation fields, write-only secret handling, safe enable confirmation, and link to filtered System Logs for `ADMIN_UPDATE_MOMO_PAYMENT_SETTING`.
+- Required checklist fields are `providerEndpoint`, `partnerCode`, `accessKey`, `secretKeyConfigured` or newly entered `secretKey`, `returnUrl`, and `notifyUrl`; disable `enabled=true` until all required fields are valid.
+- `notifyUrl` helper must explain that MoMo IPN should call backend `/api/payment-callbacks/momo`; show a copy button for the full callback URL if frontend knows the API base URL.
+- If a "Test connection" button is shown, it must call a real backend validation endpoint; until BE adds `POST /api/admin/momo-payment-setting/test` or equivalent, do not show fake successful tests.
+- Demo seed data cũ có thể còn username/hash lịch sử để QA tương thích. Không dùng credential seed cũ làm quy tắc provisioning hoặc ví dụ production; luồng mới luôn theo `owner.<workspaceCode>`/`hr.<workspace>.<name>`/`emp.<workspace>.<name>` và mật khẩu đăng ký/ngẫu nhiên như mục 3A.
+- Demo seed data vẫn bao phủ 3 active workspaces với 30 employees mỗi workspace, cached AI suggestions, dashboard workload/task data, subscriptions, and payments; QA phải lấy username/password từ API provisioning/reset hiện tại thay vì hard-code `SV0000A/123456`.
 
 ### 18.5 Required FE Query Keys / Cache
 
@@ -1698,6 +1764,9 @@ FE is not considered production-ready until:
 - Task cannot be finalized by employee directly; completion requires manager confirmation.
 - Team member cannot submit final completion for team task.
 - AI recommendation ranking is rendered in backend order.
+- AI recommendation request sends level/seniority/startDate/teamSize/priority context when available.
+- AI recommendation cards show eligibility, projected workload, capacity utilization, and performance metrics.
+- AI recommendation cannot select `NOT_ELIGIBLE` candidate and must show reasons for `WARNING`.
 - AI analysis never creates master data automatically.
 - Platform admin AI summary is visible only to `PLATFORM_ADMIN`.
 - Business owner operational summary is hidden from `EMPLOYEE`, `MANAGER`, `HR` unless backend later changes policy.
@@ -1707,6 +1776,6 @@ FE is not considered production-ready until:
 - Platform Admin workspace screens render `activeSubscription` and refetch after plan/status/payment lifecycle changes.
 - Payment instruction page supports real MoMo provider URLs/admin-configured QR without changing UI logic.
 - Public payment flow handles missing QR as a waiting state; FE never creates or substitutes QR codes.
-- Platform Admin can upload/change/enable/disable payment QR settings for both MoMo and bank transfer.
+- Platform Admin can configure/enable/disable MoMo payment provider settings.
 - QA validates dashboards against seeded workspaces `SV`, `MD`, and `HC`, each with 30 employees and mixed workload/task states.
 - Every destructive/lifecycle action has confirmation, loading, success, and backend-error states.

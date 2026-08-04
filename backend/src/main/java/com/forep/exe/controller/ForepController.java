@@ -136,11 +136,6 @@ public class ForepController {
         return ApiResponse.ok(service.handleMomoCallback(request));
     }
 
-    @PostMapping("/payments/bank-transfer/callback")
-    ApiResponse<?> bankTransferCallback(@RequestBody PaymentCallbackRequest request) {
-        return ApiResponse.ok(service.handleBankTransferCallback(request));
-    }
-
     @GetMapping("/admin/workspaces")
     ApiResponse<?> adminWorkspaces() {
         return ApiResponse.ok(service.adminWorkspaces());

@@ -28,6 +28,15 @@ class EmployeeWorkload(StrictModel):
     business_position_id: Optional[str] = Field(default=None, alias="businessPositionId")
     business_position_name: Optional[str] = Field(default=None, alias="businessPositionName")
     permission_group: Optional[Literal["EMPLOYEE", "MANAGER", "EXECUTIVE"]] = Field(default=None, alias="permissionGroup")
+    employee_level: Optional[str] = Field(default=None, alias="employeeLevel")
+    monthly_capacity_hours: Optional[float] = Field(default=None, alias="monthlyCapacityHours")
+    current_monthly_hours: float = Field(default=0, alias="currentMonthlyHours")
+    new_task_allocated_hours: float = Field(default=0, alias="newTaskAllocatedHours")
+    projected_monthly_hours: float = Field(default=0, alias="projectedMonthlyHours")
+    projected_utilization_ratio: float = Field(default=0, alias="projectedUtilizationRatio")
+    projected_workload_level: Optional[str] = Field(default=None, alias="projectedWorkloadLevel")
+    eligibility_status: str = Field(default="ELIGIBLE", alias="eligibilityStatus")
+    eligibility_reasons: list[str] = Field(default_factory=list, alias="eligibilityReasons")
     candidate_score: Optional[int] = Field(default=None, alias="candidateScore")
     leadership_score: Optional[int] = Field(default=None, alias="leadershipScore")
     team_member_score: Optional[int] = Field(default=None, alias="teamMemberScore")
@@ -46,6 +55,12 @@ class RecommendAssigneeRequest(StrictModel):
     estimated_hours: float = Field(default=0, alias="estimatedHours")
     department_id: Optional[str] = Field(default=None, alias="departmentId")
     required_job_position_id: Optional[str] = Field(default=None, alias="requiredJobPositionId")
+    required_employee_level: Optional[str] = Field(default=None, alias="requiredEmployeeLevel")
+    required_seniority_level: Optional[str] = Field(default=None, alias="requiredSeniorityLevel")
+    assignment_type: Optional[str] = Field(default=None, alias="assignmentType")
+    team_size: Optional[int] = Field(default=None, alias="teamSize", ge=1)
+    priority: Optional[str] = None
+    start_date: Optional[str] = Field(default=None, alias="startDate")
     employees: list[EmployeeWorkload]
 
 

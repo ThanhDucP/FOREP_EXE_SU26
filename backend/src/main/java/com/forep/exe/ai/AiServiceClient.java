@@ -2,8 +2,11 @@ package com.forep.exe.ai;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.forep.exe.domain.Enums.AssignmentType;
+import com.forep.exe.domain.Enums.EmployeeLevel;
 import com.forep.exe.domain.Enums.SeniorityLevel;
 import com.forep.exe.domain.Enums.PermissionGroup;
+import com.forep.exe.domain.Enums.TaskPriority;
 import com.forep.exe.domain.Enums.WorkloadLevel;
 import com.forep.exe.service.ForepService.AssigneeRecommendationView;
 import com.forep.exe.service.ForepService.BusinessSummaryView;
@@ -328,6 +331,12 @@ public class AiServiceClient {
             double estimatedHours,
             UUID departmentId,
             UUID requiredJobPositionId,
+            EmployeeLevel requiredEmployeeLevel,
+            SeniorityLevel requiredSeniorityLevel,
+            AssignmentType assignmentType,
+            Integer teamSize,
+            TaskPriority priority,
+            String startDate,
             List<AiEmployeeWorkload> employees
     ) {
     }
@@ -351,6 +360,15 @@ public class AiServiceClient {
             UUID businessPositionId,
             String businessPositionName,
             PermissionGroup permissionGroup,
+            EmployeeLevel employeeLevel,
+            Integer monthlyCapacityHours,
+            double currentMonthlyHours,
+            double newTaskAllocatedHours,
+            double projectedMonthlyHours,
+            double projectedUtilizationRatio,
+            String projectedWorkloadLevel,
+            String eligibilityStatus,
+            List<String> eligibilityReasons,
             int candidateScore,
             int leadershipScore,
             int teamMemberScore,
@@ -381,6 +399,15 @@ public class AiServiceClient {
                     null,
                     null,
                     null,
+                    null,
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    null,
+                    "ELIGIBLE",
+                    List.of(),
                     0,
                     0,
                     0,
