@@ -49,10 +49,11 @@ public final class Requests {
             @NotBlank String workspaceName,
             @NotBlank @Pattern(regexp = "^[A-Za-z0-9]{2}$") String shortCode,
             String address,
+            @NotNull UUID subscriptionPlanId,
             @NotBlank String ownerFullName,
-            @Email String ownerEmail,
+            @Email @NotBlank String ownerEmail,
             String ownerPhone,
-            @NotBlank String ownerPassword
+            @NotBlank @Size(min = 8, max = 72) String ownerPassword
     ) {
     }
 
@@ -380,6 +381,13 @@ public final class Requests {
             String businessAddress,
             @NotNull UUID subscriptionPlanId,
             @Min(1) int maxUsers,
+            @NotBlank String ownerFullName,
+            @Email @NotBlank String ownerEmail,
+            String ownerPhone,
+            @NotBlank @Size(min = 8, max = 72) String ownerPassword,
+            @NotBlank String representativeFullName,
+            @Email @NotBlank String representativeEmail,
+            String representativePhone,
             OffsetDateTime activationDate,
             OffsetDateTime expirationDate,
             WorkspaceStatus status
@@ -462,6 +470,13 @@ public final class Requests {
     }
 
     public record ReviewRegistrationRequest(String note) {
+    }
+
+    public record ConfirmMomoPaymentRequest(
+            @NotBlank String momoTransactionId,
+            @NotBlank String momoOrderId,
+            String note
+    ) {
     }
 
     public record SubmitPaymentRequest(

@@ -42,6 +42,7 @@ import com.forep.exe.dto.Requests.AssignTeamRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
+import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreateHrAccountRequest;
@@ -277,8 +278,12 @@ public class ForepService {
         return new LoginView(token, toUserView(user), authorizationService.permissionNamesFor(user.getRole()));
     }
 
-    public WorkspaceView registerWorkspace(RegisterWorkspaceRequest request) {
-        throw new IllegalArgumentException("Direct workspace registration is disabled. Submit a workspace registration, select a subscription plan, and complete payment first.");
+    public WorkspaceRegistrationView registerWorkspace(RegisterWorkspaceRequest request) {
+        return submitWorkspaceRegistration(new WorkspaceRegistrationRequest(
+                request.workspaceName(), request.workspaceName(), request.shortCode(), request.ownerEmail(),
+                request.ownerPhone(), request.address(), request.subscriptionPlanId(), null,
+                request.ownerFullName(), request.ownerEmail(), request.ownerPhone(), request.ownerPassword(),
+                request.ownerFullName(), request.ownerEmail(), request.ownerPhone(), null, null));
     }
 
     public UserView me() {
@@ -1587,13 +1592,20 @@ public class ForepService {
         return toPlatformWorkspaceView(requireWorkspace(workspaceId));
     }
 
-    public PlatformWorkspaceView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
+    public AdminWorkspaceCreationView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
         requireSystemAdmin();
         String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
         if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent()) {
             throw new IllegalArgumentException("Mã workspace đã tồn tại.");
         }
-        SubscriptionPlanEntity plan = requireSubscriptionPlan(request.subscriptionPlanId());
+        SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(request.subscriptionPlanId());
+        String ownerEmail = normalizeEmail(request.ownerEmail());
+        if (users.existsByEmailIgnoreCase(ownerEmail)) {
+            throw new IllegalArgumentException("Owner email already belongs to an existing account.");
+        }
+        if (request.maxUsers() > plan.getMaxUsers()) {
+            throw new IllegalArgumentException("Workspace user limit cannot exceed the selected subscription plan.");
+        }
         OffsetDateTime now = OffsetDateTime.now();
         WorkspaceEntity workspace = new WorkspaceEntity();
         workspace.setName(request.workspaceName());
@@ -1604,30 +1616,48 @@ public class ForepService {
         workspace.setContactPhone(request.contactPhone());
         workspace.setAddress(request.businessAddress());
         workspace.setSubscriptionPlanId(plan.getId());
-        if (request.maxUsers() > plan.getMaxUsers()) {
-        }
         workspace.setMaxUsers(request.maxUsers() > 0 ? request.maxUsers() : plan.getMaxUsers());
         workspace.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
         workspace.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
-        workspace.setStatus(request.status() == null ? WorkspaceStatus.INACTIVE : request.status());
-        workspace.setPaymentStatus(PaymentStatus.CONFIRMED);
-        workspace.setActivatedAt(request.activationDate() == null && request.status() == WorkspaceStatus.ACTIVE ? now : request.activationDate());
-        workspace.setExpiresAt(request.expirationDate() == null && workspace.getActivatedAt() != null ? workspace.getActivatedAt().plusMonths(plan.getDurationInMonths()) : request.expirationDate());
+        workspace.setStatus(WorkspaceStatus.PENDING_PAYMENT);
+        workspace.setPaymentStatus(PaymentStatus.PENDING);
+        workspace.setActivatedAt(null);
+        workspace.setExpiresAt(request.expirationDate());
         workspace.setCreatedAt(now);
         workspace = workspaces.save(workspace);
-        List<AccountProvisioningView> generatedOwnerAccounts = List.of();
-        if (workspace.getStatus() == WorkspaceStatus.ACTIVE || workspace.getActivatedAt() != null) {
-            createWorkspaceSubscription(workspace, plan, workspace.getActivatedAt() == null ? now : workspace.getActivatedAt(), null);
-        }
-        generatedOwnerAccounts = provisionOwnerAccounts(workspace, plan, now);
-        workspace.setOwnerAccountProvisionedAt(now);
-        workspace.setOwnerAccountCount(ownerAccounts(workspace.getId()).size());
-        if (!generatedOwnerAccounts.isEmpty()) {
-            workspace.setOwnerId(generatedOwnerAccounts.getFirst().id());
-        }
-        workspace = workspaces.save(workspace);
-        audit(workspace.getId(), "ADMIN_CREATE_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace, generatedOwnerAccounts));
-        return toPlatformWorkspaceView(workspace, generatedOwnerAccounts);
+
+        WorkspaceRegistrationEntity registration = new WorkspaceRegistrationEntity();
+        registration.setBusinessName(request.businessName());
+        registration.setWorkspaceName(request.workspaceName());
+        registration.setWorkspaceIdentifier(shortCode);
+        registration.setContactEmail(normalizeEmail(request.contactEmail()));
+        registration.setContactPhone(request.contactPhone());
+        registration.setBusinessAddress(request.businessAddress());
+        registration.setSubscriptionPlanId(plan.getId());
+        registration.setMaxUsers(workspace.getMaxUsers());
+        registration.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
+        registration.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
+        registration.setOwnerFullName(request.ownerFullName());
+        registration.setOwnerEmail(ownerEmail);
+        registration.setOwnerPhone(request.ownerPhone());
+        registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
+        registration.setRepresentativeFullName(request.representativeFullName());
+        registration.setRepresentativeEmail(normalizeEmail(request.representativeEmail()));
+        registration.setRepresentativePhone(request.representativePhone());
+        registration.setActivationDate(request.activationDate());
+        registration.setExpirationDate(request.expirationDate());
+        registration.setPaymentStatus(PaymentStatus.PENDING);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
+        registration.setRegistrationToken(uniqueRegistrationToken());
+        registration.setExpiredAt(now.plusDays(14));
+        registration.setWorkspaceId(workspace.getId());
+        registration.setCreatedAt(now);
+        registration.setUpdatedAt(now);
+        registration = workspaceRegistrations.save(registration);
+
+        PaymentTransactionView payment = createPaymentForRegistration(registration.getId(), new CreatePaymentRequest(PaymentMethod.MOMO));
+        audit(workspace.getId(), "ADMIN_CREATE_PENDING_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace));
+        return new AdminWorkspaceCreationView(toPlatformWorkspaceView(workspace), toWorkspaceRegistrationView(registration), payment);
     }
 
     public PlatformWorkspaceView adminUpdateWorkspace(UUID workspaceId, AdminUpdateWorkspaceRequest request) {
@@ -1903,7 +1933,11 @@ public class ForepService {
         registration.setExpiredAt(now.plusDays(14));
         registration.setCreatedAt(now);
         registration.setUpdatedAt(now);
-        return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
+        registration = workspaceRegistrations.save(registration);
+        if (request.subscriptionPlanId() != null) {
+            return selectSubscriptionPlanForRegistration(registration.getId(), new SelectSubscriptionPlanRequest(request.subscriptionPlanId()));
+        }
+        return toWorkspaceRegistrationView(registration);
     }
 
     public WorkspaceRegistrationView workspaceRegistration(UUID registrationId) {
@@ -1922,7 +1956,9 @@ public class ForepService {
 
     private WorkspaceRegistrationView selectSubscriptionPlanForRegistration(UUID registrationId, SelectSubscriptionPlanRequest request) {
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
+        if (registration.getRegistrationStatus() == RegistrationStatus.APPROVED
+                || registration.getRegistrationStatus() == RegistrationStatus.ACTIVATED
+                || registration.getPaymentStatus() == PaymentStatus.CONFIRMED) {
             throw new IllegalArgumentException("Workspace is already active.");
         }
         SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(request.subscriptionPlanId());
@@ -1972,7 +2008,9 @@ public class ForepService {
 
     private PaymentTransactionView createPaymentForRegistration(UUID registrationId, CreatePaymentRequest request) {
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        if (registration.getWorkspaceId() != null || registration.getRegistrationStatus() == RegistrationStatus.APPROVED) {
+        if (registration.getRegistrationStatus() == RegistrationStatus.APPROVED
+                || registration.getRegistrationStatus() == RegistrationStatus.ACTIVATED
+                || registration.getPaymentStatus() == PaymentStatus.CONFIRMED) {
             throw new IllegalArgumentException("Workspace is already active.");
         }
         if (registration.getSubscriptionPlanId() == null) {
@@ -2117,14 +2155,35 @@ public class ForepService {
             throw new IllegalArgumentException("Invalid MoMo callback signature.");
         }
         assertCallbackAmountMatches(payment, request);
-        payment.setProviderTransactionId(blankToNull(request.providerTransactionId()));
         boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
+        if (success && !hasText(request.providerTransactionId())) {
+            throw new IllegalArgumentException("Successful MoMo callback must contain transId.");
+        }
+        if (hasText(request.providerTransactionId())) {
+            assertMomoTransactionIdAvailable(payment.getId(), request.providerTransactionId());
+            payment.setProviderTransactionId(request.providerTransactionId().trim());
+            paymentTransactions.save(payment);
+        }
         return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
     }
 
-    public PaymentTransactionView adminConfirmPayment(UUID paymentId, ReviewRegistrationRequest request) {
+    public PaymentTransactionView adminConfirmPayment(UUID paymentId, ConfirmMomoPaymentRequest request) {
         requireSystemAdmin();
-        return confirmPayment(paymentId, true, request == null ? null : request.note());
+        if (request == null || !hasText(request.momoTransactionId()) || !hasText(request.momoOrderId())) {
+            throw new IllegalArgumentException("Both MoMo transId and orderId are required to confirm payment.");
+        }
+        PaymentTransactionEntity payment = requirePayment(paymentId);
+        if (payment.getPaymentMethod() != PaymentMethod.MOMO) {
+            throw new IllegalArgumentException("Only MoMo payments can be confirmed.");
+        }
+        if (!payment.getOrderCode().equals(request.momoOrderId().trim())) {
+            throw new IllegalArgumentException("MoMo order ID does not match this payment invoice.");
+        }
+        assertMomoTransactionIdAvailable(paymentId, request.momoTransactionId());
+        payment.setProviderTransactionId(request.momoTransactionId().trim());
+        payment.setUpdatedAt(OffsetDateTime.now());
+        paymentTransactions.save(payment);
+        return confirmPayment(paymentId, true, request.note());
     }
 
     public PaymentTransactionView adminRejectPayment(UUID paymentId, ReviewRegistrationRequest request) {
@@ -2149,6 +2208,10 @@ public class ForepService {
 
     public WorkspaceRegistrationView confirmRegistrationPayment(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
+        if (registrationId != null) {
+            requireWorkspaceRegistration(registrationId);
+            throw new IllegalArgumentException("Manual payment-proof confirmation is disabled. Confirm the MoMo transaction with its transId.");
+        }
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy đăng ký workspace."));
         if (List.of(RegistrationStatus.APPROVED, RegistrationStatus.REJECTED).contains(registration.getRegistrationStatus())) {
             throw new IllegalArgumentException("Không thể xác nhận thanh toán cho hồ sơ đã đóng.");
@@ -2187,7 +2250,17 @@ public class ForepService {
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        List<AccountProvisioningView> generatedOwnerAccounts = activateWorkspaceForRegistration(registration, request == null ? null : request.note(), null);
+        PaymentTransactionEntity successfulPayment = paymentTransactions
+                .findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
+                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS
+                        && payment.getPaymentMethod() == PaymentMethod.MOMO
+                        && hasText(payment.getProviderTransactionId()))
+                .findFirst().orElse(null);
+        if (registration.getWorkspaceId() == null && successfulPayment == null) {
+            throw new IllegalArgumentException("Workspace approval requires a successful MoMo payment with a transId.");
+        }
+        List<AccountProvisioningView> generatedOwnerAccounts = activateWorkspaceForRegistration(
+                registration, request == null ? null : request.note(), successfulPayment == null ? null : successfulPayment.getId());
         return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId), generatedOwnerAccounts);
     }
 
@@ -4798,6 +4871,9 @@ public class ForepService {
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findByIdForUpdate(payment.getWorkspaceRegistrationId())
                 .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         SubscriptionPlanEntity plan = requireSubscriptionPlan(payment.getSubscriptionPlanId());
+        if (payment.getPaymentMethod() != PaymentMethod.MOMO || !hasText(payment.getProviderTransactionId())) {
+            throw new IllegalArgumentException("A verified MoMo transId is required before payment can be confirmed.");
+        }
         if (payment.getAmount().compareTo(plan.getPrice()) != 0) {
             throw new IllegalArgumentException("Payment amount does not match the selected subscription plan.");
         }
@@ -4820,6 +4896,18 @@ public class ForepService {
 
         activateWorkspaceForRegistration(registration, adminOverride ? rawPayloadOrNote : null, payment.getId());
         return toPaymentTransactionView(payment);
+    }
+
+    private void assertMomoTransactionIdAvailable(UUID paymentId, String momoTransactionId) {
+        String normalized = momoTransactionId == null ? null : momoTransactionId.trim();
+        if (!hasText(normalized)) {
+            throw new IllegalArgumentException("MoMo transaction ID is required.");
+        }
+        paymentTransactions.findByProviderTransactionId(normalized)
+                .filter(existing -> !existing.getId().equals(paymentId))
+                .ifPresent(existing -> {
+                    throw new IllegalArgumentException("This MoMo transaction ID is already linked to another payment.");
+                });
     }
 
     private PaymentTransactionView failPayment(UUID paymentId, String rawPayloadOrNote) {
@@ -4847,7 +4935,35 @@ public class ForepService {
         registration = workspaceRegistrations.findByIdForUpdate(registration.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         if (registration.getWorkspaceId() != null) {
-            return List.of();
+            WorkspaceEntity workspace = requireWorkspaceForUpdate(registration.getWorkspaceId());
+            if (workspace.getPaymentStatus() == PaymentStatus.CONFIRMED && workspace.getStatus() == WorkspaceStatus.ACTIVE) {
+                return List.of();
+            }
+            if (paymentTransactionId == null) {
+                throw new IllegalArgumentException("The admin-created workspace requires a successful MoMo payment transaction.");
+            }
+            SubscriptionPlanEntity plan = requireSubscriptionPlan(registration.getSubscriptionPlanId());
+            OffsetDateTime now = OffsetDateTime.now();
+            OffsetDateTime startDate = registration.getActivationDate() == null ? now : registration.getActivationDate();
+            workspace.setPaymentStatus(PaymentStatus.CONFIRMED);
+            workspace.setStatus(WorkspaceStatus.ACTIVE);
+            workspace.setActivatedAt(startDate);
+            workspace.setExpiresAt(registration.getExpirationDate() == null
+                    ? startDate.plusMonths(plan.getDurationInMonths()) : registration.getExpirationDate());
+            createWorkspaceSubscription(workspace, plan, startDate, paymentTransactionId);
+            List<AccountProvisioningView> owners = provisionInitialOwner(workspace, registration, now);
+            workspace.setOwnerAccountProvisionedAt(now);
+            workspace.setOwnerAccountCount(owners.size());
+            if (!owners.isEmpty()) workspace.setOwnerId(owners.getFirst().id());
+            workspaces.save(workspace);
+            registration.setRegistrationStatus(RegistrationStatus.ACTIVATED);
+            registration.setReviewedBy(safeCurrentUserId());
+            registration.setReviewedAt(now);
+            registration.setReviewNote(reviewNote);
+            registration.setUpdatedAt(now);
+            workspaceRegistrations.save(registration);
+            audit(workspace.getId(), "ACTIVATE_ADMIN_WORKSPACE_AFTER_MOMO_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
+            return owners;
         }
         if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED && registration.getRegistrationStatus() != RegistrationStatus.PAYMENT_CONFIRMED) {
             throw new IllegalArgumentException("Workspace can only be activated after confirmed payment.");
@@ -5569,9 +5685,9 @@ public class ForepService {
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
-    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), currentWorkspaceSubscription(item.getId()), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
+    private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); WorkspaceRegistrationEntity registration = workspaceRegistrations.findByWorkspaceId(item.getId()).orElse(null); List<PaymentTransactionView> paymentHistory = registration == null ? List.of() : paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registration.getId()).stream().map(this::toPaymentTransactionView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getSubscriptionPlanId() == null ? null : toSubscriptionPlanView(requireSubscriptionPlan(item.getSubscriptionPlanId())), currentWorkspaceSubscription(item.getId()), registration == null ? null : registration.getId(), paymentHistory, item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
-    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
+    private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { SubscriptionPlanView selectedPlan = item.getSubscriptionPlanId() == null ? null : toSubscriptionPlanView(requireSubscriptionPlan(item.getSubscriptionPlanId())); List<PublicPaymentStatusView> paymentHistory = paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(item.getId()).stream().map(payment -> toPublicPaymentStatusView(payment, item)).toList(); return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), selectedPlan, item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), paymentHistory, item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
     private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { UUID workspaceId = workspaceRegistrations.findById(item.getWorkspaceRegistrationId()).map(WorkspaceRegistrationEntity::getWorkspaceId).orElse(null); return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), workspaceId, item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderName(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getQrDisplayData(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getPaymentConfigurationSnapshot(), item.getRawProviderResponse(), item.getStatus(), item.getPaidAt(), item.getConfirmedAt(), item.getConfirmedBy(), item.getExpiredAt(), item.getFailureReason(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
@@ -5609,8 +5725,9 @@ public class ForepService {
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String providerEndpoint, String partnerCode, String accessKey, boolean secretKeyConfigured, String returnUrl, String notifyUrl, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, WorkspaceSubscriptionView activeSubscription, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
-    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, WorkspaceSubscriptionView activeSubscription, UUID workspaceRegistrationId, List<PaymentTransactionView> paymentHistory, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
+    public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, List<PublicPaymentStatusView> paymentHistory, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record AdminWorkspaceCreationView(PlatformWorkspaceView workspace, WorkspaceRegistrationView registration, PaymentTransactionView payment) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

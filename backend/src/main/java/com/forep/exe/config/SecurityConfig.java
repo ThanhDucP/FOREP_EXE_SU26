@@ -39,6 +39,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/subscription-plans", "/api/public/subscription-plans/*").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/workspaces/register").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/workspace-registrations/*", "/api/public/payments/*/status").permitAll()
                         .requestMatchers(HttpMethod.PATCH, "/api/public/workspace-registrations/*/select-plan",
                                 "/api/public/workspace-registrations/*/cancel").permitAll()

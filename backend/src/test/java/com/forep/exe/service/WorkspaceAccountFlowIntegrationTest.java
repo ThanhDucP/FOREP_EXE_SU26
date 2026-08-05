@@ -10,6 +10,7 @@ import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.dto.Requests.CreateHrAccountRequest;
+import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
 import com.forep.exe.persistence.AuditLogRepository;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
@@ -95,6 +96,7 @@ class WorkspaceAccountFlowIntegrationTest {
     void activationCreatesExactlyOneOwnerAndIsSequentiallyIdempotent() {
         SubscriptionPlanEntity plan = plan(5);
         WorkspaceRegistrationEntity registration = registration(plan, "FO", "owner@forep.vn", "OwnerPass!2026");
+        successfulPayment(registration, plan);
         authenticate(Role.PLATFORM_ADMIN, null);
 
         var first = service.approveWorkspaceRegistration(registration.getId(), null);
@@ -145,6 +147,7 @@ class WorkspaceAccountFlowIntegrationTest {
         users.saveAndFlush(occupied);
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "FO", "new-owner@forep.vn", "OwnerPass!2026");
+        successfulPayment(registration, plan);
         authenticate(Role.PLATFORM_ADMIN, null);
 
         var activated = service.approveWorkspaceRegistration(registration.getId(), null);
@@ -158,6 +161,7 @@ class WorkspaceAccountFlowIntegrationTest {
         rolePermissions.deleteAll(rolePermissions.findByRoleAndEnabledTrue(Role.BUSINESS_OWNER));
         SubscriptionPlanEntity plan = plan(1);
         WorkspaceRegistrationEntity registration = registration(plan, "MS", "owner@missing-seed.vn", "OwnerPass!2026");
+        successfulPayment(registration, plan);
         authenticate(Role.PLATFORM_ADMIN, null);
 
         assertThrows(IllegalStateException.class,
@@ -249,7 +253,8 @@ class WorkspaceAccountFlowIntegrationTest {
         try {
             start.await();
             authenticate(Role.PLATFORM_ADMIN, null);
-            service.adminConfirmPayment(paymentId, null);
+            String orderId = payments.findById(paymentId).orElseThrow().getOrderCode();
+            service.adminConfirmPayment(paymentId, new ConfirmMomoPaymentRequest("MOMO-TRANS-CONCURRENT", orderId, null));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
@@ -307,7 +312,7 @@ class WorkspaceAccountFlowIntegrationTest {
         PaymentTransactionEntity payment = new PaymentTransactionEntity();
         payment.setWorkspaceRegistrationId(registration.getId());
         payment.setSubscriptionPlanId(plan.getId());
-        payment.setPaymentMethod(PaymentMethod.BANK_TRANSFER);
+        payment.setPaymentMethod(PaymentMethod.MOMO);
         payment.setAmount(plan.getPrice());
         payment.setCurrency("VND");
         payment.setPaymentCode("PAY-" + UUID.randomUUID());
@@ -317,6 +322,14 @@ class WorkspaceAccountFlowIntegrationTest {
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
+        return payments.saveAndFlush(payment);
+    }
+
+    private PaymentTransactionEntity successfulPayment(WorkspaceRegistrationEntity registration, SubscriptionPlanEntity plan) {
+        PaymentTransactionEntity payment = payment(registration, plan);
+        payment.setProviderTransactionId("MOMO-TRANS-" + UUID.randomUUID());
+        payment.setStatus(PaymentTransactionStatus.SUCCESS);
+        payment.setPaidAt(OffsetDateTime.now());
         return payments.saveAndFlush(payment);
     }
 

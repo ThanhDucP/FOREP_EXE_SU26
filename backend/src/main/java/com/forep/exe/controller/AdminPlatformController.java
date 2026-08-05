@@ -5,7 +5,9 @@ import com.forep.exe.ai.AiRateLimitException;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.ApiResponse;
+import com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
+import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
@@ -94,7 +96,7 @@ public class AdminPlatformController {
     }
 
     @PatchMapping("/payments/{paymentId}/confirm")
-    ApiResponse<?> confirmPayment(@PathVariable UUID paymentId, @RequestBody(required = false) ReviewRegistrationRequest request) {
+    ApiResponse<?> confirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmMomoPaymentRequest request) {
         return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 
@@ -106,6 +108,11 @@ public class AdminPlatformController {
     @GetMapping("/workspaces")
     ApiResponse<?> workspaces() {
         return ApiResponse.ok(service.adminWorkspaces());
+    }
+
+    @PostMapping("/workspaces")
+    ApiResponse<?> createWorkspace(@RequestBody @Valid AdminCreateWorkspaceRequest request) {
+        return ApiResponse.ok(service.adminCreateWorkspace(request));
     }
 
     @GetMapping("/workspaces/{id}")

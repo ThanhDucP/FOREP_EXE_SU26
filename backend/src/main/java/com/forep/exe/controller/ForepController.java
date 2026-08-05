@@ -11,6 +11,7 @@ import com.forep.exe.dto.Requests.AdminUpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
+import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
@@ -227,7 +228,7 @@ public class ForepController {
     }
 
     @PatchMapping("/admin/payments/{paymentId}/confirm")
-    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody(required = false) ReviewRegistrationRequest request) {
+    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmMomoPaymentRequest request) {
         return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 

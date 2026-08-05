@@ -19,6 +19,7 @@ public interface WorkspaceRegistrationRepository extends JpaRepository<Workspace
     Optional<WorkspaceRegistrationEntity> findByIdForUpdate(UUID id);
     Optional<WorkspaceRegistrationEntity> findByWorkspaceIdentifierIgnoreCase(String workspaceIdentifier);
     Optional<WorkspaceRegistrationEntity> findByRegistrationToken(String registrationToken);
+    Optional<WorkspaceRegistrationEntity> findByWorkspaceId(UUID workspaceId);
     List<WorkspaceRegistrationEntity> findAllByOrderByCreatedAtDesc();
     List<WorkspaceRegistrationEntity> findByRegistrationStatusInAndExpiredAtBefore(Collection<RegistrationStatus> statuses, OffsetDateTime expiredAt);
 }
