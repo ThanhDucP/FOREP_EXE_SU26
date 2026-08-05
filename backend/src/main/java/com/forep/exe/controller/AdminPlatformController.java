@@ -14,6 +14,8 @@ import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
 import com.forep.exe.service.ForepService;
+import com.forep.exe.service.MomoPaymentService.MomoProviderException;
+import com.forep.exe.service.MomoConfigurationException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -232,6 +234,18 @@ public class AdminPlatformController {
     @ExceptionHandler(IllegalArgumentException.class)
     ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(MomoConfigurationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    ApiResponse<?> handleMomoConfigurationError(MomoConfigurationException exception) {
+        return ApiResponse.error("MOMO_CONFIGURATION_INVALID", exception.getMessage(), exception.field());
+    }
+
+    @ExceptionHandler(MomoProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
+        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
     }
 
     @ExceptionHandler(AiRateLimitException.class)

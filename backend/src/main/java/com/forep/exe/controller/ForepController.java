@@ -51,6 +51,7 @@ import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.service.ForepService;
+import com.forep.exe.service.MomoPaymentService.MomoProviderException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -625,6 +626,12 @@ public class ForepController {
     @ExceptionHandler(IllegalArgumentException.class)
     ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(MomoProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
+        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
     }
 
     @ExceptionHandler(AiRateLimitException.class)

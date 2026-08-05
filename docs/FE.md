@@ -81,10 +81,13 @@ FE rule:
 
 - Nếu `errors` khác rỗng, hiển thị `errors[0].message`.
 - `meta` hiện có `requestId` và `timestamp`; dùng `requestId` khi cần hỗ trợ tra soát.
-- Các controller hiện bắt `IllegalArgumentException` thành `BUSINESS_RULE_ERROR` nhưng chưa gắn HTTP status lỗi. Vì vậy frontend phải kiểm tra `errors` ngay cả khi HTTP status là `200`.
+- Public registration/payment controller trả lỗi nghiệp vụ `BUSINESS_RULE_ERROR` với HTTP `400`. FE phải đọc `errors[0].message` từ response lỗi và hiển thị ngay tại form; không được đổi lỗi này thành trang `403`.
+- Một số controller legacy khác vẫn có thể trả `BUSINESS_RULE_ERROR` trong envelope với HTTP `200`. Vì vậy frontend vẫn phải kiểm tra `errors` trước khi coi response là thành công.
 - Validation do Spring trả `400`; response validation hiện chưa được chuẩn hóa chắc chắn theo envelope trên. Frontend phải có fallback đọc message HTTP chung.
 - Nếu HTTP `401`, clear token và redirect login.
-- Nếu HTTP `403`, hiển thị trang không có quyền và không clear token. Nếu có `BUSINESS_RULE_ERROR`, hiển thị message từ backend, không tự đổi rule ở FE.
+- Với API cần đăng nhập, HTTP `403` nghĩa là thiếu quyền: hiển thị trang không có quyền và không clear token.
+- Với `/api/public/**`, HTTP `403` không phải thiếu permission của guest. FE không redirect sang trang phân quyền; hiển thị lỗi dịch vụ/cấu hình, kèm `requestId` nếu có, để tra soát deployment/CORS/security.
+- Nếu response có `BUSINESS_RULE_ERROR`, luôn ưu tiên message từ backend và không tự đổi rule ở FE.
 - Disable nút khi request đang chạy để tránh double submit.
 - Không show raw AI prompt, token, request/response body kỹ thuật cho user thường.
 
@@ -247,20 +250,154 @@ Employee:
 
 ## 3A. Activation và quản lý tài khoản
 
+### 3A.0 Hai luồng tạo workspace bắt buộc tách riêng
+
+Frontend không được gộp luồng đăng ký của khách mới với luồng Platform Admin tạo workspace. Backend hiện hỗ trợ hai luồng độc lập như sau.
+
+#### Luồng A - Người dùng mới tự đăng ký và thanh toán
+
+1. Guest gửi thông tin doanh nghiệp, người đại diện và Business Owner đầu tiên bằng `POST /api/public/workspace-registrations`. Route này không yêu cầu đăng nhập, không được bọc `RequireAuth` và phải dùng public API client không tự gắn `Authorization` hoặc `X-Workspace-Id`.
+2. FE lưu `data.id` thành `registrationId` và `data.registrationToken` trong session state của flow.
+3. Người dùng phải chọn một gói ACTIVE. FE có thể gửi `subscriptionPlanId` ngay trong request đăng ký hoặc gọi `PATCH /api/public/workspace-registrations/{registrationId}/select-plan?token={registrationToken}`.
+4. FE tạo hóa đơn MoMo bằng `POST /api/public/workspace-registrations/{registrationId}/payments?token={registrationToken}` với body `{ "paymentMethod": "MOMO" }`.
+5. FE mở `providerPaymentUrl`/`providerDeeplink` hoặc hiển thị `providerQrCodeUrl` do backend trả về, sau đó poll `GET /api/public/payments/{paymentCode}/status?token={registrationToken}`.
+6. Workspace **chưa tồn tại** khi payment còn `PENDING`, `PROCESSING`, `FAILED`, `EXPIRED` hoặc `CANCELLED`.
+7. Chỉ callback MoMo hợp lệ có `transId` và amount khớp gói mới làm payment thành `SUCCESS`; backend khi đó tự tạo workspace, active subscription và Business Owner đầu tiên.
+8. Khi payment `SUCCESS`, FE refetch registration. Chỉ hiển thị CTA đăng nhập khi `registrationStatus=ACTIVATED` và `workspaceId` khác `null`.
+
+#### Cấu hình MoMo dành cho Platform Admin (contract bắt buộc)
+
+- API: `GET /api/admin/momo-payment-setting` và `PUT /api/admin/momo-payment-setting`; chỉ Platform Admin có quyền cấu hình.
+- Payload canonical: `{ providerEndpoint, partnerCode, accessKey, secretKey?, returnUrl, ipnUrl, transferContentPrefix?, enabled }`. Backend vẫn nhận `notifyUrl` tạm thời để tương thích, nhưng code FE mới phải dùng `ipnUrl`.
+- `providerEndpoint` là base URL, không phải full create path. Sandbox dùng `https://test-payment.momo.vn`; production dùng `https://payment.momo.vn`. Backend tự bỏ dấu `/` cuối và tự nối `/v2/gateway/api/create` hoặc `/v2/gateway/api/query`.
+- Các field bắt buộc: `providerEndpoint`, `partnerCode`, `accessKey`, `returnUrl`, `ipnUrl`; `secretKey` bắt buộc lần lưu đầu. Khi sửa cấu hình, input Secret để trống nghĩa là giữ nguyên Secret đã mã hóa.
+- Response tuyệt đối không có `secretKey`; chỉ đọc `secretKeyConfigured`. Không bind input Secret từ dữ liệu GET và không gửi `secretKey: ""` nếu người dùng không đổi Secret.
+- Validate tại field: required, URL phải là HTTP(S) hợp lệ, `transferContentPrefix` tối đa 30 ký tự. Hiển thị lỗi đúng dưới field tương ứng và giữ nguyên dữ liệu form khi backend trả lỗi.
+- Form phải có trạng thái loading khi GET/save, khóa nút Save trong lúc submit, toast khi thành công và error banner/field errors khi thất bại. Không hiển thị thông báo “đã lưu” trước khi PUT thành công.
+- `ipnUrl` production nên là `https://forep-exe-backend.onrender.com/api/payments/momo/ipn` (legacy `/api/payment-callbacks/momo` vẫn được backend hỗ trợ). IPN là server-to-server public endpoint, không gắn JWT.
+- FE tạo payment chỉ gửi `{ "paymentMethod": "MOMO" }`; không gửi amount, Partner Code, Access Key hoặc Secret Key. Amount luôn do backend lấy từ subscription plan trong DB.
+- Sau khi nhận `providerPaymentUrl`, FE chỉ điều hướng người dùng tới MoMo. Trang `returnUrl` không được tự cập nhật payment từ query string; tiếp tục poll `GET /api/public/payments/{paymentCode}/status?token={registrationToken}` cho đến trạng thái terminal.
+- Không log payload cấu hình, không lưu credential vào localStorage/sessionStorage và không đưa Partner Code/Access Key/Secret Key vào analytics hoặc error tracking.
+
+Payload đăng ký public phải khớp contract backend:
+
+```json
+{
+  "businessName": "FOREP Company",
+  "workspaceName": "FOREP Workspace",
+  "workspaceIdentifier": "FW",
+  "contactEmail": "contact@example.com",
+  "contactPhone": "0900000000",
+  "businessAddress": "Ho Chi Minh City",
+  "ownerFullName": "Nguyen Van Owner",
+  "ownerEmail": "owner@example.com",
+  "ownerPhone": "0900000001",
+  "ownerPassword": "strong-password",
+  "representativeFullName": "Nguyen Van Dai Dien",
+  "representativeEmail": "representative@example.com",
+  "representativePhone": "0900000002"
+}
+```
+
+`workspaceIdentifier` là mã 2 ký tự chữ/số; muốn backend tự sinh thì bỏ field hoặc gửi `null`, không gửi chuỗi rỗng. `ownerPassword` bắt buộc dài từ 8 đến 72 ký tự. Nếu bỏ `ownerEmail`/`ownerFullName`, backend dùng thông tin người đại diện. Không gửi chuỗi rỗng cho email tùy chọn: bỏ field hoặc gửi `null`.
+
+Xử lý lỗi riêng cho luồng public:
+
+- HTTP `400` có `errors[0].code=BUSINESS_RULE_ERROR`: giữ nguyên form và hiển thị `errors[0].message` (ví dụ email Owner hoặc mã workspace đã tồn tại).
+- HTTP `400` validation: map lỗi vào field nếu xác định được; nếu response không theo envelope thì dùng message fallback “Thông tin đăng ký chưa hợp lệ”.
+- HTTP `403`: không điều hướng `/403` và không yêu cầu guest đăng nhập; hiển thị “Dịch vụ đăng ký đang tạm thời chưa sẵn sàng” cùng `requestId` nếu backend trả về.
+- Chỉ lưu `registrationId`/`registrationToken` và chuyển bước khi HTTP thành công, `errors` rỗng, `data.id` và `data.registrationToken` đều tồn tại.
+
+`WorkspaceRegistration` response hiện có thêm:
+
+```ts
+type WorkspaceRegistration = {
+  id: string;
+  registrationToken: string;
+  subscriptionPlanId: string | null;
+  subscriptionPlan: SubscriptionPlan | null;
+  paymentStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CORRECTION_REQUESTED';
+  registrationStatus: string;
+  paymentHistory: PublicPaymentStatus[];
+  workspaceId: string | null;
+  // các field doanh nghiệp, người đại diện và owner khác
+};
+```
+
+Trang review/result phải dùng `subscriptionPlan` để hiển thị tên gói, giá, thời hạn và giới hạn tài khoản; dùng `paymentHistory` để hiển thị lịch sử/trạng thái hóa đơn. Không chỉ render `subscriptionPlanId`.
+
+Route tương thích `POST /api/v1/workspaces/register` cũng đã mở cho guest nhưng UI mới phải ưu tiên `/api/public/**` vì route public có token-scoped status/payment flow đầy đủ.
+
+#### Luồng B - Platform Admin nhập đủ thông tin và tạo workspace
+
+Admin dùng `POST /api/admin/workspaces` (legacy alias: `POST /api/v1/admin/workspaces`). Form phải có đủ thông tin workspace, gói, Business Owner đầu tiên và người đại diện:
+
+```json
+{
+  "businessName": "FOREP Company",
+  "workspaceName": "FOREP Workspace",
+  "workspaceIdentifier": "FW",
+  "contactEmail": "contact@example.com",
+  "contactPhone": "0900000000",
+  "businessAddress": "Ho Chi Minh City",
+  "subscriptionPlanId": "uuid",
+  "maxUsers": 32,
+  "ownerFullName": "Nguyen Van Owner",
+  "ownerEmail": "owner@example.com",
+  "ownerPhone": "0900000001",
+  "ownerPassword": "strong-password",
+  "representativeFullName": "Nguyen Van Dai Dien",
+  "representativeEmail": "representative@example.com",
+  "representativePhone": "0900000002",
+  "activationDate": null,
+  "expirationDate": null
+}
+```
+
+Không gửi `paymentStatus=CONFIRMED`, không tự gán `ACTIVE`, không gửi role/permission/password hash. `maxUsers` không được vượt quá giới hạn của gói đã chọn.
+
+Response tạo admin là object tổng hợp:
+
+```ts
+type AdminWorkspaceCreation = {
+  workspace: PlatformWorkspace;          // PENDING_PAYMENT/PENDING
+  registration: WorkspaceRegistration;  // liên kết với workspace vừa tạo
+  payment: PaymentTransaction;           // hóa đơn MoMo cần đối soát
+};
+```
+
+Khác với luồng guest, workspace của luồng Admin được tạo ngay nhưng ở `workspace.status=PENDING_PAYMENT` và `workspace.paymentStatus=PENDING`. Backend chưa tạo active subscription và chưa provision owner cho đến khi payment hoàn tất.
+
+Admin xác nhận đối soát bằng:
+
+`PATCH /api/admin/payments/{paymentId}/confirm`
+
+```json
+{
+  "momoTransactionId": "MoMo transId",
+  "momoOrderId": "orderCode của payment",
+  "note": "Đã đối soát trên MoMo"
+}
+```
+
+Cả `momoTransactionId` và `momoOrderId` đều bắt buộc. FE lấy `momoOrderId` từ `payment.orderCode`, không dùng `paymentCode` thay thế. Backend từ chối nếu order ID không thuộc hóa đơn hoặc transId đã liên kết với payment khác. Khi xác nhận thành công, backend chuyển workspace sang `ACTIVE`, tạo active subscription và Business Owner đầu tiên.
+
+`PlatformWorkspace` response hiện có thêm `subscriptionPlan`, `workspaceRegistrationId` và `paymentHistory`. Màn hình list/detail phải hiển thị badge riêng cho `PENDING_PAYMENT`, bảng lịch sử thanh toán và thông tin gói; không suy diễn “đã thanh toán” chỉ từ việc workspace đã có ID.
+
 ### 3A.1 Platform Admin xác nhận payment và kích hoạt workspace
 
 **Đã có trong backend.** Luồng chính của UI mới:
 
 1. Admin mở danh sách registration và chọn một hồ sơ.
 2. Admin xem thông tin doanh nghiệp, người đại diện, Business Owner đăng ký, gói và payment.
-3. Admin xác nhận hoặc từ chối payment. Với luồng chuẩn, `PATCH /api/admin/payments/{paymentId}/confirm` vừa xác nhận payment vừa kích hoạt workspace trong cùng transaction.
+3. Admin xác nhận hoặc từ chối payment. Với luồng chuẩn, `PATCH /api/admin/payments/{paymentId}/confirm` bắt buộc gửi `momoTransactionId` và `momoOrderId`; khi hợp lệ endpoint vừa xác nhận payment vừa kích hoạt workspace trong cùng transaction.
 4. Backend tạo đúng một workspace, một active subscription và một Business Owner đầu tiên.
 5. UI refetch registration, payment và workspace để hiển thị trạng thái cuối.
 6. Gửi lại cùng thao tác không được tạo thêm workspace, subscription hoặc owner.
 
 `PATCH /api/admin/workspace-registrations/{id}/approve` cũng chỉ thành công khi payment đã được xác nhận và sẽ kích hoạt registration. API chuẩn `/api/admin` không có nút activation riêng. Endpoint legacy `POST /api/v1/admin/workspace-registrations/{id}/activate` còn tồn tại để tương thích nhưng không phải lựa chọn cho UI mới.
 
-Admin chỉ nhập ghi chú review khi xác nhận/từ chối payment hoặc registration. Admin không được nhập role, permission, password hash, workspace ID tùy ý, subscription ID khác registration hoặc username cho owner do activation tạo ra.
+Khi xác nhận payment, Admin phải nhập/đối chiếu `momoTransactionId` và dùng đúng `payment.orderCode` làm `momoOrderId`; `note` chỉ là field tùy chọn. Admin không được xác nhận chỉ bằng ảnh thanh toán hoặc ghi chú, không được nhập role, permission, password hash, workspace ID tùy ý, subscription ID khác registration hoặc username cho owner do activation tạo ra.
 
 Business Owner đầu tiên dùng họ tên/email/phone và mật khẩu đã nhập ở bước đăng ký. Backend hash mật khẩu bằng BCrypt. Trường hợp này không có mật khẩu tạm để Admin xem và `mustChangePassword=false`.
 
@@ -1706,7 +1843,11 @@ Dashboard changes:
 
 Subscription/payment/admin workspace changes:
 
-- Platform Admin workspace list/detail must read `activeSubscription` from backend responses.
+- Platform Admin workspace list/detail must read `subscriptionPlan`, `activeSubscription`, `workspaceRegistrationId`, and `paymentHistory` from backend responses.
+- Admin create workspace uses `POST /api/admin/workspaces` with complete owner/representative/plan data. Treat the returned workspace as `PENDING_PAYMENT`; do not navigate to an ACTIVE-success screen until MoMo confirmation succeeds.
+- Admin payment confirmation must send both `{ momoTransactionId, momoOrderId, note? }`; `momoOrderId` is `PaymentTransaction.orderCode`. A note or payment screenshot alone is never sufficient.
+- Public registration result must render `WorkspaceRegistration.subscriptionPlan` and `paymentHistory`; stop polling only after transaction terminal state, and show login only when registration is `ACTIVATED` with a non-null `workspaceId`.
+- Guest and Admin create flows are separate: guest payment creates the workspace after success; Admin creates a pending workspace first and payment success completes activation/provisioning.
 - Use `activeSubscription.status`, `startDate`, `endDate`, `renewalDate`, `price`, `maxOwnerAccounts`, and `maxEmployeeAccounts` for current package display when present.
 - Keep `subscriptionPlanId`, `maxUsers`, `maxOwnerAccounts`, and `maxEmployeeAccounts` as compatibility/fallback fields only; do not infer billing history from workspace fields.
 - When admin changes a workspace plan, refetch workspace detail/list because backend creates a new ACTIVE subscription snapshot and closes the old one as `UPGRADED`/`DOWNGRADED`.
@@ -1773,6 +1914,11 @@ FE is not considered production-ready until:
 - Business Owner dashboard renders backend cards/charts/lists from `/api/workspace/business-owner/dashboard`.
 - Platform Admin dashboard renders backend chart-ready series from `/api/admin/dashboard/**`.
 - Payment result page treats `ACTIVATED` as final successful registration state and never activates workspace from URL/query params.
+- Public registration uses an unauthenticated API client and never redirects a guest to `/403` when `/api/public/**` fails.
+- Public registration keeps the form state and displays backend `BUSINESS_RULE_ERROR` messages returned with HTTP `400`.
+- Public registration never creates or displays an ACTIVE workspace before a successful MoMo callback.
+- Admin create workspace renders `PENDING_PAYMENT`, the selected `subscriptionPlan`, invoice `orderCode`, and `paymentHistory` before confirmation.
+- Admin confirmation cannot submit without both MoMo `transId` and the matching payment `orderCode`.
 - Platform Admin workspace screens render `activeSubscription` and refetch after plan/status/payment lifecycle changes.
 - Payment instruction page supports real MoMo provider URLs/admin-configured QR without changing UI logic.
 - Public payment flow handles missing QR as a waiting state; FE never creates or substitutes QR codes.

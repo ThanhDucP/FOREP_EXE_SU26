@@ -6,14 +6,19 @@ import com.forep.exe.dto.Requests.PaymentCallbackRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
+import com.forep.exe.service.MomoPaymentService.MomoProviderException;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api")
 public class PublicRegistrationController {
+    private static final Logger log = LoggerFactory.getLogger(PublicRegistrationController.class);
     private final ForepService service;
 
     public PublicRegistrationController(ForepService service) {
@@ -64,8 +69,27 @@ public class PublicRegistrationController {
         return ApiResponse.ok(service.publicPaymentStatus(paymentCode, token));
     }
 
-    @PostMapping("/payment-callbacks/momo")
+    @PostMapping({"/payment-callbacks/momo", "/payments/momo/ipn"})
     ApiResponse<?> momoCallback(@RequestBody PaymentCallbackRequest request) {
-        return ApiResponse.ok(service.handleMomoCallback(request));
+        try {
+            ApiResponse<?> response = ApiResponse.ok(service.handleMomoCallback(request));
+            log.info("Accepted MoMo IPN orderId={} requestId={} resultCode={}", request.orderId(), request.requestId(), request.resultCode());
+            return response;
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            log.warn("Rejected MoMo IPN orderId={} requestId={} reason={}", request.orderId(), request.requestId(), exception.getMessage());
+            return ApiResponse.error("MOMO_IPN_REJECTED", exception.getMessage(), null);
+        }
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    ApiResponse<?> handleBadRequest(IllegalArgumentException exception) {
+        return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
+    }
+
+    @ExceptionHandler(MomoProviderException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
+        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
     }
 }

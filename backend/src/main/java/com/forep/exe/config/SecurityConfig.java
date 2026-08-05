@@ -3,6 +3,7 @@ package com.forep.exe.config;
 import com.forep.exe.domain.Enums.Permission;
 import com.forep.exe.security.AuthorizationService;
 import com.forep.exe.security.JwtAuthenticationFilter;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,7 +37,9 @@ public class SecurityConfig {
                 .formLogin(form -> form.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/subscription-plans", "/api/public/subscription-plans/*").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/workspaces/register").permitAll()
@@ -44,7 +47,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PATCH, "/api/public/workspace-registrations/*/select-plan",
                                 "/api/public/workspace-registrations/*/cancel").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations/*/payments",
-                                "/api/payment-callbacks/momo").permitAll()
+                                "/api/payment-callbacks/momo", "/api/payments/momo/ipn").permitAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login",
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()

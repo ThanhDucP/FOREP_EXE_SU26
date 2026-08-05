@@ -27,8 +27,8 @@ public class PaymentQrSettingEntity extends BaseEntity {
     private String providerEndpoint;
     private String partnerCode;
     private String accessKey;
-    @Column(columnDefinition = "text")
-    private String secretKey;
+    @Column(name = "secret_key", columnDefinition = "text")
+    private String secretKeyEncrypted;
     @Column(columnDefinition = "text")
     private String returnUrl;
     @Column(columnDefinition = "text")
@@ -63,8 +63,8 @@ public class PaymentQrSettingEntity extends BaseEntity {
     public void setPartnerCode(String partnerCode) { this.partnerCode = partnerCode; }
     public String getAccessKey() { return accessKey; }
     public void setAccessKey(String accessKey) { this.accessKey = accessKey; }
-    public String getSecretKey() { return secretKey; }
-    public void setSecretKey(String secretKey) { this.secretKey = secretKey; }
+    public String getSecretKeyEncrypted() { return secretKeyEncrypted; }
+    public void setSecretKeyEncrypted(String secretKeyEncrypted) { this.secretKeyEncrypted = secretKeyEncrypted; }
     public String getReturnUrl() { return returnUrl; }
     public void setReturnUrl(String returnUrl) { this.returnUrl = returnUrl; }
     public String getNotifyUrl() { return notifyUrl; }

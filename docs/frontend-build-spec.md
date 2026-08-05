@@ -672,7 +672,7 @@ Admin MoMo payment setting:
 
 - `GET /api/admin/momo-payment-setting`
 - `PUT /api/admin/momo-payment-setting`
-- Body: `{ providerEndpoint, partnerCode, accessKey, secretKey?, returnUrl, notifyUrl, transferContentPrefix?, enabled }`.
+- Body canonical: `{ providerEndpoint, partnerCode, accessKey, secretKey?, returnUrl, ipnUrl, transferContentPrefix?, enabled }`; `notifyUrl` chi la alias tuong thich cu.
 - `secretKey` la password field: FE chi gui khi admin nhap/cap nhat, khong hien lai gia tri cu; dung `secretKeyConfigured` de hien trang thai da cau hinh.
 - Khong co upload QR, khong co bank account fields, khong co `BANK_TRANSFER`, khong gui `qrCodeUrl`, `paymentUrl`, `deeplink`.
 - Sau khi update, invalidate/refetch `momoPaymentSetting`; cac payment moi se dung cau hinh moi, payment cu giu snapshot cau hinh tai thoi diem tao.
@@ -682,11 +682,11 @@ Admin MoMo setup UX requirement:
 - Dat menu/page la `Thanh toan MoMo`, khong dat `QR ngan hang` hay `Payment QR` de tranh hieu nham.
 - Dau trang co status card lon: `Chua cau hinh`, `Thieu thong tin`, `Da cau hinh - dang tat`, `San sang nhan thanh toan`, kem last updated va nguoi cap nhat neu backend co `updatedBy/updatedAt`.
 - Status card hien checklist 6 muc: `Endpoint`, `Partner Code`, `Access Key`, `Secret Key`, `Return URL`, `Notify/IPN URL`; muc nao thieu hien icon warning va text ngan gon.
-- Form chia 3 nhom: `Thong tin merchant` (`partnerCode`, `accessKey`, `secretKey`), `URL tich hop` (`providerEndpoint`, `returnUrl`, `notifyUrl`), `Van hanh` (`transferContentPrefix`, `enabled`).
+- Form chia 3 nhom: `Thong tin merchant` (`partnerCode`, `accessKey`, `secretKey`), `URL tich hop` (`providerEndpoint`, `returnUrl`, `ipnUrl`), `Van hanh` (`transferContentPrefix`, `enabled`).
 - `secretKey` la write-only: neu `secretKeyConfigured=true`, hien badge `Da luu secret`, input placeholder `Nhap secret moi neu muon doi`; khong gui `secretKey` khi input rong.
 - Toggle `enabled` bi disable neu form thieu bat ky field bat buoc nao; khi enable lan dau, hien confirm modal "Bat MoMo se cho phep user tao giao dich that".
-- FE validate truoc khi submit: URL phai la `https://` tren production, endpoint/returnUrl/notifyUrl khong duoc rong, `partnerCode`/`accessKey` khong duoc co khoang trang dau/cuoi, `transferContentPrefix` toi da 30 ky tu.
-- `notifyUrl` nen hien helper/copy text: `Backend IPN callback phai tro ve /api/payment-callbacks/momo`; neu FE biet API base URL thi hien nut copy full callback URL.
+- FE validate truoc khi submit: URL phai la `https://` tren production, endpoint/returnUrl/ipnUrl khong duoc rong, `partnerCode`/`accessKey` khong duoc co khoang trang dau/cuoi, `transferContentPrefix` toi da 30 ky tu.
+- `ipnUrl` nen hien helper/copy text: `Backend IPN callback phai tro ve /api/payments/momo/ipn`; neu FE biet API base URL thi hien nut copy full callback URL.
 - Sau khi save thanh cong, refetch va hien toast ro rang: `Da luu cau hinh MoMo`; neu backend bao thieu config, scroll den checklist va highlight field loi.
 - Khong hien nut/link "Mo thanh toan MoMo" trong admin setting; URL/deeplink/QR chi duoc render o public payment instruction sau khi backend tao transaction thanh cong.
 - Them nut secondary `Xem nhat ky cau hinh` dieu huong den System Logs filter `action=ADMIN_UPDATE_MOMO_PAYMENT_SETTING`; giup admin doi soat ai da thay doi config.

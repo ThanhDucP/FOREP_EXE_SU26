@@ -28,7 +28,7 @@ This backend implements a staged workspace registration flow:
    - The registration token is required so public users cannot inspect payment details by payment code alone.
 
 6. Payment confirmation
-   - MoMo callback: `POST /api/payment-callbacks/momo`
+   - MoMo callback: `POST /api/payments/momo/ipn` (legacy alias: `/api/payment-callbacks/momo`)
    - MoMo callbacks must include a valid signature using the `secretKey` saved by Platform Admin in the MoMo payment setting.
    - Manual admin confirmation: `PATCH /api/admin/payments/{paymentId}/confirm`
    - Manual admin rejection: `PATCH /api/admin/payments/{paymentId}/reject`
@@ -51,7 +51,7 @@ MoMo uses the real provider API only when all production config values are prese
 - `accessKey`
 - `secretKey`
 - `returnUrl`
-- `notifyUrl`
+- `ipnUrl` (`notifyUrl` is accepted only as a legacy alias)
 
 MoMo uses the real provider only. If provider config is incomplete, backend does not create MoMo sandbox/stub instructions and asks the user to wait.
 
@@ -59,12 +59,14 @@ MoMo uses the real provider only. If provider config is incomplete, backend does
 
 - `GET /api/admin/momo-payment-setting`
 - `PUT /api/admin/momo-payment-setting`
-- Body: `{ "providerEndpoint": "...", "partnerCode": "...", "accessKey": "...", "secretKey": "...", "returnUrl": "...", "notifyUrl": "...", "transferContentPrefix": "...", "enabled": true }`
+- Body: `{ "providerEndpoint": "https://test-payment.momo.vn", "partnerCode": "...", "accessKey": "...", "secretKey": "...", "returnUrl": "...", "ipnUrl": ".../api/payments/momo/ipn", "transferContentPrefix": "...", "enabled": true }`
 
 Rules:
 
 - Admin config must not submit `qrCodeUrl`, `paymentUrl`, or `deeplink`; backend rejects URL-based payment settings.
 - `secretKey` is write-only in FE: the backend response only returns `secretKeyConfigured`.
+- `providerEndpoint` is a base URL. Backend normalizes trailing slashes and appends the fixed create/query paths.
+- `MOMO_CONFIG_ENCRYPTION_KEY` must contain at least 32 characters. Migration V30 clears legacy plaintext Secret Keys and disables MoMo; the admin must enter the Secret Key again once after deployment.
 - New payments copy the current MoMo provider setting into `PaymentTransaction`; changing config later does not mutate old payment instructions.
 - Frontend must never generate fake QR codes.
 

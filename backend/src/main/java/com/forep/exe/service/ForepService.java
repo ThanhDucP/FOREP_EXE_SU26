@@ -80,6 +80,7 @@ import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.MomoPaymentService.MomoProviderConfig;
+import com.forep.exe.service.MomoPaymentService.MomoProviderException;
 import com.forep.exe.persistence.AiSuggestionEntity;
 import com.forep.exe.persistence.AiSuggestionRepository;
 import com.forep.exe.persistence.AiHistoryEntity;
@@ -137,6 +138,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.time.Duration;
@@ -190,6 +192,8 @@ public class ForepService {
     private final AuthorizationService authorizationService;
     private final AiServiceClient aiServiceClient;
     private final MomoPaymentService momoPaymentService;
+    private final MomoCredentialCipher momoCredentialCipher;
+    private final PaymentTransactionPersistenceService paymentPersistenceService;
     private final ObjectMapper objectMapper;
     private final AccountNamingService accountNamingService;
 
@@ -218,6 +222,8 @@ public class ForepService {
                         AuthorizationService authorizationService,
                         AiServiceClient aiServiceClient,
                         MomoPaymentService momoPaymentService,
+                        MomoCredentialCipher momoCredentialCipher,
+                        PaymentTransactionPersistenceService paymentPersistenceService,
                         ObjectMapper objectMapper,
                         AccountNamingService accountNamingService) {
         this.workspaces = workspaces;
@@ -245,6 +251,8 @@ public class ForepService {
         this.authorizationService = authorizationService;
         this.aiServiceClient = aiServiceClient;
         this.momoPaymentService = momoPaymentService;
+        this.momoCredentialCipher = momoCredentialCipher;
+        this.paymentPersistenceService = paymentPersistenceService;
         this.objectMapper = objectMapper;
         this.accountNamingService = accountNamingService;
     }
@@ -1592,6 +1600,7 @@ public class ForepService {
         return toPlatformWorkspaceView(requireWorkspace(workspaceId));
     }
 
+    @Transactional(noRollbackFor = MomoProviderException.class)
     public AdminWorkspaceCreationView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
         requireSystemAdmin();
         String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
@@ -2001,6 +2010,7 @@ public class ForepService {
         return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
     }
 
+    @Transactional(noRollbackFor = MomoProviderException.class)
     public PaymentTransactionView createPayment(UUID registrationId, CreatePaymentRequest request) {
         requireSystemAdmin();
         return createPaymentForRegistration(registrationId, request);
@@ -2042,8 +2052,16 @@ public class ForepService {
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
+        payment.setProviderName("MOMO");
+        payment = paymentPersistenceService.persistPending(payment);
 
-        ProviderPaymentResult providerResult = momoPaymentService.createPayment(payment, momoProviderConfig(qrSetting));
+        ProviderPaymentResult providerResult;
+        try {
+            providerResult = momoPaymentService.createPayment(payment, momoProviderConfig(qrSetting));
+        } catch (RuntimeException exception) {
+            paymentPersistenceService.markProviderFailure(payment, exception.getMessage());
+            throw exception;
+        }
         payment.setProviderName("MOMO");
         payment.setProviderPaymentUrl(providerResult.paymentUrl());
         payment.setProviderDeeplink(providerResult.deeplink());
@@ -2089,8 +2107,11 @@ public class ForepService {
 
     private PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
         requireSystemAdmin();
+        if (request == null) {
+            throw new MomoConfigurationException(null, "MoMo configuration request is required.");
+        }
         if (hasText(request.qrCodeUrl()) || hasText(request.paymentUrl()) || hasText(request.deeplink())) {
-            throw new IllegalArgumentException("Payment URLs are not accepted in admin configuration. Configure the real MoMo provider instead.");
+            throw new MomoConfigurationException("providerEndpoint", "Payment URLs are not accepted in admin configuration. Configure the real MoMo provider instead.");
         }
         if (paymentMethod != PaymentMethod.MOMO) {
             throw new IllegalArgumentException("Only MoMo payment configuration is supported.");
@@ -2110,14 +2131,25 @@ public class ForepService {
         setting.setBankName(null);
         setting.setBankAccountNumber(null);
         setting.setBankAccountName(null);
-        setting.setProviderEndpoint(blankToNull(request.providerEndpoint()));
-        setting.setPartnerCode(blankToNull(request.partnerCode()));
-        setting.setAccessKey(blankToNull(request.accessKey()));
-        if (hasText(request.secretKey())) {
-            setting.setSecretKey(request.secretKey().trim());
+        String baseUrl = momoPaymentService.normalizeBaseUrl(requiredText("providerEndpoint", request.providerEndpoint()));
+        String partnerCode = requiredText("partnerCode", request.partnerCode());
+        String accessKey = requiredText("accessKey", request.accessKey());
+        String returnUrl = requiredUrl("returnUrl", request.returnUrl());
+        String ipnUrl = requiredUrl("ipnUrl", hasText(request.ipnUrl()) ? request.ipnUrl() : request.notifyUrl());
+        validateHttpUrl("providerEndpoint", baseUrl);
+        if (hasText(request.transferContentPrefix()) && request.transferContentPrefix().trim().length() > 30) {
+            throw new MomoConfigurationException("transferContentPrefix", "transferContentPrefix must not exceed 30 characters.");
         }
-        setting.setReturnUrl(blankToNull(request.returnUrl()));
-        setting.setNotifyUrl(blankToNull(request.notifyUrl()));
+        setting.setProviderEndpoint(baseUrl);
+        setting.setPartnerCode(partnerCode);
+        setting.setAccessKey(accessKey);
+        if (hasText(request.secretKey())) {
+            setting.setSecretKeyEncrypted(momoCredentialCipher.encrypt(request.secretKey().trim()));
+        } else if (!hasText(setting.getSecretKeyEncrypted())) {
+            throw new MomoConfigurationException("secretKey", "secretKey is required when saving MoMo configuration for the first time.");
+        }
+        setting.setReturnUrl(returnUrl);
+        setting.setNotifyUrl(ipnUrl);
         if (request.enabled() && !momoPaymentService.isRealProviderConfigured(momoProviderConfig(setting))) {
             throw new IllegalArgumentException("MoMo provider configuration is incomplete.");
         }
@@ -2126,10 +2158,12 @@ public class ForepService {
         setting.setUpdatedBy(currentUser().userId());
         setting.setUpdatedAt(now);
         setting = paymentQrSettings.save(setting);
-        audit(null, "ADMIN_UPDATE_MOMO_PAYMENT_SETTING", "MOMO_PAYMENT_SETTING", setting.getId(), null, toPaymentQrSettingView(setting));
+        audit(null, "ADMIN_UPDATE_MOMO_PAYMENT_SETTING", "MOMO_PAYMENT_SETTING", setting.getId(), null,
+                Map.of("enabled", setting.isEnabled(), "secretKeyConfigured", true, "updatedAt", setting.getUpdatedAt()));
         return toPaymentQrSettingView(setting);
     }
 
+    @Transactional(noRollbackFor = MomoProviderException.class)
     public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
         requireWorkspaceRegistrationWithToken(registrationId, token);
         PaymentTransactionView payment = createPaymentForRegistration(registrationId, request);
@@ -2149,22 +2183,31 @@ public class ForepService {
         if (payment.getPaymentMethod() != PaymentMethod.MOMO) {
             throw new IllegalArgumentException("Only MoMo callbacks are supported.");
         }
-        PaymentQrSettingEntity setting = requireEnabledMomoPaymentSetting();
+        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO)
+                .orElseThrow(() -> new IllegalArgumentException("MoMo payment method is not configured."));
+        if (!hasText(request.partnerCode()) || !request.partnerCode().equals(setting.getPartnerCode())) {
+            throw new IllegalArgumentException("MoMo IPN partnerCode does not match.");
+        }
         Map<String, Object> payload = paymentCallbackPayload(request);
-        if (!momoPaymentService.verifyCallbackSignature(payload, request.signature(), momoProviderConfig(setting))) {
+        if (!momoPaymentService.verifyIpnSignature(payload, request.signature(), momoProviderConfig(setting))) {
             throw new IllegalArgumentException("Invalid MoMo callback signature.");
         }
         assertCallbackAmountMatches(payment, request);
-        boolean success = "0".equals(request.resultCode()) || "SUCCESS".equalsIgnoreCase(request.resultCode());
-        if (success && !hasText(request.providerTransactionId())) {
+        if (!payment.getRequestId().equals(request.requestId())) {
+            throw new IllegalArgumentException("MoMo IPN requestId does not match this payment transaction.");
+        }
+        boolean success = Integer.valueOf(0).equals(request.resultCode());
+        if (success && request.transId() == null) {
             throw new IllegalArgumentException("Successful MoMo callback must contain transId.");
         }
-        if (hasText(request.providerTransactionId())) {
-            assertMomoTransactionIdAvailable(payment.getId(), request.providerTransactionId());
-            payment.setProviderTransactionId(request.providerTransactionId().trim());
+        if (request.transId() != null) {
+            String transId = request.transId().toString();
+            assertMomoTransactionIdAvailable(payment.getId(), transId);
+            payment.setProviderTransactionId(transId);
             paymentTransactions.save(payment);
         }
-        return success ? confirmPayment(payment.getId(), false, request.rawPayload()) : failPayment(payment.getId(), request.rawPayload());
+        String sanitizedIpn = toJson(payload);
+        return success ? confirmPayment(payment.getId(), false, sanitizedIpn) : failPayment(payment.getId(), sanitizedIpn);
     }
 
     public PaymentTransactionView adminConfirmPayment(UUID paymentId, ConfirmMomoPaymentRequest request) {
@@ -4601,6 +4644,30 @@ public class ForepService {
         return hasText(value) ? value.trim() : null;
     }
 
+    private String requiredText(String field, String value) {
+        if (!hasText(value)) {
+            throw new MomoConfigurationException(field, field + " is required.");
+        }
+        return value.trim();
+    }
+
+    private String requiredUrl(String field, String value) {
+        String normalized = requiredText(field, value);
+        validateHttpUrl(field, normalized);
+        return normalized;
+    }
+
+    private void validateHttpUrl(String field, String value) {
+        try {
+            URI uri = URI.create(value);
+            if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme())) || uri.getHost() == null) {
+                throw new IllegalArgumentException();
+            }
+        } catch (RuntimeException exception) {
+            throw new MomoConfigurationException(field, field + " must be a valid HTTP(S) URL.");
+        }
+    }
+
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -4638,9 +4705,8 @@ public class ForepService {
         snapshot.put("configurationId", setting.getId());
         snapshot.put("paymentMethod", setting.getPaymentMethod());
         snapshot.put("providerEndpoint", setting.getProviderEndpoint());
-        snapshot.put("partnerCode", setting.getPartnerCode());
         snapshot.put("accessKeyConfigured", hasText(setting.getAccessKey()));
-        snapshot.put("secretKeyConfigured", hasText(setting.getSecretKey()));
+        snapshot.put("secretKeyConfigured", hasText(setting.getSecretKeyEncrypted()));
         snapshot.put("returnUrl", setting.getReturnUrl());
         snapshot.put("notifyUrl", setting.getNotifyUrl());
         snapshot.put("transferContentPrefix", setting.getTransferContentPrefix());
@@ -4653,7 +4719,7 @@ public class ForepService {
                 setting.getProviderEndpoint(),
                 setting.getPartnerCode(),
                 setting.getAccessKey(),
-                setting.getSecretKey(),
+                momoCredentialCipher.decrypt(setting.getSecretKeyEncrypted()),
                 setting.getReturnUrl(),
                 setting.getNotifyUrl()
         );
@@ -5196,31 +5262,40 @@ public class ForepService {
     }
 
     private PaymentTransactionEntity requirePaymentByCallback(PaymentCallbackRequest request) {
-        if (hasText(request.orderCode())) {
-            return paymentTransactions.findByOrderCode(request.orderCode()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        if (request == null || !hasText(request.orderId()) || !hasText(request.requestId())) {
+            throw new IllegalArgumentException("MoMo IPN must include orderId and requestId.");
         }
-        if (hasText(request.requestId())) {
-            return paymentTransactions.findByRequestId(request.requestId()).orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        PaymentTransactionEntity payment = paymentTransactions.findByOrderCode(request.orderId())
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        if (!payment.getRequestId().equals(request.requestId())) {
+            throw new IllegalArgumentException("MoMo IPN requestId does not match this payment transaction.");
         }
-        throw new IllegalArgumentException("Callback must include orderCode or requestId.");
+        return payment;
     }
 
     private void assertCallbackAmountMatches(PaymentTransactionEntity payment, PaymentCallbackRequest request) {
-        if (request.amount() == null) {
+        if (request.amount() == null || request.amount() <= 0) {
             throw new IllegalArgumentException("Callback amount is required.");
         }
-        if (payment.getAmount().compareTo(request.amount()) != 0) {
+        if (payment.getAmount().compareTo(BigDecimal.valueOf(request.amount())) != 0) {
             throw new IllegalArgumentException("Callback amount does not match the payment transaction.");
         }
     }
 
     private Map<String, Object> paymentCallbackPayload(PaymentCallbackRequest request) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("orderCode", request.orderCode());
+        payload.put("partnerCode", request.partnerCode());
+        payload.put("orderId", request.orderId());
         payload.put("requestId", request.requestId());
-        payload.put("providerTransactionId", request.providerTransactionId());
-        payload.put("resultCode", request.resultCode());
         payload.put("amount", request.amount());
+        payload.put("orderInfo", request.orderInfo());
+        payload.put("orderType", request.orderType());
+        payload.put("transId", request.transId());
+        payload.put("resultCode", request.resultCode());
+        payload.put("message", request.message());
+        payload.put("payType", request.payType());
+        payload.put("responseTime", request.responseTime());
+        payload.put("extraData", request.extraData());
         return payload;
     }
 
@@ -5681,7 +5756,7 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getProviderEndpoint(), item.getPartnerCode(), item.getAccessKey(), hasText(item.getSecretKey()), item.getReturnUrl(), item.getNotifyUrl(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getProviderEndpoint(), item.getPartnerCode(), item.getAccessKey(), hasText(item.getSecretKeyEncrypted()), item.getReturnUrl(), item.getNotifyUrl(), item.getNotifyUrl(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
@@ -5723,7 +5798,7 @@ public class ForepService {
     public record LoginView(String token, UserView user, List<String> permissions) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String providerEndpoint, String partnerCode, String accessKey, boolean secretKeyConfigured, String returnUrl, String notifyUrl, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String providerEndpoint, String partnerCode, String accessKey, boolean secretKeyConfigured, String returnUrl, String ipnUrl, String notifyUrl, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, WorkspaceSubscriptionView activeSubscription, UUID workspaceRegistrationId, List<PaymentTransactionView> paymentHistory, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, List<PublicPaymentStatusView> paymentHistory, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}

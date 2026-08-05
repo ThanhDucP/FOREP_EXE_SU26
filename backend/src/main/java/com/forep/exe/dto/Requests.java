@@ -451,6 +451,7 @@ public final class Requests {
             String accessKey,
             String secretKey,
             String returnUrl,
+            String ipnUrl,
             String notifyUrl,
             String transferContentPrefix,
             boolean enabled
@@ -458,14 +459,19 @@ public final class Requests {
     }
 
     public record PaymentCallbackRequest(
-            String orderCode,
+            String partnerCode,
+            String orderId,
             String requestId,
-            String providerTransactionId,
-            String resultCode,
+            Long amount,
+            String orderInfo,
+            String orderType,
+            Long transId,
+            Integer resultCode,
             String message,
-            BigDecimal amount,
-            String signature,
-            String rawPayload
+            String payType,
+            Long responseTime,
+            String extraData,
+            String signature
     ) {
     }
 
