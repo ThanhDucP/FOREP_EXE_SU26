@@ -7,6 +7,7 @@ import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
 import com.forep.exe.service.PayosPaymentService.PayosProviderException;
+import com.forep.exe.service.WorkspaceValidationException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -88,6 +89,12 @@ public class PublicRegistrationController {
 
     private Object webhookValue(PayosWebhookRequest request, String key) {
         return request == null || request.data() == null ? null : request.data().get(key);
+    }
+
+    @ExceptionHandler(WorkspaceValidationException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    ApiResponse<?> handleWorkspaceValidationError(WorkspaceValidationException exception) {
+        return ApiResponse.error(exception.getErrorCode(), exception.getMessage(), null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -15,10 +15,10 @@ import com.forep.exe.dto.Requests.UpdatePayosConfigRequest;
 import com.forep.exe.service.ForepService;
 import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import com.forep.exe.service.PayosConfigurationException;
+import com.forep.exe.service.WorkspaceValidationException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -223,6 +223,12 @@ public class AdminPlatformController {
     @GetMapping("/ai/platform-summary")
     ApiResponse<?> platformSummary() {
         return ApiResponse.ok(service.platformAdminSystemSummary());
+    }
+
+    @ExceptionHandler(WorkspaceValidationException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    ApiResponse<?> handleWorkspaceValidationError(WorkspaceValidationException exception) {
+        return ApiResponse.error(exception.getErrorCode(), exception.getMessage(), null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

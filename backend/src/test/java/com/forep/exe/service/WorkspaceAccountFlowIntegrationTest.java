@@ -53,6 +53,7 @@ import java.util.concurrent.Future;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -440,6 +441,90 @@ class WorkspaceAccountFlowIntegrationTest {
         assertEquals(1, history.size());
         assertEquals(PaymentTransactionStatus.FAILED, history.getFirst().getStatus());
         assertNotNull(history.getFirst().getFailureReason());
+    }
+
+    @Test
+    void activationFailsWhenOwnerEmailAlreadyTaken() {
+        // Create an existing user in some workspace
+        WorkspaceEntity otherWorkspace = workspace("ZZ", "other@forep.vn");
+        UserEntity existingUser = account(otherWorkspace, Role.EMPLOYEE, "some.username", "taken@forep.vn", null);
+        users.saveAndFlush(existingUser);
+
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "FO", "taken@forep.vn", "OwnerPass!2026");
+        successfulPayment(registration, plan);
+        authenticate(Role.PLATFORM_ADMIN, null);
+
+        WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
+                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+
+        assertEquals(WorkspaceRegistrationValidationService.ERR_OWNER_EMAIL_ALREADY_EXISTS, exception.getErrorCode());
+        // Verify rollback occurred: no new workspace, no workspace subscriptions, registration workspaceId is still null
+        assertEquals(1, workspaces.count()); // only otherWorkspace exists
+        assertEquals(0, workspaceSubscriptions.count());
+        assertNull(registrations.findById(registration.getId()).orElseThrow().getWorkspaceId());
+    }
+
+    @Test
+    void activationFailsWhenRegistrationExpired() {
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "EX", "expired@forep.vn", "OwnerPass!2026");
+        registration.setExpiredAt(OffsetDateTime.now().minusMinutes(5));
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT); // make it non-activatable to trigger expiry check
+        registrations.saveAndFlush(registration);
+        authenticate(Role.PLATFORM_ADMIN, null);
+
+        WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
+                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+
+        assertEquals(WorkspaceRegistrationValidationService.ERR_REGISTRATION_EXPIRED, exception.getErrorCode());
+    }
+
+    @Test
+    void activationFailsWhenRequiredFieldMissing() {
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "MS", "missing@forep.vn", "OwnerPass!2026");
+        registration.setBusinessName("  ");
+        registrations.saveAndFlush(registration);
+        authenticate(Role.PLATFORM_ADMIN, null);
+
+        WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
+                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+
+        assertEquals(WorkspaceRegistrationValidationService.ERR_MISSING_BUSINESS_NAME, exception.getErrorCode());
+    }
+
+    @Test
+    void activationFailsWhenStatusRejected() {
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "RJ", "rejected@forep.vn", "OwnerPass!2026");
+        registration.setRegistrationStatus(RegistrationStatus.REJECTED);
+        registrations.saveAndFlush(registration);
+        authenticate(Role.PLATFORM_ADMIN, null);
+
+        WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
+                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+
+        assertEquals(WorkspaceRegistrationValidationService.ERR_INVALID_REGISTRATION_STATUS, exception.getErrorCode());
+    }
+
+    @Test
+    void adminCreateWorkspaceFailsOnIdentifierCollisionInRegistrations() {
+        SubscriptionPlanEntity plan = plan(2);
+        // Create a registration with identifier "XX"
+        WorkspaceRegistrationEntity reg = registration(plan, "XX", "owner@xx.vn", "OwnerPass!2026");
+        
+        authenticate(Role.PLATFORM_ADMIN, null);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> 
+            service.adminCreateWorkspace(new com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest(
+                "Another Business", "Another Workspace", "XX", "another@xx.vn",
+                "0900000000", null, plan.getId(), 5, "Another Owner", "owner2@xx.vn",
+                null, "OwnerPass!2026", "Rep Name", "rep@xx.vn", null, null, null, null
+            ))
+        );
+
+        assertEquals("Mã workspace đã tồn tại.", exception.getMessage());
     }
 
     private PaymentTransactionEntity successfulPayment(WorkspaceRegistrationEntity registration, SubscriptionPlanEntity plan) {

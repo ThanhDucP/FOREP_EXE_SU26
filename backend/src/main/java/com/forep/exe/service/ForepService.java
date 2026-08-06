@@ -198,6 +198,7 @@ public class ForepService {
     private final ObjectMapper objectMapper;
     private final AccountNamingService accountNamingService;
     private final WorkspaceCredentialsEmailService credentialsEmailService;
+    private final WorkspaceRegistrationValidationService workspaceRegistrationValidator;
 
     public ForepService(WorkspaceRepository workspaces,
                         UserRepository users,
@@ -228,7 +229,8 @@ public class ForepService {
                         PaymentTransactionPersistenceService paymentPersistenceService,
                         ObjectMapper objectMapper,
                         AccountNamingService accountNamingService,
-                        WorkspaceCredentialsEmailService credentialsEmailService) {
+                        WorkspaceCredentialsEmailService credentialsEmailService,
+                        WorkspaceRegistrationValidationService workspaceRegistrationValidator) {
         this.workspaces = workspaces;
         this.users = users;
         this.tasks = tasks;
@@ -259,6 +261,7 @@ public class ForepService {
         this.objectMapper = objectMapper;
         this.accountNamingService = accountNamingService;
         this.credentialsEmailService = credentialsEmailService;
+        this.workspaceRegistrationValidator = workspaceRegistrationValidator;
     }
 
     public LoginView login(LoginRequest request) {
@@ -1608,7 +1611,8 @@ public class ForepService {
     public AdminWorkspaceCreationView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
         requireSystemAdmin();
         String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
-        if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent()) {
+        if (workspaces.findByShortCodeIgnoreCase(shortCode).isPresent()
+                || workspaceRegistrations.findByWorkspaceIdentifierIgnoreCase(shortCode).isPresent()) {
             throw new IllegalArgumentException("Mã workspace đã tồn tại.");
         }
         SubscriptionPlanEntity plan = requireActiveSubscriptionPlan(request.subscriptionPlanId());
@@ -2309,6 +2313,26 @@ public class ForepService {
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
+        
+        RegistrationStatus currentStatus = registration.getRegistrationStatus();
+        if (currentStatus == RegistrationStatus.ACTIVATED) {
+            log.info("Registration {} is already ACTIVATED – returning current state", registrationId);
+            return toWorkspaceRegistrationView(registration, List.of());
+        }
+
+        if (currentStatus == RegistrationStatus.REJECTED
+                || currentStatus == RegistrationStatus.CANCELLED
+                || currentStatus == RegistrationStatus.EXPIRED) {
+            log.warn("Attempted to approve registration {} with terminal status {}",
+                    registrationId, currentStatus);
+            throw new WorkspaceValidationException(
+                    WorkspaceRegistrationValidationService.ERR_INVALID_REGISTRATION_STATUS,
+                    "Hồ sơ đăng ký ở trạng thái " + currentStatus + " không thể được phê duyệt.");
+        }
+        
+        // Run pre-activation validation first to catch expiration or other validation errors early
+        workspaceRegistrationValidator.validateForActivation(registration);
+
         PaymentTransactionEntity successfulPayment = paymentTransactions
                 .findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
                 .filter(payment -> (payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS)
@@ -5011,6 +5035,8 @@ public class ForepService {
             if (workspace.getPaymentStatus() == PaymentStatus.CONFIRMED && workspace.getStatus() == WorkspaceStatus.ACTIVE) {
                 return List.of();
             }
+            // Pre-activation validation
+            workspaceRegistrationValidator.validateForActivation(registration);
             if (paymentTransactionId == null) {
                 throw new IllegalArgumentException("The admin-created workspace requires a successful PayOS payment transaction.");
             }
@@ -5037,6 +5063,8 @@ public class ForepService {
             audit(workspace.getId(), "ACTIVATE_ADMIN_WORKSPACE_AFTER_PAYOS_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
             return owners;
         }
+        // Pre-activation validation
+        workspaceRegistrationValidator.validateForActivation(registration);
         if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED && registration.getRegistrationStatus() != RegistrationStatus.PAYMENT_CONFIRMED) {
             throw new IllegalArgumentException("Workspace can only be activated after confirmed payment.");
         }
