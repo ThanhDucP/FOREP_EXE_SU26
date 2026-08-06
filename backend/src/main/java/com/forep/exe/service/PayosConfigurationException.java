@@ -1,9 +1,9 @@
 package com.forep.exe.service;
 
-public class MomoConfigurationException extends IllegalArgumentException {
+public class PayosConfigurationException extends IllegalArgumentException {
     private final String field;
 
-    public MomoConfigurationException(String field, String message) {
+    public PayosConfigurationException(String field, String message) {
         super(message);
         this.field = field;
     }

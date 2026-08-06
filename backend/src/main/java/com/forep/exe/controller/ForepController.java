@@ -11,7 +11,7 @@ import com.forep.exe.dto.Requests.AdminUpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
-import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
+import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
@@ -23,7 +23,7 @@ import com.forep.exe.dto.Requests.EstimateHoursRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
-import com.forep.exe.dto.Requests.PaymentCallbackRequest;
+import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RecommendationExplanationRequest;
 import com.forep.exe.dto.Requests.RecommendationResultExplanationRequest;
@@ -51,7 +51,7 @@ import com.forep.exe.domain.Enums.JobPositionStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.service.ForepService;
-import com.forep.exe.service.MomoPaymentService.MomoProviderException;
+import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -133,9 +133,9 @@ public class ForepController {
         return ApiResponse.ok(service.payment(paymentId));
     }
 
-    @PostMapping("/payments/momo/callback")
-    ApiResponse<?> momoCallback(@RequestBody PaymentCallbackRequest request) {
-        return ApiResponse.ok(service.handleMomoCallback(request));
+    @PostMapping("/payments/payos/webhook")
+    ApiResponse<?> payosWebhook(@RequestBody PayosWebhookRequest request) {
+        return ApiResponse.ok(service.handlePayosWebhook(request));
     }
 
     @GetMapping("/admin/workspaces")
@@ -229,7 +229,7 @@ public class ForepController {
     }
 
     @PatchMapping("/admin/payments/{paymentId}/confirm")
-    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmMomoPaymentRequest request) {
+    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmPayosPaymentRequest request) {
         return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 
@@ -628,10 +628,10 @@ public class ForepController {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
     }
 
-    @ExceptionHandler(MomoProviderException.class)
+    @ExceptionHandler(PayosProviderException.class)
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
-        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
+    ApiResponse<?> handlePayosProviderError(PayosProviderException exception) {
+        return ApiResponse.error("PAYOS_PROVIDER_ERROR", exception.getMessage(), null);
     }
 
     @ExceptionHandler(AiRateLimitException.class)

@@ -32,6 +32,10 @@ public class PaymentTransactionEntity extends BaseEntity {
     private String orderCode;
     @Column(nullable = false, unique = true)
     private String requestId;
+    private String paymentLinkId;
+    private UUID referenceId;
+    private UUID userId;
+    private String responseCode;
     private String providerTransactionId;
     private String providerName;
     private String providerPaymentUrl;
@@ -80,6 +84,14 @@ public class PaymentTransactionEntity extends BaseEntity {
     public void setOrderCode(String orderCode) { this.orderCode = orderCode; }
     public String getRequestId() { return requestId; }
     public void setRequestId(String requestId) { this.requestId = requestId; }
+    public String getPaymentLinkId() { return paymentLinkId; }
+    public void setPaymentLinkId(String paymentLinkId) { this.paymentLinkId = paymentLinkId; }
+    public UUID getReferenceId() { return referenceId; }
+    public void setReferenceId(UUID referenceId) { this.referenceId = referenceId; }
+    public UUID getUserId() { return userId; }
+    public void setUserId(UUID userId) { this.userId = userId; }
+    public String getResponseCode() { return responseCode; }
+    public void setResponseCode(String responseCode) { this.responseCode = responseCode; }
     public String getProviderTransactionId() { return providerTransactionId; }
     public void setProviderTransactionId(String providerTransactionId) { this.providerTransactionId = providerTransactionId; }
     public String getProviderName() { return providerName; }

@@ -10,13 +10,13 @@ import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.dto.Requests.CreateHrAccountRequest;
-import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
+import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
-import com.forep.exe.dto.Requests.PaymentCallbackRequest;
-import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
+import com.forep.exe.dto.Requests.PayosWebhookRequest;
+import com.forep.exe.dto.Requests.UpdatePayosConfigRequest;
 import com.forep.exe.persistence.AuditLogRepository;
-import com.forep.exe.persistence.PaymentQrSettingEntity;
-import com.forep.exe.persistence.PaymentQrSettingRepository;
+import com.forep.exe.persistence.PayosConfigEntity;
+import com.forep.exe.persistence.PayosConfigRepository;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.RolePermissionEntity;
@@ -62,7 +62,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.task.scheduling.enabled=false",
         "forep.ai.service-url=",
-        "forep.momo.config-encryption-key=0123456789abcdef0123456789abcdef"
+        "forep.payos.config-encryption-key=0123456789abcdef0123456789abcdef"
 })
 class WorkspaceAccountFlowIntegrationTest {
     @Autowired private ForepService service;
@@ -71,9 +71,9 @@ class WorkspaceAccountFlowIntegrationTest {
     @Autowired private WorkspaceSubscriptionRepository workspaceSubscriptions;
     @Autowired private SubscriptionPlanRepository plans;
     @Autowired private PaymentTransactionRepository payments;
-    @Autowired private PaymentQrSettingRepository paymentSettings;
-    @Autowired private MomoPaymentService momoPaymentService;
-    @Autowired private MomoCredentialCipher momoCredentialCipher;
+    @Autowired private PayosConfigRepository payosConfigs;
+    @Autowired private PayosPaymentService payosPaymentService;
+    @Autowired private PayosCredentialCipher payosCredentialCipher;
     @Autowired private UserRepository users;
     @Autowired private RolePermissionRepository rolePermissions;
     @Autowired private AuditLogRepository auditLogs;
@@ -85,7 +85,7 @@ class WorkspaceAccountFlowIntegrationTest {
         auditLogs.deleteAll();
         workspaceSubscriptions.deleteAll();
         payments.deleteAll();
-        paymentSettings.deleteAll();
+        payosConfigs.deleteAll();
         registrations.deleteAll();
         users.deleteAll();
         workspaces.deleteAll();
@@ -147,7 +147,7 @@ class WorkspaceAccountFlowIntegrationTest {
         assertEquals(1, workspaces.count());
         assertEquals(1, users.findByWorkspaceIdAndRoleOrderByFullNameAsc(activated.getWorkspaceId(), Role.BUSINESS_OWNER).size());
         assertEquals(1, workspaceSubscriptions.findByWorkspaceIdOrderByCreatedAtDesc(activated.getWorkspaceId()).size());
-        assertEquals(PaymentTransactionStatus.SUCCESS, payments.findById(payment.getId()).orElseThrow().getStatus());
+        assertEquals(PaymentTransactionStatus.PAID, payments.findById(payment.getId()).orElseThrow().getStatus());
     }
 
     @Test
@@ -264,7 +264,7 @@ class WorkspaceAccountFlowIntegrationTest {
             start.await();
             authenticate(Role.PLATFORM_ADMIN, null);
             String orderId = payments.findById(paymentId).orElseThrow().getOrderCode();
-            service.adminConfirmPayment(paymentId, new ConfirmMomoPaymentRequest("MOMO-TRANS-CONCURRENT", orderId, null));
+            service.adminConfirmPayment(paymentId, new ConfirmPayosPaymentRequest("PAYOS-LINK-CONCURRENT", orderId, null));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
@@ -273,45 +273,35 @@ class WorkspaceAccountFlowIntegrationTest {
         }
     }
 
-    private void saveMomoSetting() {
-        saveMomoSetting("https://test-payment.momo.vn");
+    private void savePayosConfig() {
+        savePayosConfig("https://api.payos.vn");
     }
 
-    private void saveMomoSetting(String providerBaseUrl) {
+    private void savePayosConfig(String providerBaseUrl) {
         OffsetDateTime now = OffsetDateTime.now();
-        PaymentQrSettingEntity setting = new PaymentQrSettingEntity();
-        setting.setPaymentMethod(PaymentMethod.MOMO);
-        setting.setProviderEndpoint(providerBaseUrl);
-        setting.setPartnerCode("PARTNER");
-        setting.setAccessKey("ACCESS");
-        setting.setSecretKeyEncrypted(momoCredentialCipher.encrypt("SECRET"));
+        PayosConfigEntity setting = new PayosConfigEntity();
+        setting.setId(UUID.fromString("39000000-0000-0000-0000-000000000002"));
+        setting.setApiEndpoint(providerBaseUrl);
+        setting.setClientId("CLIENT");
+        setting.setApiKeyEncrypted(payosCredentialCipher.encrypt("API_KEY"));
+        setting.setChecksumKeyEncrypted(payosCredentialCipher.encrypt("CHECKSUM"));
         setting.setReturnUrl("https://forep-ai.vercel.app/payment/return");
-        setting.setNotifyUrl("https://api.example.com/api/payments/momo/ipn");
-        setting.setEnabled(true);
+        setting.setCancelUrl("https://forep-ai.vercel.app/payment/cancel");
+        setting.setActive(true);
         setting.setCreatedAt(now);
         setting.setUpdatedAt(now);
-        paymentSettings.saveAndFlush(setting);
+        payosConfigs.saveAndFlush(setting);
     }
 
-    private PaymentCallbackRequest signedCallback(PaymentTransactionEntity payment, long amount) {
+    private PayosWebhookRequest signedWebhook(PaymentTransactionEntity payment, long amount) {
         java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
-        payload.put("partnerCode", "PARTNER");
-        payload.put("orderId", payment.getOrderCode());
-        payload.put("requestId", payment.getRequestId());
+        payload.put("orderCode", Long.parseLong(payment.getOrderCode()));
         payload.put("amount", amount);
-        payload.put("orderInfo", "FOREP workspace registration " + payment.getOrderCode());
-        payload.put("orderType", "momo_wallet");
-        payload.put("transId", 4088878653L);
-        payload.put("resultCode", 0);
-        payload.put("message", "Successful.");
-        payload.put("payType", "qr");
-        payload.put("responseTime", 1721720663942L);
-        payload.put("extraData", "");
-        String signature = momoPaymentService.signIpnPayload(payload, "ACCESS", "SECRET");
-        return new PaymentCallbackRequest(
-                "PARTNER", payment.getOrderCode(), payment.getRequestId(), amount,
-                "FOREP workspace registration " + payment.getOrderCode(), "momo_wallet",
-                4088878653L, 0, "Successful.", "qr", 1721720663942L, "", signature);
+        payload.put("paymentLinkId", payment.getPaymentLinkId());
+        payload.put("code", "00");
+        payload.put("desc", "success");
+        String signature = payosPaymentService.hmacSha256(payosPaymentService.webhookRawSignature(payload), "CHECKSUM");
+        return new PayosWebhookRequest("00", "success", true, payload, signature);
     }
 
     private SubscriptionPlanEntity plan(int maxOwners) {
@@ -363,12 +353,14 @@ class WorkspaceAccountFlowIntegrationTest {
         PaymentTransactionEntity payment = new PaymentTransactionEntity();
         payment.setWorkspaceRegistrationId(registration.getId());
         payment.setSubscriptionPlanId(plan.getId());
-        payment.setPaymentMethod(PaymentMethod.MOMO);
+        payment.setPaymentMethod(PaymentMethod.PAYOS);
         payment.setAmount(plan.getPrice());
         payment.setCurrency("VND");
         payment.setPaymentCode("PAY-" + UUID.randomUUID());
-        payment.setOrderCode("ORDER-" + UUID.randomUUID());
+        payment.setOrderCode(Long.toString(System.currentTimeMillis() * 100 + Math.abs(UUID.randomUUID().hashCode() % 100)));
         payment.setRequestId(UUID.randomUUID().toString());
+        payment.setPaymentLinkId("PAYOS-LINK-" + UUID.randomUUID());
+        payment.setProviderTransactionId(payment.getPaymentLinkId());
         payment.setStatus(PaymentTransactionStatus.PENDING);
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
@@ -377,57 +369,56 @@ class WorkspaceAccountFlowIntegrationTest {
     }
 
     @Test
-    void blankSecretUpdatePreservesEncryptedValueAndReadNeverReturnsSecret() {
+    void blankChecksumUpdatePreservesEncryptedValueAndReadNeverReturnsSecrets() {
         authenticate(Role.PLATFORM_ADMIN, null);
-        String secret = "sandbox-secret-key";
-        var first = service.updateMomoPaymentSetting(new UpdatePaymentQrSettingRequest(
-                null, null, null,
-                "https://test-payment.momo.vn/", "PARTNER", "ACCESS", secret,
-                "https://forep-ai.vercel.app/payment/return", "https://api.example.com/api/payments/momo/ipn",
-                null, "FOREP", true));
-        PaymentQrSettingEntity stored = paymentSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseThrow();
-        String encrypted = stored.getSecretKeyEncrypted();
+        String secret = "sandbox-checksum-key";
+        var first = service.updatePayosConfig(new UpdatePayosConfigRequest(
+                "https://api.payos.vn/", "CLIENT", "API_KEY", secret,
+                "https://forep-ai.vercel.app/payment/return", "https://forep-ai.vercel.app/payment/cancel",
+                "FOREP", true));
+        PayosConfigEntity stored = payosConfigs.findAll().getFirst();
+        String encrypted = stored.getChecksumKeyEncrypted();
 
-        var second = service.updateMomoPaymentSetting(new UpdatePaymentQrSettingRequest(
-                null, null, null,
-                "https://test-payment.momo.vn", "PARTNER", "ACCESS", "",
-                "https://forep-ai.vercel.app/payment/return", "https://api.example.com/api/payments/momo/ipn",
-                null, "FOREP", true));
+        var second = service.updatePayosConfig(new UpdatePayosConfigRequest(
+                "https://api.payos.vn", "CLIENT", "", "",
+                "https://forep-ai.vercel.app/payment/return", "https://forep-ai.vercel.app/payment/cancel",
+                "FOREP", true));
 
-        assertTrue(first.secretKeyConfigured());
-        assertTrue(second.secretKeyConfigured());
+        assertTrue(first.apiConfigured());
+        assertTrue(second.apiConfigured());
         assertFalse(encrypted.contains(secret));
-        assertEquals(secret, momoCredentialCipher.decrypt(encrypted));
-        assertEquals(encrypted, paymentSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseThrow().getSecretKeyEncrypted());
-        assertFalse(service.adminMomoPaymentSetting().toString().contains(secret));
+        assertEquals(secret, payosCredentialCipher.decrypt(encrypted));
+        assertEquals(encrypted, payosConfigs.findAll().getFirst().getChecksumKeyEncrypted());
+        assertFalse(service.adminPayosConfig().toString().contains(secret));
+        assertFalse(service.adminPayosConfig().toString().contains("API_KEY"));
     }
 
     @Test
-    void validMomoIpnIsIdempotentAndActivatesOnlyOnce() {
+    void validPayosWebhookIsIdempotentAndActivatesOnlyOnce() {
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "IP", "owner@ipn.vn", "OwnerPass!2026");
         PaymentTransactionEntity payment = payment(registration, plan);
-        saveMomoSetting();
-        PaymentCallbackRequest callback = signedCallback(payment, payment.getAmount().longValueExact());
+        savePayosConfig();
+        PayosWebhookRequest callback = signedWebhook(payment, payment.getAmount().longValueExact());
 
-        var first = service.handleMomoCallback(callback);
-        var second = service.handleMomoCallback(callback);
+        var first = service.handlePayosWebhook(callback);
+        var second = service.handlePayosWebhook(callback);
 
-        assertEquals(PaymentTransactionStatus.SUCCESS, first.status());
-        assertEquals(PaymentTransactionStatus.SUCCESS, second.status());
+        assertEquals(PaymentTransactionStatus.PAID, first.status());
+        assertEquals(PaymentTransactionStatus.PAID, second.status());
         assertEquals(1, workspaces.count());
         assertEquals(1, workspaceSubscriptions.count());
     }
 
     @Test
-    void momoIpnWithMismatchedAmountDoesNotConfirmPayment() {
+    void payosWebhookWithMismatchedAmountDoesNotConfirmPayment() {
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "AM", "owner@amount.vn", "OwnerPass!2026");
         PaymentTransactionEntity payment = payment(registration, plan);
-        saveMomoSetting();
-        PaymentCallbackRequest callback = signedCallback(payment, payment.getAmount().longValueExact() + 1);
+        savePayosConfig();
+        PayosWebhookRequest callback = signedWebhook(payment, payment.getAmount().longValueExact() + 1);
 
-        assertThrows(IllegalArgumentException.class, () -> service.handleMomoCallback(callback));
+        assertThrows(IllegalArgumentException.class, () -> service.handlePayosWebhook(callback));
         assertEquals(PaymentTransactionStatus.PENDING, payments.findById(payment.getId()).orElseThrow().getStatus());
         assertEquals(0, workspaces.count());
     }
@@ -439,11 +430,11 @@ class WorkspaceAccountFlowIntegrationTest {
         registration.setPaymentStatus(PaymentStatus.PENDING);
         registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
         registrations.saveAndFlush(registration);
-        saveMomoSetting("http://127.0.0.1:1");
+        savePayosConfig("http://127.0.0.1:1");
 
-        assertThrows(MomoPaymentService.MomoProviderException.class,
+        assertThrows(PayosPaymentService.PayosProviderException.class,
                 () -> service.publicCreatePayment(registration.getId(), registration.getRegistrationToken(),
-                        new CreatePaymentRequest(PaymentMethod.MOMO)));
+                        new CreatePaymentRequest(PaymentMethod.PAYOS)));
 
         List<PaymentTransactionEntity> history = payments.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registration.getId());
         assertEquals(1, history.size());
@@ -453,8 +444,9 @@ class WorkspaceAccountFlowIntegrationTest {
 
     private PaymentTransactionEntity successfulPayment(WorkspaceRegistrationEntity registration, SubscriptionPlanEntity plan) {
         PaymentTransactionEntity payment = payment(registration, plan);
-        payment.setProviderTransactionId("MOMO-TRANS-" + UUID.randomUUID());
-        payment.setStatus(PaymentTransactionStatus.SUCCESS);
+        payment.setPaymentLinkId("PAYOS-LINK-" + UUID.randomUUID());
+        payment.setProviderTransactionId(payment.getPaymentLinkId());
+        payment.setStatus(PaymentTransactionStatus.PAID);
         payment.setPaidAt(OffsetDateTime.now());
         return payments.saveAndFlush(payment);
     }

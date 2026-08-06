@@ -20,6 +20,7 @@ public interface PaymentTransactionRepository extends JpaRepository<PaymentTrans
     Optional<PaymentTransactionEntity> findByOrderCode(String orderCode);
     Optional<PaymentTransactionEntity> findByRequestId(String requestId);
     Optional<PaymentTransactionEntity> findByProviderTransactionId(String providerTransactionId);
+    Optional<PaymentTransactionEntity> findByPaymentLinkId(String paymentLinkId);
     List<PaymentTransactionEntity> findAllByOrderByCreatedAtDesc();
     List<PaymentTransactionEntity> findByStatusInAndExpiredAtBefore(Collection<PaymentTransactionStatus> statuses, OffsetDateTime expiredAt);
     List<PaymentTransactionEntity> findByWorkspaceRegistrationIdOrderByCreatedAtDesc(UUID workspaceRegistrationId);

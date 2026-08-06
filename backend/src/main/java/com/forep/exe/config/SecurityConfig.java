@@ -43,19 +43,20 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/public/subscription-plans", "/api/public/subscription-plans/*").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/workspaces/register").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/public/workspace-registrations/*", "/api/public/payments/*/status").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/workspace-registrations/*", "/api/public/payments/*/status",
+                                "/api/payments/*/status").permitAll()
                         .requestMatchers(HttpMethod.PATCH, "/api/public/workspace-registrations/*/select-plan",
                                 "/api/public/workspace-registrations/*/cancel").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations/*/payments",
-                                "/api/payment-callbacks/momo", "/api/payments/momo/ipn").permitAll()
+                                "/api/payments/payos/webhook", "/api/v1/payments/payos/webhook").permitAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login",
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.PATCH, "/api/admin/payments/*/confirm", "/api/v1/admin/payments/*/confirm",
                                 "/api/v1/admin/workspace-registrations/*/confirm-payment").hasAuthority(permission(Permission.PAYMENT_CONFIRM))
                         .requestMatchers(HttpMethod.PATCH, "/api/admin/payments/*/reject", "/api/v1/admin/payments/*/reject").hasAuthority(permission(Permission.PAYMENT_CONFIRM))
-                        .requestMatchers(HttpMethod.GET, "/api/admin/momo-payment-setting").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
-                        .requestMatchers(HttpMethod.PUT, "/api/admin/momo-payment-setting").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
+                        .requestMatchers(HttpMethod.GET, "/api/admin/payos-config").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
+                        .requestMatchers(HttpMethod.PUT, "/api/admin/payos-config").hasAuthority(permission(Permission.PAYMENT_QR_MANAGE))
                         .requestMatchers(HttpMethod.GET, "/api/admin/payments/**", "/api/v1/payments/**").hasAuthority(permission(Permission.PAYMENT_HISTORY_VIEW))
                         .requestMatchers("/api/admin/subscription-plans/**", "/api/v1/admin/subscription-plans/**").hasAuthority(permission(Permission.PACKAGE_MANAGE))
                         .requestMatchers("/api/admin/workspace-registrations/**", "/api/admin/workspaces/**",

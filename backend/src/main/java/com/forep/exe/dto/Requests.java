@@ -442,35 +442,23 @@ public final class Requests {
     public record CreatePaymentRequest(@NotNull PaymentMethod paymentMethod) {
     }
 
-    public record UpdatePaymentQrSettingRequest(
-            String qrCodeUrl,
-            String paymentUrl,
-            String deeplink,
-            String providerEndpoint,
-            String partnerCode,
-            String accessKey,
-            String secretKey,
+    public record UpdatePayosConfigRequest(
+            String apiEndpoint,
+            String clientId,
+            String apiKey,
+            String checksumKey,
             String returnUrl,
-            String ipnUrl,
-            String notifyUrl,
+            String cancelUrl,
             String transferContentPrefix,
             boolean enabled
     ) {
     }
 
-    public record PaymentCallbackRequest(
-            String partnerCode,
-            String orderId,
-            String requestId,
-            Long amount,
-            String orderInfo,
-            String orderType,
-            Long transId,
-            Integer resultCode,
-            String message,
-            String payType,
-            Long responseTime,
-            String extraData,
+    public record PayosWebhookRequest(
+            String code,
+            String desc,
+            Boolean success,
+            Map<String, Object> data,
             String signature
     ) {
     }
@@ -478,9 +466,9 @@ public final class Requests {
     public record ReviewRegistrationRequest(String note) {
     }
 
-    public record ConfirmMomoPaymentRequest(
-            @NotBlank String momoTransactionId,
-            @NotBlank String momoOrderId,
+    public record ConfirmPayosPaymentRequest(
+            @NotBlank String paymentLinkId,
+            @NotBlank String orderCode,
             String note
     ) {
     }

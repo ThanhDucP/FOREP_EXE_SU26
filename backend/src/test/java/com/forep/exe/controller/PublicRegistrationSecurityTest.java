@@ -79,7 +79,7 @@ class PublicRegistrationSecurityTest {
     }
 
     @Test
-    void guestCanSelectPlanCreateMomoPaymentAndReadStatusWithoutAuthorizationHeader() throws Exception {
+    void guestCanSelectPlanCreatePayosPaymentAndReadStatusWithoutAuthorizationHeader() throws Exception {
         String registrationId = "20000000-0000-0000-0000-000000000001";
         String planId = "10000000-0000-0000-0000-000000000001";
         String token = "guest-registration-token";
@@ -99,7 +99,7 @@ class PublicRegistrationSecurityTest {
                         .queryParam("token", token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                { "paymentMethod": "MOMO" }
+                                { "paymentMethod": "PAYOS" }
                                 """))
                 .andExpect(status().isOk());
 
@@ -109,24 +109,22 @@ class PublicRegistrationSecurityTest {
     }
 
     @Test
-    void momoIpnIsPublicAndAlwaysAcknowledgedWithHttp200() throws Exception {
-        when(service.handleMomoCallback(any()))
-                .thenThrow(new IllegalArgumentException("Invalid MoMo callback signature."));
+    void payosWebhookIsPublicAndAlwaysAcknowledgedWithHttp200() throws Exception {
+        when(service.handlePayosWebhook(any()))
+                .thenThrow(new IllegalArgumentException("Invalid PayOS webhook signature."));
 
-        mvc.perform(post("/api/payments/momo/ipn")
+        mvc.perform(post("/api/payments/payos/webhook")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "partnerCode":"PARTNER",
-                                  "orderId":"ORDER-1",
-                                  "requestId":"REQUEST-1",
-                                  "amount":1000,
-                                  "resultCode":0,
+                                  "code":"00",
+                                  "success":true,
+                                  "data":{"orderCode":123,"amount":1000,"paymentLinkId":"link","code":"00"},
                                   "signature":"invalid"
                                 }
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.errors[0].code").value("MOMO_IPN_REJECTED"));
+                .andExpect(jsonPath("$.errors[0].code").value("PAYOS_WEBHOOK_REJECTED"));
     }
 
     @Test

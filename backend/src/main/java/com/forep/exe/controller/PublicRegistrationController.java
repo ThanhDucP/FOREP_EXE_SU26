@@ -2,11 +2,11 @@ package com.forep.exe.controller;
 
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
-import com.forep.exe.dto.Requests.PaymentCallbackRequest;
+import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
-import com.forep.exe.service.MomoPaymentService.MomoProviderException;
+import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -69,16 +69,25 @@ public class PublicRegistrationController {
         return ApiResponse.ok(service.publicPaymentStatus(paymentCode, token));
     }
 
-    @PostMapping({"/payment-callbacks/momo", "/payments/momo/ipn"})
-    ApiResponse<?> momoCallback(@RequestBody PaymentCallbackRequest request) {
+    @GetMapping("/payments/{orderCode}/status")
+    ApiResponse<?> payosPaymentStatus(@PathVariable String orderCode) {
+        return ApiResponse.ok(service.payosPaymentStatus(orderCode));
+    }
+
+    @PostMapping("/payments/payos/webhook")
+    ApiResponse<?> payosWebhook(@RequestBody PayosWebhookRequest request) {
         try {
-            ApiResponse<?> response = ApiResponse.ok(service.handleMomoCallback(request));
-            log.info("Accepted MoMo IPN orderId={} requestId={} resultCode={}", request.orderId(), request.requestId(), request.resultCode());
+            ApiResponse<?> response = ApiResponse.ok(service.handlePayosWebhook(request));
+            log.info("Accepted PayOS webhook orderCode={} code={}", webhookValue(request, "orderCode"), request.code());
             return response;
         } catch (IllegalArgumentException | IllegalStateException exception) {
-            log.warn("Rejected MoMo IPN orderId={} requestId={} reason={}", request.orderId(), request.requestId(), exception.getMessage());
-            return ApiResponse.error("MOMO_IPN_REJECTED", exception.getMessage(), null);
+            log.warn("Rejected PayOS webhook orderCode={} reason={}", webhookValue(request, "orderCode"), exception.getMessage());
+            return ApiResponse.error("PAYOS_WEBHOOK_REJECTED", exception.getMessage(), null);
         }
+    }
+
+    private Object webhookValue(PayosWebhookRequest request, String key) {
+        return request == null || request.data() == null ? null : request.data().get(key);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -87,9 +96,9 @@ public class PublicRegistrationController {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
     }
 
-    @ExceptionHandler(MomoProviderException.class)
+    @ExceptionHandler(PayosProviderException.class)
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
-        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
+    ApiResponse<?> handlePayosProviderError(PayosProviderException exception) {
+        return ApiResponse.error("PAYOS_PROVIDER_ERROR", exception.getMessage(), null);
     }
 }

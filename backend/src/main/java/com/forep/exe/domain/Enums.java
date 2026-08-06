@@ -167,11 +167,11 @@ public final class Enums {
     }
 
     public enum PaymentMethod {
-        MOMO, BANK_TRANSFER
+        PAYOS, BANK_TRANSFER, MOMO // MOMO is retained only to read historical transactions.
     }
 
     public enum PaymentTransactionStatus {
-        PENDING, PROCESSING, SUCCESS, FAILED, EXPIRED, CANCELLED, REFUNDED, MANUAL_REVIEW
+        PENDING, PROCESSING, PAID, SUCCESS, FAILED, EXPIRED, CANCELLED, REFUNDED, MANUAL_REVIEW
     }
 
     public enum RegistrationStatus {

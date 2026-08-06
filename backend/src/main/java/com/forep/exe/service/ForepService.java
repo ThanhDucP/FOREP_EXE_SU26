@@ -42,7 +42,7 @@ import com.forep.exe.dto.Requests.AssignTeamRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.BusinessPositionRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
-import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
+import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreateHrAccountRequest;
@@ -56,7 +56,7 @@ import com.forep.exe.dto.Requests.EstimateHoursRequest;
 import com.forep.exe.dto.Requests.ExtractTasksRequest;
 import com.forep.exe.dto.Requests.JobPositionRequest;
 import com.forep.exe.dto.Requests.LoginRequest;
-import com.forep.exe.dto.Requests.PaymentCallbackRequest;
+import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.dto.Requests.RecommendAssigneeRequest;
 import com.forep.exe.dto.Requests.RecommendationExplanationRequest;
 import com.forep.exe.dto.Requests.RecommendationResultExplanationRequest;
@@ -70,7 +70,7 @@ import com.forep.exe.dto.Requests.SubmitPaymentRequest;
 import com.forep.exe.dto.Requests.TaskAttachmentRequest;
 import com.forep.exe.dto.Requests.TaskDomainAnalysisRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
-import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
+import com.forep.exe.dto.Requests.UpdatePayosConfigRequest;
 import com.forep.exe.dto.Requests.UpdateEmployeeRequest;
 import com.forep.exe.dto.Requests.UpdateProgressRequest;
 import com.forep.exe.dto.Requests.UpdateTaskCustomerInfoRequest;
@@ -79,8 +79,8 @@ import com.forep.exe.dto.Requests.UpdateTaskStatusRequest;
 import com.forep.exe.dto.Requests.UpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.WorkloadRiskExplanationRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
-import com.forep.exe.service.MomoPaymentService.MomoProviderConfig;
-import com.forep.exe.service.MomoPaymentService.MomoProviderException;
+import com.forep.exe.service.PayosPaymentService.PayosProviderConfig;
+import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import com.forep.exe.persistence.AiSuggestionEntity;
 import com.forep.exe.persistence.AiSuggestionRepository;
 import com.forep.exe.persistence.AiHistoryEntity;
@@ -99,8 +99,8 @@ import com.forep.exe.persistence.NotificationEntity;
 import com.forep.exe.persistence.NotificationRepository;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
-import com.forep.exe.persistence.PaymentQrSettingEntity;
-import com.forep.exe.persistence.PaymentQrSettingRepository;
+import com.forep.exe.persistence.PayosConfigEntity;
+import com.forep.exe.persistence.PayosConfigRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
 import com.forep.exe.persistence.TaskAssigneeEntity;
@@ -123,7 +123,7 @@ import com.forep.exe.security.AuthenticatedUser;
 import com.forep.exe.security.AuthorizationService;
 import com.forep.exe.security.JwtService;
 import com.forep.exe.security.SecurityContext;
-import com.forep.exe.service.MomoPaymentService.ProviderPaymentResult;
+import com.forep.exe.service.PayosPaymentService.ProviderPaymentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -165,6 +165,7 @@ public class ForepService {
     private static final Logger log = LoggerFactory.getLogger(ForepService.class);
     private static final String RULE_BASED_FALLBACK_SOURCE = "RULE_BASED_FALLBACK";
     private static final UUID SYSTEM_ENTITY_ID = new UUID(0L, 0L);
+    private static final UUID PAYOS_CONFIG_ID = UUID.fromString("39000000-0000-0000-0000-000000000002");
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final WorkspaceRepository workspaces;
@@ -179,7 +180,7 @@ public class ForepService {
     private final WorkspaceRegistrationRepository workspaceRegistrations;
     private final WorkspaceSubscriptionRepository workspaceSubscriptions;
     private final PaymentTransactionRepository paymentTransactions;
-    private final PaymentQrSettingRepository paymentQrSettings;
+    private final PayosConfigRepository payosConfigs;
     private final BusinessFeedbackRepository businessFeedback;
     private final TaskAssigneeRepository taskAssignees;
     private final TaskAttachmentRepository taskAttachments;
@@ -191,8 +192,8 @@ public class ForepService {
     private final SecurityContext securityContext;
     private final AuthorizationService authorizationService;
     private final AiServiceClient aiServiceClient;
-    private final MomoPaymentService momoPaymentService;
-    private final MomoCredentialCipher momoCredentialCipher;
+    private final PayosPaymentService payosPaymentService;
+    private final PayosCredentialCipher payosCredentialCipher;
     private final PaymentTransactionPersistenceService paymentPersistenceService;
     private final ObjectMapper objectMapper;
     private final AccountNamingService accountNamingService;
@@ -209,7 +210,7 @@ public class ForepService {
                         WorkspaceRegistrationRepository workspaceRegistrations,
                         WorkspaceSubscriptionRepository workspaceSubscriptions,
                         PaymentTransactionRepository paymentTransactions,
-                        PaymentQrSettingRepository paymentQrSettings,
+                        PayosConfigRepository payosConfigs,
                         BusinessFeedbackRepository businessFeedback,
                         TaskAssigneeRepository taskAssignees,
                         TaskAttachmentRepository taskAttachments,
@@ -221,8 +222,8 @@ public class ForepService {
                         SecurityContext securityContext,
                         AuthorizationService authorizationService,
                         AiServiceClient aiServiceClient,
-                        MomoPaymentService momoPaymentService,
-                        MomoCredentialCipher momoCredentialCipher,
+                        PayosPaymentService payosPaymentService,
+                        PayosCredentialCipher payosCredentialCipher,
                         PaymentTransactionPersistenceService paymentPersistenceService,
                         ObjectMapper objectMapper,
                         AccountNamingService accountNamingService) {
@@ -238,7 +239,7 @@ public class ForepService {
         this.workspaceRegistrations = workspaceRegistrations;
         this.workspaceSubscriptions = workspaceSubscriptions;
         this.paymentTransactions = paymentTransactions;
-        this.paymentQrSettings = paymentQrSettings;
+        this.payosConfigs = payosConfigs;
         this.businessFeedback = businessFeedback;
         this.taskAssignees = taskAssignees;
         this.taskAttachments = taskAttachments;
@@ -250,8 +251,8 @@ public class ForepService {
         this.securityContext = securityContext;
         this.authorizationService = authorizationService;
         this.aiServiceClient = aiServiceClient;
-        this.momoPaymentService = momoPaymentService;
-        this.momoCredentialCipher = momoCredentialCipher;
+        this.payosPaymentService = payosPaymentService;
+        this.payosCredentialCipher = payosCredentialCipher;
         this.paymentPersistenceService = paymentPersistenceService;
         this.objectMapper = objectMapper;
         this.accountNamingService = accountNamingService;
@@ -1207,7 +1208,7 @@ public class ForepService {
     }
 
     private boolean isSuccessfulPayment(PaymentTransactionEntity payment) {
-        return payment.getStatus() == PaymentTransactionStatus.SUCCESS;
+        return payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS;
     }
 
     private boolean isFailedPayment(PaymentTransactionEntity payment) {
@@ -1600,7 +1601,7 @@ public class ForepService {
         return toPlatformWorkspaceView(requireWorkspace(workspaceId));
     }
 
-    @Transactional(noRollbackFor = MomoProviderException.class)
+    @Transactional(noRollbackFor = PayosProviderException.class)
     public AdminWorkspaceCreationView adminCreateWorkspace(AdminCreateWorkspaceRequest request) {
         requireSystemAdmin();
         String shortCode = hasText(request.workspaceIdentifier()) ? normalizeShortCode(request.workspaceIdentifier()) : nextAvailableShortCode(request.workspaceName());
@@ -1664,7 +1665,7 @@ public class ForepService {
         registration.setUpdatedAt(now);
         registration = workspaceRegistrations.save(registration);
 
-        PaymentTransactionView payment = createPaymentForRegistration(registration.getId(), new CreatePaymentRequest(PaymentMethod.MOMO));
+        PaymentTransactionView payment = createPaymentForRegistration(registration.getId(), new CreatePaymentRequest(PaymentMethod.PAYOS));
         audit(workspace.getId(), "ADMIN_CREATE_PENDING_WORKSPACE", "WORKSPACE", workspace.getId(), null, toPlatformWorkspaceView(workspace));
         return new AdminWorkspaceCreationView(toPlatformWorkspaceView(workspace), toWorkspaceRegistrationView(registration), payment);
     }
@@ -2010,7 +2011,7 @@ public class ForepService {
         return toWorkspaceRegistrationView(workspaceRegistrations.save(registration));
     }
 
-    @Transactional(noRollbackFor = MomoProviderException.class)
+    @Transactional(noRollbackFor = PayosProviderException.class)
     public PaymentTransactionView createPayment(UUID registrationId, CreatePaymentRequest request) {
         requireSystemAdmin();
         return createPaymentForRegistration(registrationId, request);
@@ -2036,37 +2037,47 @@ public class ForepService {
         PaymentTransactionEntity payment = new PaymentTransactionEntity();
         payment.setWorkspaceRegistrationId(registration.getId());
         payment.setSubscriptionPlanId(plan.getId());
-        if (request.paymentMethod() != PaymentMethod.MOMO) {
-            throw new IllegalArgumentException("Only MoMo payment is supported.");
+        if (request.paymentMethod() != PaymentMethod.PAYOS) {
+            throw new IllegalArgumentException("Only PayOS payment is supported.");
         }
-        payment.setPaymentMethod(PaymentMethod.MOMO);
+        payment.setPaymentMethod(PaymentMethod.PAYOS);
         payment.setAmount(plan.getPrice());
         payment.setCurrency("VND");
         payment.setPaymentCode(uniquePaymentCode());
-        payment.setOrderCode(uniqueOrderCode());
+        payment.setOrderCode(uniquePayosOrderCode());
         payment.setRequestId(uniqueRequestId());
-        PaymentQrSettingEntity qrSetting = requireEnabledMomoPaymentSetting();
-        payment.setTransferContent(transferContent(qrSetting, registration, payment));
-        payment.setPaymentConfigurationSnapshot(paymentConfigurationSnapshot(qrSetting));
+        payment.setReferenceId(registration.getId());
+        payment.setUserId(safeCurrentUserId());
+        PayosConfigEntity payosConfig = requireEnabledPayosConfig();
+        payment.setTransferContent(transferContent(payosConfig, registration, payment));
+        payment.setPaymentConfigurationSnapshot(paymentConfigurationSnapshot(payosConfig));
         payment.setStatus(PaymentTransactionStatus.PENDING);
         payment.setExpiredAt(now.plusMinutes(30));
         payment.setCreatedAt(now);
         payment.setUpdatedAt(now);
-        payment.setProviderName("MOMO");
+        payment.setProviderName("PAYOS");
         payment = paymentPersistenceService.persistPending(payment);
 
         ProviderPaymentResult providerResult;
         try {
-            providerResult = momoPaymentService.createPayment(payment, momoProviderConfig(qrSetting));
+            long amount = payment.getAmount().longValueExact();
+            long orderCode = Long.parseLong(payment.getOrderCode());
+            List<Map<String, Object>> items = List.of(Map.of(
+                    "name", plan.getName(), "quantity", 1, "price", amount));
+            providerResult = payosPaymentService.createPayment(orderCode, amount, payment.getTransferContent(), items,
+                    payosProviderConfig(payosConfig));
         } catch (RuntimeException exception) {
             paymentPersistenceService.markProviderFailure(payment, exception.getMessage());
             throw exception;
         }
-        payment.setProviderName("MOMO");
-        payment.setProviderPaymentUrl(providerResult.paymentUrl());
-        payment.setProviderDeeplink(providerResult.deeplink());
-        payment.setProviderQrCodeUrl(providerResult.qrCodeUrl());
-        payment.setQrDisplayData(providerResult.qrCodeUrl());
+        payment.setProviderName("PAYOS");
+        payment.setProviderPaymentUrl(providerResult.checkoutUrl());
+        payment.setPaymentLinkId(providerResult.paymentLinkId());
+        payment.setProviderTransactionId(providerResult.paymentLinkId());
+        payment.setResponseCode(providerResult.responseCode());
+        payment.setProviderDeeplink(null);
+        payment.setProviderQrCodeUrl(null);
+        payment.setQrDisplayData(null);
         payment.setBankCode(null);
         payment.setBankName(null);
         payment.setBankAccountNumber(null);
@@ -2087,83 +2098,62 @@ public class ForepService {
         return toPaymentTransactionView(requirePayment(paymentId));
     }
 
-    public PaymentQrSettingView adminMomoPaymentSetting() {
+    public PayosConfigView adminPayosConfig() {
         requireSystemAdmin();
-        OffsetDateTime now = OffsetDateTime.now();
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseGet(() -> {
-            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
-            item.setPaymentMethod(PaymentMethod.MOMO);
-            item.setEnabled(false);
-            item.setCreatedAt(now);
-            item.setUpdatedAt(now);
-            return paymentQrSettings.save(item);
-        });
-        return toPaymentQrSettingView(setting);
+        return payosConfigs.findById(PAYOS_CONFIG_ID).map(this::toPayosConfigView)
+                .orElse(new PayosConfigView(null, null, null, null, null, null, false, false, null));
     }
 
-    public PaymentQrSettingView updateMomoPaymentSetting(UpdatePaymentQrSettingRequest request) {
-        return updatePaymentQrSetting(PaymentMethod.MOMO, request);
-    }
-
-    private PaymentQrSettingView updatePaymentQrSetting(PaymentMethod paymentMethod, UpdatePaymentQrSettingRequest request) {
+    public PayosConfigView updatePayosConfig(UpdatePayosConfigRequest request) {
         requireSystemAdmin();
         if (request == null) {
-            throw new MomoConfigurationException(null, "MoMo configuration request is required.");
-        }
-        if (hasText(request.qrCodeUrl()) || hasText(request.paymentUrl()) || hasText(request.deeplink())) {
-            throw new MomoConfigurationException("providerEndpoint", "Payment URLs are not accepted in admin configuration. Configure the real MoMo provider instead.");
-        }
-        if (paymentMethod != PaymentMethod.MOMO) {
-            throw new IllegalArgumentException("Only MoMo payment configuration is supported.");
+            throw new PayosConfigurationException(null, "PayOS configuration request is required.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO).orElseGet(() -> {
-            PaymentQrSettingEntity item = new PaymentQrSettingEntity();
-            item.setPaymentMethod(PaymentMethod.MOMO);
+        PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID).orElseGet(() -> {
+            PayosConfigEntity item = new PayosConfigEntity();
+            item.setId(PAYOS_CONFIG_ID);
             item.setCreatedAt(now);
             return item;
         });
-        setting.setQrCodeUrl(null);
-        setting.setQrFileId(null);
-        setting.setPaymentUrl(null);
-        setting.setDeeplink(null);
-        setting.setBankCode(null);
-        setting.setBankName(null);
-        setting.setBankAccountNumber(null);
-        setting.setBankAccountName(null);
-        String baseUrl = momoPaymentService.normalizeBaseUrl(requiredText("providerEndpoint", request.providerEndpoint()));
-        String partnerCode = requiredText("partnerCode", request.partnerCode());
-        String accessKey = requiredText("accessKey", request.accessKey());
+        String baseUrl = payosPaymentService.normalizeBaseUrl(requiredText("apiEndpoint", request.apiEndpoint()));
+        String clientId = requiredText("clientId", request.clientId());
         String returnUrl = requiredUrl("returnUrl", request.returnUrl());
-        String ipnUrl = requiredUrl("ipnUrl", hasText(request.ipnUrl()) ? request.ipnUrl() : request.notifyUrl());
-        validateHttpUrl("providerEndpoint", baseUrl);
-        if (hasText(request.transferContentPrefix()) && request.transferContentPrefix().trim().length() > 30) {
-            throw new MomoConfigurationException("transferContentPrefix", "transferContentPrefix must not exceed 30 characters.");
+        String cancelUrl = requiredUrl("cancelUrl", request.cancelUrl());
+        validateHttpUrl("apiEndpoint", baseUrl);
+        if (hasText(request.transferContentPrefix())
+                && !request.transferContentPrefix().trim().matches("[A-Za-z0-9]{1,9}")) {
+            throw new PayosConfigurationException("transferContentPrefix",
+                    "transferContentPrefix must contain 1-9 ASCII letters or digits.");
         }
-        setting.setProviderEndpoint(baseUrl);
-        setting.setPartnerCode(partnerCode);
-        setting.setAccessKey(accessKey);
-        if (hasText(request.secretKey())) {
-            setting.setSecretKeyEncrypted(momoCredentialCipher.encrypt(request.secretKey().trim()));
-        } else if (!hasText(setting.getSecretKeyEncrypted())) {
-            throw new MomoConfigurationException("secretKey", "secretKey is required when saving MoMo configuration for the first time.");
+        setting.setApiEndpoint(baseUrl);
+        setting.setClientId(clientId);
+        if (hasText(request.apiKey())) {
+            setting.setApiKeyEncrypted(payosCredentialCipher.encrypt(request.apiKey().trim()));
+        } else if (!hasText(setting.getApiKeyEncrypted())) {
+            throw new PayosConfigurationException("apiKey", "apiKey is required when saving PayOS configuration for the first time.");
+        }
+        if (hasText(request.checksumKey())) {
+            setting.setChecksumKeyEncrypted(payosCredentialCipher.encrypt(request.checksumKey().trim()));
+        } else if (!hasText(setting.getChecksumKeyEncrypted())) {
+            throw new PayosConfigurationException("checksumKey", "checksumKey is required when saving PayOS configuration for the first time.");
         }
         setting.setReturnUrl(returnUrl);
-        setting.setNotifyUrl(ipnUrl);
-        if (request.enabled() && !momoPaymentService.isRealProviderConfigured(momoProviderConfig(setting))) {
-            throw new IllegalArgumentException("MoMo provider configuration is incomplete.");
-        }
-        setting.setTransferContentPrefix(blankToNull(request.transferContentPrefix()));
-        setting.setEnabled(request.enabled());
+        setting.setCancelUrl(cancelUrl);
+        setting.setTransferPrefix(blankToNull(request.transferContentPrefix()));
+        setting.setActive(request.enabled());
         setting.setUpdatedBy(currentUser().userId());
         setting.setUpdatedAt(now);
-        setting = paymentQrSettings.save(setting);
-        audit(null, "ADMIN_UPDATE_MOMO_PAYMENT_SETTING", "MOMO_PAYMENT_SETTING", setting.getId(), null,
-                Map.of("enabled", setting.isEnabled(), "secretKeyConfigured", true, "updatedAt", setting.getUpdatedAt()));
-        return toPaymentQrSettingView(setting);
+        if (request.enabled() && !payosPaymentService.isConfigured(payosProviderConfig(setting))) {
+            throw new IllegalArgumentException("PayOS provider configuration is incomplete.");
+        }
+        setting = payosConfigs.save(setting);
+        audit(null, "ADMIN_UPDATE_PAYOS_CONFIG", "PAYOS_CONFIG", setting.getId(), null,
+                Map.of("enabled", setting.isActive(), "apiConfigured", true, "updatedAt", setting.getUpdatedAt()));
+        return toPayosConfigView(setting);
     }
 
-    @Transactional(noRollbackFor = MomoProviderException.class)
+    @Transactional(noRollbackFor = PayosProviderException.class)
     public PublicPaymentStatusView publicCreatePayment(UUID registrationId, String token, CreatePaymentRequest request) {
         requireWorkspaceRegistrationWithToken(registrationId, token);
         PaymentTransactionView payment = createPaymentForRegistration(registrationId, request);
@@ -2178,52 +2168,72 @@ public class ForepService {
         return toPublicPaymentStatusView(payment, registration);
     }
 
-    public PaymentTransactionView handleMomoCallback(PaymentCallbackRequest request) {
-        PaymentTransactionEntity payment = requirePaymentByCallback(request);
-        if (payment.getPaymentMethod() != PaymentMethod.MOMO) {
-            throw new IllegalArgumentException("Only MoMo callbacks are supported.");
+    public PayosPaymentStatusView payosPaymentStatus(String orderCode) {
+        PaymentTransactionEntity payment = paymentTransactions.findByOrderCode(orderCode)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
+            throw new IllegalArgumentException("Payment provider does not match PayOS.");
         }
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO)
-                .orElseThrow(() -> new IllegalArgumentException("MoMo payment method is not configured."));
-        if (!hasText(request.partnerCode()) || !request.partnerCode().equals(setting.getPartnerCode())) {
-            throw new IllegalArgumentException("MoMo IPN partnerCode does not match.");
-        }
-        Map<String, Object> payload = paymentCallbackPayload(request);
-        if (!momoPaymentService.verifyIpnSignature(payload, request.signature(), momoProviderConfig(setting))) {
-            throw new IllegalArgumentException("Invalid MoMo callback signature.");
-        }
-        assertCallbackAmountMatches(payment, request);
-        if (!payment.getRequestId().equals(request.requestId())) {
-            throw new IllegalArgumentException("MoMo IPN requestId does not match this payment transaction.");
-        }
-        boolean success = Integer.valueOf(0).equals(request.resultCode());
-        if (success && request.transId() == null) {
-            throw new IllegalArgumentException("Successful MoMo callback must contain transId.");
-        }
-        if (request.transId() != null) {
-            String transId = request.transId().toString();
-            assertMomoTransactionIdAvailable(payment.getId(), transId);
-            payment.setProviderTransactionId(transId);
-            paymentTransactions.save(payment);
-        }
-        String sanitizedIpn = toJson(payload);
-        return success ? confirmPayment(payment.getId(), false, sanitizedIpn) : failPayment(payment.getId(), sanitizedIpn);
+        payment = refreshExpiredPayment(payment, OffsetDateTime.now());
+        String status = switch (payment.getStatus()) {
+            case PAID, SUCCESS -> "PAID";
+            case FAILED, EXPIRED, CANCELLED -> "FAILED";
+            default -> "PENDING";
+        };
+        return new PayosPaymentStatusView(payment.getOrderCode(), status, payment.getAmount());
     }
 
-    public PaymentTransactionView adminConfirmPayment(UUID paymentId, ConfirmMomoPaymentRequest request) {
+    public PaymentTransactionView handlePayosWebhook(PayosWebhookRequest request) {
+        if (request == null || request.data() == null) {
+            throw new IllegalArgumentException("PayOS webhook data is required.");
+        }
+        PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID)
+                .orElseThrow(() -> new IllegalArgumentException("PayOS is not configured."));
+        String checksumKey = payosCredentialCipher.decrypt(setting.getChecksumKeyEncrypted());
+        if (!payosPaymentService.verifyWebhook(request.data(), request.signature(), checksumKey)) {
+            throw new IllegalArgumentException("Invalid PayOS webhook signature.");
+        }
+        String orderCode = requiredWebhookText(request.data(), "orderCode");
+        PaymentTransactionEntity payment = paymentTransactions.findByOrderCode(orderCode)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
+        if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
+            throw new IllegalArgumentException("Payment provider does not match PayOS.");
+        }
+        long amount = requiredWebhookLong(request.data(), "amount");
+        if (payment.getAmount().compareTo(BigDecimal.valueOf(amount)) != 0) {
+            throw new IllegalArgumentException("Webhook amount does not match the payment transaction.");
+        }
+        String paymentLinkId = requiredWebhookText(request.data(), "paymentLinkId");
+        if (!paymentLinkId.equals(payment.getPaymentLinkId())) {
+            throw new IllegalArgumentException("Webhook paymentLinkId does not match the payment transaction.");
+        }
+        boolean success = Boolean.TRUE.equals(request.success()) && "00".equals(request.code())
+                && "00".equals(String.valueOf(request.data().get("code")));
+        payment.setResponseCode(String.valueOf(request.data().get("code")));
+        paymentTransactions.save(payment);
+        Map<String, Object> sanitizedWebhookData = new LinkedHashMap<>();
+        sanitizedWebhookData.put("code", request.code());
+        sanitizedWebhookData.put("success", request.success());
+        sanitizedWebhookData.put("data", request.data());
+        String sanitizedWebhook = toJson(sanitizedWebhookData);
+        return success ? confirmPayment(payment.getId(), false, sanitizedWebhook) : failPayment(payment.getId(), sanitizedWebhook);
+    }
+
+    public PaymentTransactionView adminConfirmPayment(UUID paymentId, ConfirmPayosPaymentRequest request) {
         requireSystemAdmin();
-        if (request == null || !hasText(request.momoTransactionId()) || !hasText(request.momoOrderId())) {
-            throw new IllegalArgumentException("Both MoMo transId and orderId are required to confirm payment.");
+        if (request == null || !hasText(request.paymentLinkId()) || !hasText(request.orderCode())) {
+            throw new IllegalArgumentException("Both PayOS paymentLinkId and orderCode are required to confirm payment.");
         }
         PaymentTransactionEntity payment = requirePayment(paymentId);
-        if (payment.getPaymentMethod() != PaymentMethod.MOMO) {
-            throw new IllegalArgumentException("Only MoMo payments can be confirmed.");
+        if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
+            throw new IllegalArgumentException("Only PayOS payments can be confirmed.");
         }
-        if (!payment.getOrderCode().equals(request.momoOrderId().trim())) {
-            throw new IllegalArgumentException("MoMo order ID does not match this payment invoice.");
+        if (!payment.getOrderCode().equals(request.orderCode().trim())) {
+            throw new IllegalArgumentException("PayOS orderCode does not match this payment invoice.");
         }
-        assertMomoTransactionIdAvailable(paymentId, request.momoTransactionId());
-        payment.setProviderTransactionId(request.momoTransactionId().trim());
+        assertPayosPaymentLinkIdAvailable(paymentId, request.paymentLinkId());
+        payment.setPaymentLinkId(request.paymentLinkId().trim());
+        payment.setProviderTransactionId(request.paymentLinkId().trim());
         payment.setUpdatedAt(OffsetDateTime.now());
         paymentTransactions.save(payment);
         return confirmPayment(paymentId, true, request.note());
@@ -2253,7 +2263,7 @@ public class ForepService {
         requireSystemAdmin();
         if (registrationId != null) {
             requireWorkspaceRegistration(registrationId);
-            throw new IllegalArgumentException("Manual payment-proof confirmation is disabled. Confirm the MoMo transaction with its transId.");
+            throw new IllegalArgumentException("Manual payment-proof confirmation is disabled. Confirm the PayOS paymentLinkId instead.");
         }
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy đăng ký workspace."));
         if (List.of(RegistrationStatus.APPROVED, RegistrationStatus.REJECTED).contains(registration.getRegistrationStatus())) {
@@ -2295,12 +2305,12 @@ public class ForepService {
         WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
         PaymentTransactionEntity successfulPayment = paymentTransactions
                 .findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
-                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS
-                        && payment.getPaymentMethod() == PaymentMethod.MOMO
-                        && hasText(payment.getProviderTransactionId()))
+                .filter(payment -> (payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS)
+                        && payment.getPaymentMethod() == PaymentMethod.PAYOS
+                        && hasText(payment.getPaymentLinkId()))
                 .findFirst().orElse(null);
         if (registration.getWorkspaceId() == null && successfulPayment == null) {
-            throw new IllegalArgumentException("Workspace approval requires a successful MoMo payment with a transId.");
+            throw new IllegalArgumentException("Workspace approval requires a successful PayOS payment.");
         }
         List<AccountProvisioningView> generatedOwnerAccounts = activateWorkspaceForRegistration(
                 registration, request == null ? null : request.note(), successfulPayment == null ? null : successfulPayment.getId());
@@ -4236,7 +4246,7 @@ public class ForepService {
         Map<String, Float> revenueByYear = new LinkedHashMap<>();
         Map<String, Float> revenueByPlan = new LinkedHashMap<>();
         allPayments.stream()
-                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS)
+                .filter(payment -> payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS)
                 .forEach(payment -> {
                     OffsetDateTime paidAt = payment.getPaidAt() == null ? payment.getCreatedAt() : payment.getPaidAt();
                     String monthKey = paidAt.getYear() + "-" + String.format("%02d", paidAt.getMonthValue());
@@ -4249,7 +4259,7 @@ public class ForepService {
                     revenueByYear.merge(yearKey, amount, Float::sum);
                     revenueByPlan.merge(planKey, amount, Float::sum);
                 });
-        long successfulPayments = allPayments.stream().filter(payment -> payment.getStatus() == PaymentTransactionStatus.SUCCESS).count();
+        long successfulPayments = allPayments.stream().filter(this::isSuccessfulPayment).count();
         long failedPayments = allPayments.stream().filter(payment -> List.of(PaymentTransactionStatus.FAILED, PaymentTransactionStatus.EXPIRED, PaymentTransactionStatus.CANCELLED).contains(payment.getStatus())).count();
         long pendingManualPayments = allPayments.stream().filter(payment -> List.of(PaymentTransactionStatus.PENDING, PaymentTransactionStatus.PROCESSING, PaymentTransactionStatus.MANUAL_REVIEW).contains(payment.getStatus())).count();
         long totalPaymentDecisions = Math.max(1, successfulPayments + failedPayments);
@@ -4646,7 +4656,7 @@ public class ForepService {
 
     private String requiredText(String field, String value) {
         if (!hasText(value)) {
-            throw new MomoConfigurationException(field, field + " is required.");
+            throw new PayosConfigurationException(field, field + " is required.");
         }
         return value.trim();
     }
@@ -4664,7 +4674,7 @@ public class ForepService {
                 throw new IllegalArgumentException();
             }
         } catch (RuntimeException exception) {
-            throw new MomoConfigurationException(field, field + " must be a valid HTTP(S) URL.");
+            throw new PayosConfigurationException(field, field + " must be a valid HTTP(S) URL.");
         }
     }
 
@@ -4676,52 +4686,42 @@ public class ForepService {
         }
     }
 
-    private PaymentQrSettingEntity requireEnabledMomoPaymentSetting() {
-        PaymentQrSettingEntity setting = paymentQrSettings.findByPaymentMethod(PaymentMethod.MOMO)
-                .orElseThrow(() -> new IllegalArgumentException("MoMo payment method is not configured."));
-        if (!setting.isEnabled()) {
-            throw new IllegalArgumentException("MoMo payment method is disabled.");
-        }
-        if (false
-                && (!hasText(setting.getBankCode()) || !hasText(setting.getBankAccountNumber()) || !hasText(setting.getBankAccountName()))) {
-            throw new IllegalArgumentException("Thông tin tài khoản ngân hàng chưa đầy đủ. Vui lòng đợi quản trị viên cập nhật.");
-        }
-        if (false) {
-            throw new IllegalArgumentException("Mã QR ngân hàng chưa được cấu hình. Vui lòng đợi quản trị viên cập nhật.");
-        }
-        if (!momoPaymentService.isRealProviderConfigured(momoProviderConfig(setting))) {
-            throw new IllegalArgumentException("MoMo payment provider is not fully configured.");
+    private PayosConfigEntity requireEnabledPayosConfig() {
+        PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID)
+                .orElseThrow(() -> new IllegalArgumentException("PayOS is not configured."));
+        if (!setting.isActive()) throw new IllegalArgumentException("PayOS is disabled.");
+        if (!payosPaymentService.isConfigured(payosProviderConfig(setting))) {
+            throw new IllegalArgumentException("PayOS provider is not fully configured.");
         }
         return setting;
     }
 
-    private String transferContent(PaymentQrSettingEntity setting, WorkspaceRegistrationEntity registration, PaymentTransactionEntity payment) {
-        String prefix = hasText(setting.getTransferContentPrefix()) ? setting.getTransferContentPrefix().trim() : "FOREP";
-        return prefix + " " + registration.getWorkspaceIdentifier() + " " + payment.getOrderCode();
+    private String transferContent(PayosConfigEntity setting, WorkspaceRegistrationEntity registration, PaymentTransactionEntity payment) {
+        String prefix = hasText(setting.getTransferPrefix()) ? setting.getTransferPrefix().trim() : "FOREP";
+        return prefix + " " + payment.getOrderCode();
     }
 
-    private String paymentConfigurationSnapshot(PaymentQrSettingEntity setting) {
+    private String paymentConfigurationSnapshot(PayosConfigEntity setting) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("configurationId", setting.getId());
-        snapshot.put("paymentMethod", setting.getPaymentMethod());
-        snapshot.put("providerEndpoint", setting.getProviderEndpoint());
-        snapshot.put("accessKeyConfigured", hasText(setting.getAccessKey()));
-        snapshot.put("secretKeyConfigured", hasText(setting.getSecretKeyEncrypted()));
+        snapshot.put("paymentMethod", PaymentMethod.PAYOS);
+        snapshot.put("apiEndpoint", setting.getApiEndpoint());
+        snapshot.put("apiConfigured", hasText(setting.getApiKeyEncrypted()) && hasText(setting.getChecksumKeyEncrypted()));
         snapshot.put("returnUrl", setting.getReturnUrl());
-        snapshot.put("notifyUrl", setting.getNotifyUrl());
-        snapshot.put("transferContentPrefix", setting.getTransferContentPrefix());
+        snapshot.put("cancelUrl", setting.getCancelUrl());
+        snapshot.put("transferContentPrefix", setting.getTransferPrefix());
         snapshot.put("configuredAt", setting.getUpdatedAt());
         return toJson(snapshot);
     }
 
-    private MomoProviderConfig momoProviderConfig(PaymentQrSettingEntity setting) {
-        return new MomoProviderConfig(
-                setting.getProviderEndpoint(),
-                setting.getPartnerCode(),
-                setting.getAccessKey(),
-                momoCredentialCipher.decrypt(setting.getSecretKeyEncrypted()),
+    private PayosProviderConfig payosProviderConfig(PayosConfigEntity setting) {
+        return new PayosProviderConfig(
+                setting.getApiEndpoint(),
+                setting.getClientId(),
+                payosCredentialCipher.decrypt(setting.getApiKeyEncrypted()),
+                payosCredentialCipher.decrypt(setting.getChecksumKeyEncrypted()),
                 setting.getReturnUrl(),
-                setting.getNotifyUrl()
+                setting.getCancelUrl()
         );
     }
 
@@ -4922,7 +4922,7 @@ public class ForepService {
     private PaymentTransactionView confirmPayment(UUID paymentId, boolean adminOverride, String rawPayloadOrNote) {
         PaymentTransactionEntity payment = paymentTransactions.findByIdForUpdate(paymentId)
                 .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
-        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
+        if (payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
             return toPaymentTransactionView(payment);
         }
         if (payment.getStatus() == PaymentTransactionStatus.EXPIRED && !adminOverride) {
@@ -4937,14 +4937,14 @@ public class ForepService {
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findByIdForUpdate(payment.getWorkspaceRegistrationId())
                 .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
         SubscriptionPlanEntity plan = requireSubscriptionPlan(payment.getSubscriptionPlanId());
-        if (payment.getPaymentMethod() != PaymentMethod.MOMO || !hasText(payment.getProviderTransactionId())) {
-            throw new IllegalArgumentException("A verified MoMo transId is required before payment can be confirmed.");
+        if (payment.getPaymentMethod() != PaymentMethod.PAYOS || !hasText(payment.getPaymentLinkId())) {
+            throw new IllegalArgumentException("A verified PayOS paymentLinkId is required before payment can be confirmed.");
         }
         if (payment.getAmount().compareTo(plan.getPrice()) != 0) {
             throw new IllegalArgumentException("Payment amount does not match the selected subscription plan.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        payment.setStatus(PaymentTransactionStatus.SUCCESS);
+        payment.setStatus(PaymentTransactionStatus.PAID);
         payment.setPaidAt(now);
         payment.setConfirmedAt(now);
         payment.setConfirmedBy(adminOverride ? safeCurrentUserId() : null);
@@ -4964,22 +4964,22 @@ public class ForepService {
         return toPaymentTransactionView(payment);
     }
 
-    private void assertMomoTransactionIdAvailable(UUID paymentId, String momoTransactionId) {
-        String normalized = momoTransactionId == null ? null : momoTransactionId.trim();
+    private void assertPayosPaymentLinkIdAvailable(UUID paymentId, String paymentLinkId) {
+        String normalized = paymentLinkId == null ? null : paymentLinkId.trim();
         if (!hasText(normalized)) {
-            throw new IllegalArgumentException("MoMo transaction ID is required.");
+            throw new IllegalArgumentException("PayOS paymentLinkId is required.");
         }
-        paymentTransactions.findByProviderTransactionId(normalized)
+        paymentTransactions.findByPaymentLinkId(normalized)
                 .filter(existing -> !existing.getId().equals(paymentId))
                 .ifPresent(existing -> {
-                    throw new IllegalArgumentException("This MoMo transaction ID is already linked to another payment.");
+                    throw new IllegalArgumentException("This PayOS paymentLinkId is already linked to another payment.");
                 });
     }
 
     private PaymentTransactionView failPayment(UUID paymentId, String rawPayloadOrNote) {
         PaymentTransactionEntity payment = paymentTransactions.findByIdForUpdate(paymentId)
                 .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
-        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
+        if (payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
             throw new IllegalArgumentException("Successful payment transactions cannot be rejected.");
         }
         payment.setStatus(PaymentTransactionStatus.FAILED);
@@ -5006,7 +5006,7 @@ public class ForepService {
                 return List.of();
             }
             if (paymentTransactionId == null) {
-                throw new IllegalArgumentException("The admin-created workspace requires a successful MoMo payment transaction.");
+                throw new IllegalArgumentException("The admin-created workspace requires a successful PayOS payment transaction.");
             }
             SubscriptionPlanEntity plan = requireSubscriptionPlan(registration.getSubscriptionPlanId());
             OffsetDateTime now = OffsetDateTime.now();
@@ -5028,7 +5028,7 @@ public class ForepService {
             registration.setReviewNote(reviewNote);
             registration.setUpdatedAt(now);
             workspaceRegistrations.save(registration);
-            audit(workspace.getId(), "ACTIVATE_ADMIN_WORKSPACE_AFTER_MOMO_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
+            audit(workspace.getId(), "ACTIVATE_ADMIN_WORKSPACE_AFTER_PAYOS_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
             return owners;
         }
         if (registration.getPaymentStatus() != PaymentStatus.CONFIRMED && registration.getRegistrationStatus() != RegistrationStatus.PAYMENT_CONFIRMED) {
@@ -5261,42 +5261,22 @@ public class ForepService {
         return payment;
     }
 
-    private PaymentTransactionEntity requirePaymentByCallback(PaymentCallbackRequest request) {
-        if (request == null || !hasText(request.orderId()) || !hasText(request.requestId())) {
-            throw new IllegalArgumentException("MoMo IPN must include orderId and requestId.");
+    private String requiredWebhookText(Map<String, Object> data, String field) {
+        Object value = data.get(field);
+        if (value == null || !hasText(value.toString())) {
+            throw new IllegalArgumentException("PayOS webhook " + field + " is required.");
         }
-        PaymentTransactionEntity payment = paymentTransactions.findByOrderCode(request.orderId())
-                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
-        if (!payment.getRequestId().equals(request.requestId())) {
-            throw new IllegalArgumentException("MoMo IPN requestId does not match this payment transaction.");
-        }
-        return payment;
+        return value.toString().trim();
     }
 
-    private void assertCallbackAmountMatches(PaymentTransactionEntity payment, PaymentCallbackRequest request) {
-        if (request.amount() == null || request.amount() <= 0) {
-            throw new IllegalArgumentException("Callback amount is required.");
+    private long requiredWebhookLong(Map<String, Object> data, String field) {
+        try {
+            long value = new BigDecimal(requiredWebhookText(data, field)).longValueExact();
+            if (value <= 0) throw new ArithmeticException();
+            return value;
+        } catch (ArithmeticException | NumberFormatException exception) {
+            throw new IllegalArgumentException("PayOS webhook " + field + " must be a positive integer.");
         }
-        if (payment.getAmount().compareTo(BigDecimal.valueOf(request.amount())) != 0) {
-            throw new IllegalArgumentException("Callback amount does not match the payment transaction.");
-        }
-    }
-
-    private Map<String, Object> paymentCallbackPayload(PaymentCallbackRequest request) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("partnerCode", request.partnerCode());
-        payload.put("orderId", request.orderId());
-        payload.put("requestId", request.requestId());
-        payload.put("amount", request.amount());
-        payload.put("orderInfo", request.orderInfo());
-        payload.put("orderType", request.orderType());
-        payload.put("transId", request.transId());
-        payload.put("resultCode", request.resultCode());
-        payload.put("message", request.message());
-        payload.put("payType", request.payType());
-        payload.put("responseTime", request.responseTime());
-        payload.put("extraData", request.extraData());
-        return payload;
     }
 
     private SubscriptionPlanEntity requireActiveSubscriptionPlan(UUID planId) {
@@ -5308,10 +5288,11 @@ public class ForepService {
         return plan;
     }
 
-    private String uniqueOrderCode() {
+    private String uniquePayosOrderCode() {
         String value;
         do {
-            value = "FOREP-" + OffsetDateTime.now().toInstant().toEpochMilli() + "-" + SECURE_RANDOM.nextInt(100000, 999999);
+            value = Long.toString(OffsetDateTime.now().toInstant().toEpochMilli() * 100
+                    + SECURE_RANDOM.nextInt(10, 100));
         } while (paymentTransactions.findByOrderCode(value).isPresent());
         return value;
     }
@@ -5756,14 +5737,14 @@ public class ForepService {
     private NotificationView toNotificationView(NotificationEntity item) { return new NotificationView(item.getId(), item.getWorkspaceId(), item.getUserId(), item.getType(), item.getTitle(), item.getMessage(), item.getRelatedEntityType(), item.getRelatedEntityId(), item.isRead(), item.getCreatedAt()); }
     private AiSuggestionView toAiSuggestionView(AiSuggestionEntity item) { return new AiSuggestionView(item.getId(), item.getWorkspaceId(), item.getType(), item.getInputData(), item.getOutputData(), item.getStatus(), item.getCreatedBy(), item.getCreatedAt()); }
     private SubscriptionPlanView toSubscriptionPlanView(SubscriptionPlanEntity item) { return new SubscriptionPlanView(item.getId(), item.getName(), item.getDescription(), item.getPrice(), item.getDurationDays(), item.getDurationInMonths(), item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.isHasFullFeatures(), item.getMaxWorkspaces(), item.getAiUsageLimit(), item.getFeatures(), item.getStatus(), item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentQrSettingView toPaymentQrSettingView(PaymentQrSettingEntity item) { return new PaymentQrSettingView(item.getId(), item.getPaymentMethod(), item.getProviderEndpoint(), item.getPartnerCode(), item.getAccessKey(), hasText(item.getSecretKeyEncrypted()), item.getReturnUrl(), item.getNotifyUrl(), item.getNotifyUrl(), item.getTransferContentPrefix(), item.isEnabled(), item.getUpdatedBy(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PayosConfigView toPayosConfigView(PayosConfigEntity item) { return new PayosConfigView(item.getId(), item.getApiEndpoint(), item.getClientId(), item.getReturnUrl(), item.getCancelUrl(), item.getTransferPrefix(), hasText(item.getApiKeyEncrypted()) && hasText(item.getChecksumKeyEncrypted()), item.isActive(), item.getUpdatedAt()); }
     private WorkspaceSubscriptionView currentWorkspaceSubscription(UUID workspaceId) { return workspaceSubscriptions.findFirstByWorkspaceIdAndStatusOrderByCreatedAtDesc(workspaceId, WorkspaceSubscriptionStatus.ACTIVE).map(this::toWorkspaceSubscriptionView).orElse(null); }
     private WorkspaceSubscriptionView toWorkspaceSubscriptionView(WorkspaceSubscriptionEntity item) { return new WorkspaceSubscriptionView(item.getId(), item.getWorkspaceId(), item.getSubscriptionPlanId(), item.getStatus(), item.getStartDate(), item.getEndDate(), item.getRenewalDate(), item.getPrice(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getPaymentTransactionId(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item) { return toPlatformWorkspaceView(item, List.of()); }
     private PlatformWorkspaceView toPlatformWorkspaceView(WorkspaceEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { List<UserView> ownerAccountViews = ownerAccounts(item.getId()).stream().map(this::toUserView).toList(); WorkspaceRegistrationEntity registration = workspaceRegistrations.findByWorkspaceId(item.getId()).orElse(null); List<PaymentTransactionView> paymentHistory = registration == null ? List.of() : paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registration.getId()).stream().map(this::toPaymentTransactionView).toList(); return new PlatformWorkspaceView(item.getId(), item.getBusinessName(), item.getName(), item.getShortCode(), item.getOrganizationAbbreviation(), item.getContactEmail(), item.getContactPhone(), item.getAddress(), item.getSubscriptionPlanId(), item.getSubscriptionPlanId() == null ? null : toSubscriptionPlanView(requireSubscriptionPlan(item.getSubscriptionPlanId())), currentWorkspaceSubscription(item.getId()), registration == null ? null : registration.getId(), paymentHistory, item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), ownerAccountViews.size(), currentWorkspaceUserCount(item.getId()), item.getStatus(), item.getPaymentStatus(), item.getOwnerId(), item.getOwnerAccountProvisionedAt(), item.getActivatedAt(), item.getExpiresAt(), item.getLastActivityAt(), ownerAccountViews, generatedOwnerAccounts, item.getCreatedAt()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item) { return toWorkspaceRegistrationView(item, List.of()); }
     private WorkspaceRegistrationView toWorkspaceRegistrationView(WorkspaceRegistrationEntity item, List<AccountProvisioningView> generatedOwnerAccounts) { SubscriptionPlanView selectedPlan = item.getSubscriptionPlanId() == null ? null : toSubscriptionPlanView(requireSubscriptionPlan(item.getSubscriptionPlanId())); List<PublicPaymentStatusView> paymentHistory = paymentTransactions.findByWorkspaceRegistrationIdOrderByCreatedAtDesc(item.getId()).stream().map(payment -> toPublicPaymentStatusView(payment, item)).toList(); return new WorkspaceRegistrationView(item.getId(), item.getBusinessName(), item.getWorkspaceName(), item.getWorkspaceIdentifier(), item.getContactEmail(), item.getContactPhone(), item.getBusinessAddress(), item.getRepresentativeFullName(), item.getRepresentativeEmail(), item.getRepresentativePhone(), item.getRegistrationToken(), item.getSubscriptionPlanId(), selectedPlan, item.getMaxUsers(), item.getMaxOwnerAccounts(), item.getMaxEmployeeAccounts(), item.getOwnerFullName(), item.getOwnerEmail(), item.getOwnerPhone(), item.getPaymentProofUrl(), item.getPaymentStatus(), item.getRegistrationStatus(), paymentHistory, item.getWorkspaceId(), item.getReviewedBy(), item.getReviewedAt(), item.getReviewNote(), item.getExpiredAt(), generatedOwnerAccounts, item.getCreatedAt(), item.getUpdatedAt()); }
-    private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { UUID workspaceId = workspaceRegistrations.findById(item.getWorkspaceRegistrationId()).map(WorkspaceRegistrationEntity::getWorkspaceId).orElse(null); return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), workspaceId, item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getProviderName(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getQrDisplayData(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getPaymentConfigurationSnapshot(), item.getRawProviderResponse(), item.getStatus(), item.getPaidAt(), item.getConfirmedAt(), item.getConfirmedBy(), item.getExpiredAt(), item.getFailureReason(), item.getCreatedAt(), item.getUpdatedAt()); }
+    private PaymentTransactionView toPaymentTransactionView(PaymentTransactionEntity item) { UUID workspaceId = workspaceRegistrations.findById(item.getWorkspaceRegistrationId()).map(WorkspaceRegistrationEntity::getWorkspaceId).orElse(null); return new PaymentTransactionView(item.getId(), item.getWorkspaceRegistrationId(), workspaceId, item.getSubscriptionPlanId(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getOrderCode(), item.getRequestId(), item.getPaymentLinkId(), item.getReferenceId(), item.getUserId(), item.getResponseCode(), item.getProviderName(), item.getProviderTransactionId(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getQrDisplayData(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getPaymentConfigurationSnapshot(), item.getRawProviderResponse(), item.getStatus(), item.getPaidAt(), item.getConfirmedAt(), item.getConfirmedBy(), item.getExpiredAt(), item.getFailureReason(), item.getCreatedAt(), item.getUpdatedAt()); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item) { return toPublicPaymentStatusView(item, requireWorkspaceRegistration(item.getWorkspaceRegistrationId())); }
     private PublicPaymentStatusView toPublicPaymentStatusView(PaymentTransactionEntity item, WorkspaceRegistrationEntity registration) { return new PublicPaymentStatusView(item.getWorkspaceRegistrationId(), registration.getWorkspaceId(), registration.getPaymentStatus(), registration.getRegistrationStatus(), item.getPaymentMethod(), item.getAmount(), item.getCurrency(), item.getPaymentCode(), item.getProviderPaymentUrl(), item.getProviderDeeplink(), item.getProviderQrCodeUrl(), item.getBankCode(), item.getBankName(), item.getBankAccountNumber(), item.getBankAccountName(), item.getTransferContent(), item.getStatus(), item.getPaidAt(), item.getExpiredAt(), item.getCreatedAt(), item.getUpdatedAt()); }
     private BusinessFeedbackView toBusinessFeedbackView(BusinessFeedbackEntity item) { return new BusinessFeedbackView(item.getId(), item.getWorkspaceId(), item.getRating(), item.getContent(), item.getSupportNote(), item.getStatus(), item.getReviewedBy(), item.getReviewedAt(), item.getCreatedAt(), item.getUpdatedAt()); }
@@ -5798,12 +5779,13 @@ public class ForepService {
     public record LoginView(String token, UserView user, List<String> permissions) {}
     public record AiSuggestionView(UUID id, UUID workspaceId, AiSuggestionType type, String inputData, String outputData, AiSuggestionStatus status, UUID createdBy, OffsetDateTime createdAt) {}
     public record SubscriptionPlanView(UUID id, String name, String description, BigDecimal price, int durationDays, int durationInMonths, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, boolean hasFullFeatures, Integer maxWorkspaces, Integer aiUsageLimit, String features, SubscriptionPlanStatus status, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PaymentQrSettingView(UUID id, PaymentMethod paymentMethod, String providerEndpoint, String partnerCode, String accessKey, boolean secretKeyConfigured, String returnUrl, String ipnUrl, String notifyUrl, String transferContentPrefix, boolean enabled, UUID updatedBy, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PayosConfigView(UUID id, String apiEndpoint, String clientId, String returnUrl, String cancelUrl, String transferContentPrefix, boolean apiConfigured, boolean enabled, OffsetDateTime updatedAt) {}
     public record WorkspaceSubscriptionView(UUID id, UUID workspaceId, UUID subscriptionPlanId, WorkspaceSubscriptionStatus status, OffsetDateTime startDate, OffsetDateTime endDate, OffsetDateTime renewalDate, BigDecimal price, int maxOwnerAccounts, int maxEmployeeAccounts, UUID paymentTransactionId, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record PlatformWorkspaceView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String organizationAbbreviation, String contactEmail, String contactPhone, String businessAddress, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, WorkspaceSubscriptionView activeSubscription, UUID workspaceRegistrationId, List<PaymentTransactionView> paymentHistory, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, int ownerAccountCount, int currentUsers, WorkspaceStatus status, PaymentStatus paymentStatus, UUID ownerId, OffsetDateTime ownerAccountProvisionedAt, OffsetDateTime activatedAt, OffsetDateTime expiresAt, OffsetDateTime lastActivityAt, List<UserView> ownerAccounts, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt) {}
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, List<PublicPaymentStatusView> paymentHistory, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record AdminWorkspaceCreationView(PlatformWorkspaceView workspace, WorkspaceRegistrationView registration, PaymentTransactionView payment) {}
-    public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String paymentLinkId, UUID referenceId, UUID userId, String responseCode, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+    public record PayosPaymentStatusView(String orderCode, String status, BigDecimal amount) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType, UUID entityId, String result, String ipAddress, String userAgent, String requestId, String metadata, String oldValue, String newValue, OffsetDateTime createdAt) {}

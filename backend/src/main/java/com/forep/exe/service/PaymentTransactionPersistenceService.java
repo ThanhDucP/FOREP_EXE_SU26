@@ -24,7 +24,7 @@ public class PaymentTransactionPersistenceService {
     @Transactional
     public void markProviderFailure(PaymentTransactionEntity payment, String reason) {
         PaymentTransactionEntity current = payments.findByIdForUpdate(payment.getId()).orElse(payment);
-        if (current.getStatus() == PaymentTransactionStatus.SUCCESS) {
+        if (current.getStatus() == PaymentTransactionStatus.PAID || current.getStatus() == PaymentTransactionStatus.SUCCESS) {
             return;
         }
         current.setStatus(PaymentTransactionStatus.FAILED);

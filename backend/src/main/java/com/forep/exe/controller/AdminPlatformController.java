@@ -7,15 +7,15 @@ import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
-import com.forep.exe.dto.Requests.ConfirmMomoPaymentRequest;
+import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
 import com.forep.exe.dto.Requests.UpdateSubscriptionPlanRequest;
-import com.forep.exe.dto.Requests.UpdatePaymentQrSettingRequest;
+import com.forep.exe.dto.Requests.UpdatePayosConfigRequest;
 import com.forep.exe.service.ForepService;
-import com.forep.exe.service.MomoPaymentService.MomoProviderException;
-import com.forep.exe.service.MomoConfigurationException;
+import com.forep.exe.service.PayosPaymentService.PayosProviderException;
+import com.forep.exe.service.PayosConfigurationException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -77,14 +77,14 @@ public class AdminPlatformController {
         return ApiResponse.ok(service.adminPayment(paymentId));
     }
 
-    @GetMapping("/momo-payment-setting")
-    ApiResponse<?> momoPaymentSetting() {
-        return ApiResponse.ok(service.adminMomoPaymentSetting());
+    @GetMapping("/payos-config")
+    ApiResponse<?> payosConfig() {
+        return ApiResponse.ok(service.adminPayosConfig());
     }
 
-    @PutMapping("/momo-payment-setting")
-    ApiResponse<?> updateMomoPaymentSetting(@RequestBody @Valid UpdatePaymentQrSettingRequest request) {
-        return ApiResponse.ok(service.updateMomoPaymentSetting(request));
+    @PutMapping("/payos-config")
+    ApiResponse<?> updatePayosConfig(@RequestBody @Valid UpdatePayosConfigRequest request) {
+        return ApiResponse.ok(service.updatePayosConfig(request));
     }
 
     @PatchMapping("/workspace-registrations/{id}/approve")
@@ -98,7 +98,7 @@ public class AdminPlatformController {
     }
 
     @PatchMapping("/payments/{paymentId}/confirm")
-    ApiResponse<?> confirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmMomoPaymentRequest request) {
+    ApiResponse<?> confirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmPayosPaymentRequest request) {
         return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 
@@ -236,16 +236,16 @@ public class AdminPlatformController {
         return ApiResponse.error("BUSINESS_RULE_ERROR", exception.getMessage(), null);
     }
 
-    @ExceptionHandler(MomoConfigurationException.class)
+    @ExceptionHandler(PayosConfigurationException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    ApiResponse<?> handleMomoConfigurationError(MomoConfigurationException exception) {
-        return ApiResponse.error("MOMO_CONFIGURATION_INVALID", exception.getMessage(), exception.field());
+    ApiResponse<?> handlePayosConfigurationError(PayosConfigurationException exception) {
+        return ApiResponse.error("PAYOS_CONFIGURATION_INVALID", exception.getMessage(), exception.field());
     }
 
-    @ExceptionHandler(MomoProviderException.class)
+    @ExceptionHandler(PayosProviderException.class)
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    ApiResponse<?> handleMomoProviderError(MomoProviderException exception) {
-        return ApiResponse.error("MOMO_PROVIDER_ERROR", exception.getMessage(), null);
+    ApiResponse<?> handlePayosProviderError(PayosProviderException exception) {
+        return ApiResponse.error("PAYOS_PROVIDER_ERROR", exception.getMessage(), null);
     }
 
     @ExceptionHandler(AiRateLimitException.class)

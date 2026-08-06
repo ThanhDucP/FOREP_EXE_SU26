@@ -16,29 +16,37 @@ import org.springframework.test.web.servlet.MockMvc;
 import static com.forep.exe.security.AuthorizationService.authority;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.http.MediaType;
 
 @WebMvcTest(AdminPlatformController.class)
 @Import({SecurityConfig.class, JwtAuthenticationFilter.class})
-class MomoPaymentSettingSecurityTest {
+class PayosConfigSecurityTest {
     @Autowired private MockMvc mvc;
     @MockBean private ForepService service;
     @MockBean private JwtService jwtService;
     @MockBean private AuthorizationService authorizationService;
 
     @Test
-    void unauthenticatedAndNonAdminUsersCannotReadMomoCredentials() throws Exception {
-        mvc.perform(get("/api/admin/momo-payment-setting"))
-                .andExpect(status().isForbidden());
-
-        mvc.perform(get("/api/admin/momo-payment-setting").with(user("employee")))
-                .andExpect(status().isForbidden());
+    void unauthenticatedAndNonAdminUsersCannotReadPayosConfig() throws Exception {
+        mvc.perform(get("/api/admin/payos-config")).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/payos-config").with(user("employee"))).andExpect(status().isForbidden());
     }
 
     @Test
-    void paymentConfigurationPermissionCanReadMomoSetting() throws Exception {
-        mvc.perform(get("/api/admin/momo-payment-setting")
+    void paymentConfigurationPermissionCanReadPayosConfig() throws Exception {
+        mvc.perform(get("/api/admin/payos-config")
                         .with(user("platform-admin").authorities(() -> authority(Permission.PAYMENT_QR_MANAGE))))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void nonAdminCannotUpdatePayosConfig() throws Exception {
+        mvc.perform(put("/api/admin/payos-config")
+                        .with(user("employee"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
     }
 }
