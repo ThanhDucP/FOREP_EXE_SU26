@@ -1937,6 +1937,9 @@ public class ForepService {
         registration.setOwnerEmail(ownerEmail);
         registration.setOwnerPhone(hasText(request.ownerPhone()) ? request.ownerPhone() : request.representativePhone());
         registration.setOwnerPasswordHash(passwordEncoder.encode(request.ownerPassword()));
+        // A registration is persisted before a plan is selected. Keep this provisional
+        // value positive to satisfy the database constraint; selecting a plan replaces it.
+        registration.setMaxUsers(1);
         registration.setPaymentStatus(PaymentStatus.PENDING);
         registration.setRegistrationStatus(RegistrationStatus.PENDING_PLAN_SELECTION);
         registration.setRegistrationToken(uniqueRegistrationToken());
