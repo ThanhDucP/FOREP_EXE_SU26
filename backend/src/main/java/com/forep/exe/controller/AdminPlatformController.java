@@ -7,7 +7,6 @@ import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.dto.Requests.AdminCreateWorkspaceRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
-import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.ReviewBusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ReviewRegistrationRequest;
@@ -95,11 +94,6 @@ public class AdminPlatformController {
     @PatchMapping("/workspace-registrations/{id}/reject")
     ApiResponse<?> rejectWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
         return ApiResponse.ok(service.rejectWorkspaceRegistration(id, request));
-    }
-
-    @PatchMapping("/payments/{paymentId}/confirm")
-    ApiResponse<?> confirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmPayosPaymentRequest request) {
-        return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 
     @PatchMapping("/payments/{paymentId}/reject")

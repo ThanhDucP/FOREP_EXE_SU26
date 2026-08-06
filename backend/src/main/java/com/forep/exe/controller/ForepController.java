@@ -11,7 +11,6 @@ import com.forep.exe.dto.Requests.AdminUpdateWorkspaceRequest;
 import com.forep.exe.dto.Requests.BusinessFeedbackRequest;
 import com.forep.exe.dto.Requests.ChangePasswordRequest;
 import com.forep.exe.dto.Requests.CreateBusinessOwnerRequest;
-import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreateEmployeeRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
 import com.forep.exe.dto.Requests.CreateSubscriptionPlanRequest;
@@ -226,11 +225,6 @@ public class ForepController {
     @PostMapping("/admin/workspace-registrations/{id}/activate")
     ApiResponse<?> activateWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
         return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
-    }
-
-    @PatchMapping("/admin/payments/{paymentId}/confirm")
-    ApiResponse<?> adminConfirmPayment(@PathVariable UUID paymentId, @RequestBody @Valid ConfirmPayosPaymentRequest request) {
-        return ApiResponse.ok(service.adminConfirmPayment(paymentId, request));
     }
 
     @PatchMapping("/admin/payments/{paymentId}/reject")
