@@ -197,6 +197,7 @@ public class ForepService {
     private final PaymentTransactionPersistenceService paymentPersistenceService;
     private final ObjectMapper objectMapper;
     private final AccountNamingService accountNamingService;
+    private final WorkspaceCredentialsEmailService credentialsEmailService;
 
     public ForepService(WorkspaceRepository workspaces,
                         UserRepository users,
@@ -226,7 +227,8 @@ public class ForepService {
                         PayosCredentialCipher payosCredentialCipher,
                         PaymentTransactionPersistenceService paymentPersistenceService,
                         ObjectMapper objectMapper,
-                        AccountNamingService accountNamingService) {
+                        AccountNamingService accountNamingService,
+                        WorkspaceCredentialsEmailService credentialsEmailService) {
         this.workspaces = workspaces;
         this.users = users;
         this.tasks = tasks;
@@ -256,6 +258,7 @@ public class ForepService {
         this.paymentPersistenceService = paymentPersistenceService;
         this.objectMapper = objectMapper;
         this.accountNamingService = accountNamingService;
+        this.credentialsEmailService = credentialsEmailService;
     }
 
     public LoginView login(LoginRequest request) {
@@ -5179,17 +5182,17 @@ public class ForepService {
         String email = normalizeEmail(registration.getOwnerEmail());
         validateNewAccountIdentity(workspace.getId(), email, registration.getOwnerPhone());
         String username = accountNamingService.generateUniqueUsername(AccountType.BUSINESS_OWNER, workspace.getName(), accountWorkspaceCode(workspace));
-        boolean generatedPassword = !hasText(registration.getOwnerPasswordHash());
-        String temporaryPassword = generatedPassword ? secureTemporaryPassword() : null;
-        String passwordHash = generatedPassword ? passwordEncoder.encode(temporaryPassword) : registration.getOwnerPasswordHash();
+        String temporaryPassword = secureTemporaryPassword();
+        String passwordHash = passwordEncoder.encode(temporaryPassword);
         String fullName = hasText(registration.getOwnerFullName())
                 ? registration.getOwnerFullName()
                 : registration.getRepresentativeFullName();
         UserEntity owner = newOwnerAccount(workspace, fullName, email, registration.getOwnerPhone(), username,
-                passwordHash, generatedPassword, now);
+                passwordHash, true, now);
         owner = saveAccount(owner, "Email, phone or username already exists.");
         audit(workspace.getId(), "ACTIVATION_CREATE_INITIAL_BUSINESS_OWNER", "USER", owner.getId(), null,
                 Map.of("username", username, "email", email));
+        credentialsEmailService.sendInitialCredentials(email, username, temporaryPassword, workspace.getName());
         return List.of(toAccountProvisioningView(owner, temporaryPassword));
     }
 
