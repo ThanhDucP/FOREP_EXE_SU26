@@ -13,10 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -85,9 +82,9 @@ public class PayosPaymentService {
     }
 
     /**
-     * Server-to-server status lookup used as a safe reconciliation fallback when the browser has
-     * returned from PayOS but the webhook has not reached the backend yet. The result is never
-     * trusted from browser query parameters; it is read directly from PayOS using merchant keys.
+     * Server-to-server status lookup used as the authoritative payment confirmation mechanism.
+     * Browser callback parameters are never trusted as proof of payment. When PayOS reports PAID,
+     * the reconciliation pipeline activates the workspace immediately.
      */
     public ProviderPaymentStatus getPaymentStatus(String orderCode, PayosProviderConfig config) {
         if (!isConfigured(config)) throw new IllegalArgumentException("PayOS provider is not fully configured.");
@@ -135,21 +132,6 @@ public class PayosPaymentService {
         return hmacSha256(createRawSignature(orderCode, amount, description, returnUrl, cancelUrl), checksumKey);
     }
 
-    public boolean verifyWebhook(Map<String, Object> data, String signature, String checksumKey) {
-        if (data == null || blank(signature) || blank(checksumKey)) return false;
-        String expected = hmacSha256(webhookRawSignature(data), checksumKey);
-        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII),
-                signature.trim().toLowerCase().getBytes(StandardCharsets.US_ASCII));
-    }
-
-    public String webhookRawSignature(Map<String, Object> data) {
-        return data.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .map(entry -> entry.getKey() + "=" + signatureValue(entry.getValue()))
-                .reduce((left, right) -> left + "&" + right)
-                .orElse("");
-    }
-
     String hmacSha256(String raw, String key) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -185,24 +167,6 @@ public class PayosPaymentService {
         if (value instanceof Number number) return number.longValue();
         try { return Long.parseLong(value.toString()); }
         catch (NumberFormatException exception) { return 0L; }
-    }
-
-    private String signatureValue(Object value) {
-        if (value == null) return "";
-        if (value instanceof List<?> list) {
-            List<Object> sorted = new ArrayList<>();
-            for (Object item : list) sorted.add(item instanceof Map<?, ?> map ? sortedMap(map) : item);
-            return json(sorted);
-        }
-        if (value instanceof Map<?, ?> map) return json(sortedMap(map));
-        return value.toString();
-    }
-
-    private Map<String, Object> sortedMap(Map<?, ?> source) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        source.entrySet().stream().sorted(Comparator.comparing(entry -> entry.getKey().toString()))
-                .forEach(entry -> result.put(entry.getKey().toString(), entry.getValue()));
-        return result;
     }
 
     private String json(Object value) {
