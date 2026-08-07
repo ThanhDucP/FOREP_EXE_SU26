@@ -28,8 +28,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             new AntPathRequestMatcher("/api/public/workspace-registrations/*/cancel", HttpMethod.PATCH.name()),
             new AntPathRequestMatcher("/api/public/workspace-registrations/*/payments", HttpMethod.POST.name()),
             new AntPathRequestMatcher("/api/public/payments/*/status", HttpMethod.GET.name()),
-            new AntPathRequestMatcher("/api/payments/payos/webhook", HttpMethod.POST.name()),
-            new AntPathRequestMatcher("/api/v1/payments/payos/webhook", HttpMethod.POST.name()),
             new AntPathRequestMatcher("/api/payments/*/status", HttpMethod.GET.name()),
             new AntPathRequestMatcher("/api/v1/health", HttpMethod.GET.name()),
             new AntPathRequestMatcher("/api/v1/auth/login", HttpMethod.POST.name()),
