@@ -7,6 +7,7 @@ import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
 import com.forep.exe.service.PayosPaymentReconciliationService;
 import com.forep.exe.service.PayosPaymentService.PayosProviderException;
+import com.forep.exe.service.PayosPaymentStatusQueryService;
 import com.forep.exe.service.WorkspaceValidationException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -19,11 +20,14 @@ import java.util.UUID;
 public class PublicRegistrationController {
     private final ForepService service;
     private final PayosPaymentReconciliationService payosReconciliation;
+    private final PayosPaymentStatusQueryService payosStatusQuery;
 
     public PublicRegistrationController(ForepService service,
-                                        PayosPaymentReconciliationService payosReconciliation) {
+                                        PayosPaymentReconciliationService payosReconciliation,
+                                        PayosPaymentStatusQueryService payosStatusQuery) {
         this.service = service;
         this.payosReconciliation = payosReconciliation;
+        this.payosStatusQuery = payosStatusQuery;
     }
 
     @GetMapping("/public/subscription-plans")
@@ -76,9 +80,10 @@ public class PublicRegistrationController {
 
     @GetMapping("/payments/{orderCode}/status")
     ApiResponse<?> payosPaymentStatus(@PathVariable String orderCode) {
-        // Browser callback parameters are never trusted. The backend queries PayOS directly.
+        // Never trust browser query parameters as proof of payment.
+        // Query PayOS server-to-server first, then return the refreshed local state.
         payosReconciliation.reconcileByOrderCode(orderCode);
-        return ApiResponse.ok(service.payosPaymentStatus(orderCode));
+        return ApiResponse.ok(payosStatusQuery.statusByOrderCode(orderCode));
     }
 
     @ExceptionHandler(WorkspaceValidationException.class)
