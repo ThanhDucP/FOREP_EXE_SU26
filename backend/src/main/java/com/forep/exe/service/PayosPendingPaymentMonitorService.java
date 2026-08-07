@@ -16,15 +16,14 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Proactively monitors local PayOS payments that are still pending.
+ * Proactively monitors local PayOS payments that still need reconciliation or activation.
  *
- * This makes workspace activation independent from both the browser return URL
- * and webhook delivery. As soon as PayOS reports PAID through its server API,
- * the existing reconciliation pipeline confirms the payment, activates the
- * workspace, creates the subscription/owner accounts and sends credentials.
+ * Runtime payment confirmation does not depend on webhook delivery. As soon as PayOS
+ * reports PAID through its server API, reconciliation confirms the payment, activates
+ * the workspace, creates subscription/owner accounts and sends credentials.
  *
- * Browser callback parameters are intentionally NOT trusted as proof of
- * payment. PayOS remains the source of truth.
+ * PAID is intentionally monitored as a recovery state for older/interrupted flows where
+ * PayOS had already been confirmed but workspace activation did not finish.
  */
 @Service
 public class PayosPendingPaymentMonitorService {
@@ -32,7 +31,8 @@ public class PayosPendingPaymentMonitorService {
 
     private static final Set<PaymentTransactionStatus> MONITORED_STATUSES = EnumSet.of(
             PaymentTransactionStatus.PENDING,
-            PaymentTransactionStatus.PROCESSING
+            PaymentTransactionStatus.PROCESSING,
+            PaymentTransactionStatus.PAID
     );
 
     private final PaymentTransactionRepository paymentTransactions;
@@ -52,8 +52,8 @@ public class PayosPendingPaymentMonitorService {
     }
 
     @Scheduled(
-            fixedDelayString = "${forep.payos.pending-monitor-delay-ms:5000}",
-            initialDelayString = "${forep.payos.pending-monitor-initial-delay-ms:5000}"
+            fixedDelayString = "${forep.payos.pending-monitor-delay-ms:2000}",
+            initialDelayString = "${forep.payos.pending-monitor-initial-delay-ms:2000}"
     )
     public void reconcilePendingPayosPayments() {
         OffsetDateTime cutoff = OffsetDateTime.now().minusHours(lookbackHours);
@@ -72,7 +72,7 @@ public class PayosPendingPaymentMonitorService {
             try {
                 reconciliationService.reconcileByOrderCode(payment.getOrderCode());
             } catch (Exception exception) {
-                // One provider/network failure must not stop reconciliation for the remaining payments.
+                // One provider/network/activation failure must not stop reconciliation for others.
                 log.warn("Scheduled PayOS reconciliation failed orderCode={}: {}",
                         payment.getOrderCode(), exception.getMessage());
             }
