@@ -2,7 +2,6 @@ package com.forep.exe.service;
 
 import com.forep.exe.domain.Enums.PaymentMethod;
 import com.forep.exe.domain.Enums.PaymentTransactionStatus;
-import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.PayosConfigEntity;
@@ -13,18 +12,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
  * Reconciles a local pending PayOS transaction against PayOS server-to-server status.
  *
- * This is deliberately invoked from payment-status reads after the browser returns from PayOS,
- * so a successful PayOS payment immediately activates the workspace even when the asynchronous
- * webhook is delayed or missed. Browser callback/query parameters are never trusted.
- *
- * The existing webhook remains an idempotent secondary delivery mechanism.
+ * This service is invoked from payment-status reads and by the proactive pending-payment monitor.
+ * When PayOS reports PAID, the payment is sent directly into FOREP's existing confirmation +
+ * workspace activation pipeline. No fake webhook is created and browser callback parameters are
+ * never trusted as proof of payment.
  */
 @Service
 public class PayosPaymentReconciliationService {
@@ -35,19 +31,19 @@ public class PayosPaymentReconciliationService {
     private final PayosConfigRepository payosConfigs;
     private final PayosPaymentService payosPaymentService;
     private final PayosCredentialCipher credentialCipher;
-    private final ForepService forepService;
+    private final PayosWorkspaceActivationService activationService;
 
     public PayosPaymentReconciliationService(
             PaymentTransactionRepository paymentTransactions,
             PayosConfigRepository payosConfigs,
             PayosPaymentService payosPaymentService,
             PayosCredentialCipher credentialCipher,
-            ForepService forepService) {
+            PayosWorkspaceActivationService activationService) {
         this.paymentTransactions = paymentTransactions;
         this.payosConfigs = payosConfigs;
         this.payosPaymentService = payosPaymentService;
         this.credentialCipher = credentialCipher;
-        this.forepService = forepService;
+        this.activationService = activationService;
     }
 
     public void reconcileByPaymentCode(String paymentCode) {
@@ -68,13 +64,15 @@ public class PayosPaymentReconciliationService {
         }
         if (payment.getStatus() == PaymentTransactionStatus.FAILED
                 || payment.getStatus() == PaymentTransactionStatus.CANCELLED
-                || payment.getStatus() == PaymentTransactionStatus.REFUNDED) {
+                || payment.getStatus() == PaymentTransactionStatus.REFUNDED
+                || payment.getStatus() == PaymentTransactionStatus.EXPIRED) {
             return;
         }
 
         PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID).orElse(null);
         if (setting == null || !setting.isActive()) {
-            log.warn("Skipped PayOS reconciliation for orderCode={} because PayOS is not configured/enabled.", payment.getOrderCode());
+            log.warn("Skipped PayOS reconciliation orderCode={} because PayOS is not configured/enabled.",
+                    payment.getOrderCode());
             return;
         }
 
@@ -87,12 +85,16 @@ public class PayosPaymentReconciliationService {
                     setting.getReturnUrl(),
                     setting.getCancelUrl()
             );
+
             ProviderPaymentStatus providerStatus = payosPaymentService.getPaymentStatus(payment.getOrderCode(), config);
+            log.info("PayOS status lookup orderCode={} localStatus={} providerStatus={} amount={} amountPaid={}",
+                    payment.getOrderCode(), payment.getStatus(), providerStatus.status(),
+                    providerStatus.amount(), providerStatus.amountPaid());
+
             if (!"PAID".equalsIgnoreCase(providerStatus.status())) {
                 return;
             }
 
-            // Protect against activating a workspace for a different amount/order.
             long expectedAmount = payment.getAmount().longValueExact();
             if (providerStatus.amount() > 0 && providerStatus.amount() != expectedAmount) {
                 log.error("PayOS reconciliation amount mismatch orderCode={} expected={} actual={}",
@@ -106,40 +108,39 @@ public class PayosPaymentReconciliationService {
             }
 
             String paymentLinkId = providerStatus.paymentLinkId();
-            if (paymentLinkId == null || paymentLinkId.isBlank()) {
-                paymentLinkId = payment.getPaymentLinkId();
-            }
-            if (paymentLinkId == null || paymentLinkId.isBlank()) {
-                log.error("PayOS PAID status has no paymentLinkId for orderCode={}", payment.getOrderCode());
-                return;
+            if (paymentLinkId != null && !paymentLinkId.isBlank()) {
+                if (payment.getPaymentLinkId() != null
+                        && !payment.getPaymentLinkId().isBlank()
+                        && !paymentLinkId.equals(payment.getPaymentLinkId())) {
+                    log.error("PayOS reconciliation paymentLinkId mismatch orderCode={} expected={} actual={}",
+                            payment.getOrderCode(), payment.getPaymentLinkId(), paymentLinkId);
+                    return;
+                }
+                if (payment.getPaymentLinkId() == null || payment.getPaymentLinkId().isBlank()) {
+                    payment.setPaymentLinkId(paymentLinkId);
+                }
+                if (payment.getProviderTransactionId() == null || payment.getProviderTransactionId().isBlank()) {
+                    payment.setProviderTransactionId(paymentLinkId);
+                }
             }
 
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("orderCode", Long.parseLong(payment.getOrderCode()));
-            data.put("amount", expectedAmount);
-            data.put("paymentLinkId", paymentLinkId);
-            data.put("code", "00");
+            payment.setResponseCode("00");
+            payment.setRawProviderResponse(providerStatus.rawResponse());
+            payment.setUpdatedAt(java.time.OffsetDateTime.now());
+            paymentTransactions.save(payment);
 
-            String checksumKey = credentialCipher.decrypt(setting.getChecksumKeyEncrypted());
-            String signature = payosPaymentService.hmacSha256(
-                    payosPaymentService.webhookRawSignature(data),
-                    checksumKey
+            // Directly reuse the existing idempotent payment confirmation/workspace activation pipeline.
+            // This creates the workspace, subscription, Business Owner account(s) and sends email credentials.
+            activationService.activateProviderConfirmedPayment(
+                    payment.getId(),
+                    providerStatus.rawResponse()
             );
 
-            // Reuse the exact same idempotent payment-confirmation + workspace-activation pipeline
-            // as the real webhook instead of duplicating activation logic.
-            forepService.handlePayosWebhook(new PayosWebhookRequest(
-                    "00",
-                    "Reconciled directly from PayOS payment status",
-                    true,
-                    data,
-                    signature
-            ));
-
-            log.info("Reconciled PayOS PAID orderCode={} and triggered workspace activation.", payment.getOrderCode());
+            log.info("PayOS PAID orderCode={} activated directly from provider status.", payment.getOrderCode());
         } catch (Exception exception) {
-            // Status reads must still return the last persisted state if PayOS is temporarily unavailable.
-            log.warn("Could not reconcile PayOS orderCode={}: {}", payment.getOrderCode(), exception.getMessage());
+            // Keep status reads available, but log the exact root cause so production no longer fails silently.
+            log.error("PayOS reconciliation failed orderCode={} reason={}",
+                    payment.getOrderCode(), exception.getMessage(), exception);
         }
     }
 }
