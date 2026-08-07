@@ -65,7 +65,8 @@ public class UserEntity extends BaseEntity {
     private WorkingStatus workingStatus;
     @Enumerated(EnumType.STRING)
     private EmployeeLevel employeeLevel;
-    private Integer monthlyWorkingCapacityHours;
+    @Column(nullable = false)
+    private Integer monthlyWorkingCapacityHours = 168;
     @Column(columnDefinition = "text")
     private String mainExpertise;
     @Column(columnDefinition = "text")
