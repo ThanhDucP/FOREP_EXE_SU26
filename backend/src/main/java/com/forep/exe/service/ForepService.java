@@ -2185,12 +2185,36 @@ public class ForepService {
             throw new IllegalArgumentException("Payment provider does not match PayOS.");
         }
         payment = refreshExpiredPayment(payment, OffsetDateTime.now());
+        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
         String status = switch (payment.getStatus()) {
-            case PAID, SUCCESS -> "PAID";
+            case PAID, SUCCESS -> "COMPLETED";
             case FAILED, EXPIRED, CANCELLED -> "FAILED";
             default -> "PENDING";
         };
-        return new PayosPaymentStatusView(payment.getOrderCode(), status, payment.getAmount());
+        String message;
+        if ("COMPLETED".equals(status)) {
+            message = registration.getWorkspaceId() == null
+                    ? "Thanh toán đã hoàn tất. Hệ thống đang kích hoạt workspace."
+                    : "Thanh toán đã hoàn tất và workspace đã được kích hoạt.";
+        } else if ("FAILED".equals(status)) {
+            message = "Thanh toán không thành công hoặc đã bị hủy.";
+        } else {
+            message = "Đang chờ PayOS webhook xác nhận thanh toán.";
+        }
+        return new PayosPaymentStatusView(
+                payment.getOrderCode(),
+                status,
+                payment.getAmount(),
+                message,
+                payment.getPaymentCode(),
+                payment.getStatus(),
+                registration.getId(),
+                registration.getRegistrationStatus(),
+                registration.getPaymentStatus(),
+                registration.getWorkspaceId(),
+                registration.getOwnerEmail(),
+                payment.getPaidAt()
+        );
     }
 
     public WorkspaceActivationResponse handlePayosWebhook(PayosWebhookRequest request) {
@@ -2215,7 +2239,13 @@ public class ForepService {
             WorkspaceRegistrationEntity existingReg = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
             UUID existingWorkspaceId = existingReg.getWorkspaceId();
             return new WorkspaceActivationResponse(true, existingWorkspaceId != null, existingWorkspaceId,
-                    "Payment already processed. Workspace" + (existingWorkspaceId != null ? " has been created." : " activation is complete."));
+                    "Payment already processed. Workspace" + (existingWorkspaceId != null ? " has been created." : " activation is complete."),
+                    payment.getOrderCode(),
+                    payment.getPaymentCode(),
+                    PaymentTransactionStatus.SUCCESS,
+                    existingReg.getRegistrationStatus(),
+                    existingReg.getPaymentStatus(),
+                    existingReg.getOwnerEmail());
         }
         long amount = requiredWebhookLong(request.data(), "amount");
         if (payment.getAmount().compareTo(BigDecimal.valueOf(amount)) != 0) {
@@ -2248,11 +2278,25 @@ public class ForepService {
             UUID workspaceId = updatedReg.getWorkspaceId();
             log.info("PayOS webhook processed successfully for orderCode={}. workspaceId={}", orderCode, workspaceId);
             return new WorkspaceActivationResponse(true, workspaceId != null, workspaceId,
-                    workspaceId != null ? "Workspace has been created successfully." : "Payment confirmed. Workspace activation is complete.");
+                    workspaceId != null ? "Workspace has been created successfully." : "Payment confirmed. Workspace activation is complete.",
+                    payment.getOrderCode(),
+                    payment.getPaymentCode(),
+                    PaymentTransactionStatus.SUCCESS,
+                    updatedReg.getRegistrationStatus(),
+                    updatedReg.getPaymentStatus(),
+                    updatedReg.getOwnerEmail());
         } else {
             failPayment(payment.getId(), sanitizedWebhook);
             log.warn("PayOS webhook reported failure for orderCode={} code={}", orderCode, request.code());
-            return new WorkspaceActivationResponse(false, false, null, "Payment failed or was cancelled by the provider.");
+                WorkspaceRegistrationEntity failedReg = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+                return new WorkspaceActivationResponse(false, false, null,
+                    "Payment failed or was cancelled by the provider.",
+                    payment.getOrderCode(),
+                    payment.getPaymentCode(),
+                    PaymentTransactionStatus.FAILED,
+                    failedReg.getRegistrationStatus(),
+                    failedReg.getPaymentStatus(),
+                    failedReg.getOwnerEmail());
         }
     }
 
@@ -5204,6 +5248,7 @@ public class ForepService {
         if (generatedPassword) {
             credentialsEmailService.sendInitialCredentials(email, username, temporaryPassword, workspace.getName());
         }
+        credentialsEmailService.sendActivationConfirmation(email, username, workspace.getName(), temporaryPassword);
         return List.of(toAccountProvisioningView(owner, temporaryPassword));
     }
 
@@ -5817,7 +5862,19 @@ public class ForepService {
     public record WorkspaceRegistrationView(UUID id, String businessName, String workspaceName, String workspaceIdentifier, String contactEmail, String contactPhone, String businessAddress, String representativeFullName, String representativeEmail, String representativePhone, String registrationToken, UUID subscriptionPlanId, SubscriptionPlanView subscriptionPlan, int maxUsers, int maxOwnerAccounts, int maxEmployeeAccounts, String ownerFullName, String ownerEmail, String ownerPhone, String paymentProofUrl, PaymentStatus paymentStatus, RegistrationStatus registrationStatus, List<PublicPaymentStatusView> paymentHistory, UUID workspaceId, UUID reviewedBy, OffsetDateTime reviewedAt, String reviewNote, OffsetDateTime expiredAt, List<AccountProvisioningView> generatedOwnerAccounts, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record AdminWorkspaceCreationView(PlatformWorkspaceView workspace, WorkspaceRegistrationView registration, PaymentTransactionView payment) {}
     public record PaymentTransactionView(UUID id, UUID workspaceRegistrationId, UUID workspaceId, UUID subscriptionPlanId, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String orderCode, String requestId, String paymentLinkId, UUID referenceId, UUID userId, String responseCode, String providerName, String providerTransactionId, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String qrDisplayData, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, String paymentConfigurationSnapshot, String providerResponseSnapshot, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime confirmedAt, UUID confirmedBy, OffsetDateTime expiredAt, String failureReason, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
-    public record PayosPaymentStatusView(String orderCode, String status, BigDecimal amount) {}
+        public record PayosPaymentStatusView(
+            String orderCode,
+            String status,
+            BigDecimal amount,
+            String message,
+            String paymentCode,
+            PaymentTransactionStatus paymentStatus,
+            UUID workspaceRegistrationId,
+            RegistrationStatus registrationStatus,
+            PaymentStatus registrationPaymentStatus,
+            UUID workspaceId,
+            String ownerEmail,
+            OffsetDateTime paidAt) {}
     public record PublicPaymentStatusView(UUID workspaceRegistrationId, UUID workspaceId, PaymentStatus registrationPaymentStatus, RegistrationStatus registrationStatus, PaymentMethod paymentMethod, BigDecimal amount, String currency, String paymentCode, String providerPaymentUrl, String providerDeeplink, String providerQrCodeUrl, String bankCode, String bankName, String bankAccountNumber, String bankAccountName, String transferContent, PaymentTransactionStatus status, OffsetDateTime paidAt, OffsetDateTime expiredAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record BusinessFeedbackView(UUID id, UUID workspaceId, int rating, String content, String supportNote, FeedbackStatus status, UUID reviewedBy, OffsetDateTime reviewedAt, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType, UUID entityId, String result, String ipAddress, String userAgent, String requestId, String metadata, String oldValue, String newValue, OffsetDateTime createdAt) {}
@@ -5832,6 +5889,12 @@ public class ForepService {
             boolean success,
             boolean workspaceCreated,
             UUID workspaceId,
-            String message) {}
+            String message,
+            String orderCode,
+            String paymentCode,
+            PaymentTransactionStatus paymentStatus,
+            RegistrationStatus registrationStatus,
+            PaymentStatus registrationPaymentStatus,
+            String ownerEmail) {}
 }
 

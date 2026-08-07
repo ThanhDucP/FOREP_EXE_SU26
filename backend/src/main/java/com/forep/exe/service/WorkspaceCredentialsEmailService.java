@@ -25,11 +25,11 @@ public class WorkspaceCredentialsEmailService {
         this.senderName = senderName == null || senderName.isBlank() ? "FOREP EXE" : senderName.trim();
     }
 
-    public void sendInitialCredentials(String recipient, String username, String temporaryPassword,
-                                       String workspaceName) {
+    public boolean sendInitialCredentials(String recipient, String username, String temporaryPassword,
+                                          String workspaceName) {
         if (isBlank(sender) || isBlank(recipient) || isBlank(username) || isBlank(temporaryPassword)) {
             log.warn("Initial credentials email was skipped because mail is not configured.");
-            return;
+            return false;
         }
 
         try {
@@ -46,9 +46,42 @@ public class WorkspaceCredentialsEmailService {
                     + "Không chia sẻ email này với người khác.\n\n"
                     + senderName);
             mailSender.send(message);
+            return true;
         } catch (Exception exception) {
             // Payment activation must remain successful even if the SMTP provider is temporarily unavailable.
             log.error("Could not send initial workspace credentials email.", exception);
+            return false;
+        }
+    }
+
+    public boolean sendActivationConfirmation(String recipient,
+                                              String username,
+                                              String workspaceName,
+                                              String temporaryPassword) {
+        if (isBlank(sender) || isBlank(recipient) || isBlank(username) || isBlank(workspaceName)) {
+            log.warn("Activation confirmation email was skipped because mail is not configured.");
+            return false;
+        }
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(sender);
+            message.setTo(recipient);
+            message.setSubject("Workspace FOREP EXE đã kích hoạt thành công");
+            String passwordLine = isBlank(temporaryPassword)
+                    ? "Mật khẩu: Mật khẩu bạn đã thiết lập khi đăng ký workspace."
+                    : "Mật khẩu tạm thời: " + temporaryPassword;
+            message.setText("Xin chào,\n\n"
+                    + "Thanh toán cho workspace \"" + workspaceName + "\" đã hoàn tất và tài khoản đã sẵn sàng.\n\n"
+                    + "Email đăng nhập: " + recipient + "\n"
+                    + "Tên đăng nhập: " + username + "\n"
+                    + passwordLine + "\n\n"
+                    + "Vui lòng đăng nhập và đổi mật khẩu ngay sau lần đăng nhập đầu tiên.\n\n"
+                    + senderName);
+            mailSender.send(message);
+            return true;
+        } catch (Exception exception) {
+            log.error("Could not send workspace activation confirmation email.", exception);
+            return false;
         }
     }
 
