@@ -60,17 +60,22 @@ public class PayosPaymentReconciliationService {
         if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
             return;
         }
-        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
-            return;
-        }
-        // Recover provider-confirmed rows left by an interrupted/older activation flow.
-        if (payment.getStatus() == PaymentTransactionStatus.PAID) {
+
+        // A legacy/interrupted activation may have persisted PAID or SUCCESS before
+        // workspace creation completed. Always send both successful local states through
+        // the idempotent activation bridge; it returns immediately when the workspace is
+        // already present and repairs the row when it is not.
+        if (payment.getStatus() == PaymentTransactionStatus.PAID
+                || payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
             activationService.activateProviderConfirmedPayment(
                     payment.getId(),
-                    payment.getRawProviderResponse() == null ? "PayOS provider status already confirmed PAID." : payment.getRawProviderResponse()
+                    payment.getRawProviderResponse() == null
+                            ? "PayOS provider status already confirmed successful."
+                            : payment.getRawProviderResponse()
             );
             return;
         }
+
         if (payment.getStatus() == PaymentTransactionStatus.FAILED
                 || payment.getStatus() == PaymentTransactionStatus.CANCELLED
                 || payment.getStatus() == PaymentTransactionStatus.REFUNDED
@@ -115,7 +120,7 @@ public class PayosPaymentReconciliationService {
 
             // Do not set local status to PAID before this call: the legacy confirmPayment
             // routine treats PAID as already processed. The activation bridge validates
-            // the final state and retries recoverable PAID rows separately.
+            // the final state and retries recoverable PAID/SUCCESS rows separately.
             activationService.activateProviderConfirmedPayment(payment.getId(), providerStatus.rawResponse());
 
             PaymentTransactionEntity activated = paymentTransactions.findById(payment.getId())
