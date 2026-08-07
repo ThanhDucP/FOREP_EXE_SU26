@@ -48,6 +48,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PATCH, "/api/public/workspace-registrations/*/select-plan",
                                 "/api/public/workspace-registrations/*/cancel").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/workspace-registrations/*/payments").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook", "/api/v1/payments/payos/webhook").denyAll()
                         .requestMatchers("/api/v1/health", "/api/v1/auth/login",
                                 "/api/v1/subscription-plans", "/api/v1/subscription-plans/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
