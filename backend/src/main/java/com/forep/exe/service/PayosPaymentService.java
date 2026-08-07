@@ -148,7 +148,9 @@ public class PayosPaymentService {
                 signature.trim().toLowerCase().getBytes(StandardCharsets.US_ASCII));
     }
 
-    private String webhookRawSignature(Map<String, Object> data) {
+    // Package-private only for legacy tests that are still compiled by Maven even with -DskipTests.
+    // Runtime payment activation does not call this helper or any webhook endpoint.
+    String webhookRawSignature(Map<String, Object> data) {
         return data.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> entry.getKey() + "=" + signatureValue(entry.getValue()))
