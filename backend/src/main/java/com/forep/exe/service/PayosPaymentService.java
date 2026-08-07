@@ -84,6 +84,47 @@ public class PayosPaymentService {
         }
     }
 
+    /**
+     * Server-to-server status lookup used as a safe reconciliation fallback when the browser has
+     * returned from PayOS but the webhook has not reached the backend yet. The result is never
+     * trusted from browser query parameters; it is read directly from PayOS using merchant keys.
+     */
+    public ProviderPaymentStatus getPaymentStatus(String orderCode, PayosProviderConfig config) {
+        if (!isConfigured(config)) throw new IllegalArgumentException("PayOS provider is not fully configured.");
+        if (blank(orderCode)) throw new IllegalArgumentException("PayOS orderCode is required.");
+        try {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(paymentStatusEndpoint(config.apiEndpoint(), orderCode)))
+                    .timeout(requestTimeout)
+                    .header("Accept", "application/json")
+                    .header("x-client-id", config.clientId())
+                    .header("x-api-key", config.apiKey())
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            Map<?, ?> envelope = objectMapper.readValue(response.body(), Map.class);
+            Map<?, ?> data = envelope.get("data") instanceof Map<?, ?> map ? map : Map.of();
+            String code = string(envelope.get("code"));
+            if (response.statusCode() >= 400 || !"00".equals(code)) {
+                throw new PayosProviderException("PayOS rejected payment status lookup: " + safeMessage(envelope.get("desc")));
+            }
+            String status = string(data.get("status"));
+            String paymentLinkId = string(data.get("id"));
+            long amount = longValue(data.get("amount"));
+            long amountPaid = longValue(data.get("amountPaid"));
+            if (blank(status)) {
+                throw new PayosProviderException("PayOS payment status response did not contain a status.");
+            }
+            return new ProviderPaymentStatus(status, amount, amountPaid, paymentLinkId, response.body());
+        } catch (HttpTimeoutException exception) {
+            throw new PayosProviderException("PayOS payment status lookup timed out.", exception);
+        } catch (PayosProviderException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new PayosProviderException("Could not query PayOS payment status.", exception);
+        }
+    }
+
     public String createRawSignature(long orderCode, long amount, String description, String returnUrl, String cancelUrl) {
         return "amount=" + amount + "&cancelUrl=" + cancelUrl + "&description=" + description
                 + "&orderCode=" + orderCode + "&returnUrl=" + returnUrl;
@@ -129,10 +170,21 @@ public class PayosPaymentService {
 
     public String createEndpoint(String baseUrl) { return normalizeBaseUrl(baseUrl) + CREATE_PATH; }
 
+    public String paymentStatusEndpoint(String baseUrl, String orderCode) {
+        return normalizeBaseUrl(baseUrl) + CREATE_PATH + "/" + orderCode;
+    }
+
     public boolean isConfigured(PayosProviderConfig config) {
         return config != null && !blank(config.apiEndpoint()) && !blank(config.clientId())
                 && !blank(config.apiKey()) && !blank(config.checksumKey())
                 && !blank(config.returnUrl()) && !blank(config.cancelUrl());
+    }
+
+    private long longValue(Object value) {
+        if (value == null) return 0L;
+        if (value instanceof Number number) return number.longValue();
+        try { return Long.parseLong(value.toString()); }
+        catch (NumberFormatException exception) { return 0L; }
     }
 
     private String signatureValue(Object value) {
@@ -165,6 +217,8 @@ public class PayosPaymentService {
                                       String returnUrl, String cancelUrl) {}
     public record ProviderPaymentResult(String checkoutUrl, String paymentLinkId, String rawRequest,
                                         String rawResponse, String responseCode) {}
+    public record ProviderPaymentStatus(String status, long amount, long amountPaid, String paymentLinkId,
+                                        String rawResponse) {}
     public static class PayosProviderException extends IllegalStateException {
         public PayosProviderException(String message) { super(message); }
         public PayosProviderException(String message, Throwable cause) { super(message, cause); }
