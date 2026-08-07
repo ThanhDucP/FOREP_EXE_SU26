@@ -2,6 +2,8 @@ package com.forep.exe.service;
 
 import com.forep.exe.domain.Enums.RegistrationStatus;
 import com.forep.exe.domain.Enums.PaymentStatus;
+import com.forep.exe.domain.Enums.Role;
+import com.forep.exe.persistence.UserEntity;
 import com.forep.exe.persistence.UserRepository;
 import com.forep.exe.persistence.WorkspaceRegistrationEntity;
 import com.forep.exe.persistence.WorkspaceRepository;
@@ -159,7 +161,7 @@ public class WorkspaceRegistrationValidationService {
         }
 
         // Admin-direct path: workspaceId is already set; payment is confirmed
-        // separately via PayOS webhook/admin confirm – skip payment status check here.
+        // separately through PayOS server-to-server reconciliation.
         boolean isAdminDirectPath = registration.getWorkspaceId() != null;
 
         // ── 5. Payment status (public flow only) ─────────────────────────────
@@ -180,13 +182,26 @@ public class WorkspaceRegistrationValidationService {
             }
         }
 
-        // ── 6. Owner email uniqueness (re-check at activation time) ──────────
+        // ── 6. Owner email uniqueness / idempotent retry ─────────────────────
+        // A provider-confirmed payment can be retried after a partially completed
+        // activation. For an admin-direct registration, reusing the existing owner is
+        // safe only when that account belongs to THIS workspace and is actually an
+        // owner account. Any cross-workspace or non-owner collision remains blocked.
         String ownerEmail = registration.getOwnerEmail().trim().toLowerCase(java.util.Locale.ROOT);
-        if (users.existsByEmailIgnoreCase(ownerEmail)) {
-            log.warn("Registration {} ownerEmail='{}' already belongs to an existing user account – activation blocked",
-                    regId, ownerEmail);
-            throw new WorkspaceValidationException(ERR_OWNER_EMAIL_ALREADY_EXISTS,
-                    "Email '" + ownerEmail + "' đã được đăng ký bởi tài khoản khác trong hệ thống.");
+        UserEntity existingOwnerEmailAccount = users.findFirstByEmailIgnoreCase(ownerEmail).orElse(null);
+        if (existingOwnerEmailAccount != null) {
+            boolean sameWorkspaceOwner = isAdminDirectPath
+                    && registration.getWorkspaceId().equals(existingOwnerEmailAccount.getWorkspaceId())
+                    && (existingOwnerEmailAccount.getRole() == Role.BUSINESS_OWNER
+                        || existingOwnerEmailAccount.getRole() == Role.OWNER);
+            if (!sameWorkspaceOwner) {
+                log.warn("Registration {} ownerEmail='{}' already belongs to another/non-owner account – activation blocked",
+                        regId, ownerEmail);
+                throw new WorkspaceValidationException(ERR_OWNER_EMAIL_ALREADY_EXISTS,
+                        "Email '" + ownerEmail + "' đã được đăng ký bởi tài khoản khác trong hệ thống.");
+            }
+            log.info("Registration {} reuses existing owner account {} in workspace {} during idempotent activation retry",
+                    regId, existingOwnerEmailAccount.getId(), registration.getWorkspaceId());
         }
 
         // ── 7. Workspace identifier conflict (re-check to guard race conditions) ──
