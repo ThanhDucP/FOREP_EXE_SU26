@@ -19,8 +19,6 @@ import java.util.UUID;
  * NOTE: confirmPayment currently lives as a private method in the legacy
  * ForepService monolith. This bridge is deliberately isolated so the payment
  * flow can be corrected without duplicating the large activation routine.
- * When ForepService is split into modules, replace this bridge with a normal
- * public internal application service.
  */
 @Service
 public class PayosWorkspaceActivationService {
@@ -45,18 +43,12 @@ public class PayosWorkspaceActivationService {
 
     @Transactional
     public void activateProviderConfirmedPayment(UUID paymentId, String providerEvidence) {
-        try {
-            ReflectionUtils.invokeMethod(
-                    confirmPaymentMethod,
-                    forepService,
-                    paymentId,
-                    false,
-                    providerEvidence
-            );
-        } catch (RuntimeException exception) {
-            throw exception;
-        } catch (Exception exception) {
-            throw new IllegalStateException("Could not activate provider-confirmed PayOS payment.", exception);
-        }
+        ReflectionUtils.invokeMethod(
+                confirmPaymentMethod,
+                forepService,
+                paymentId,
+                false,
+                providerEvidence
+        );
     }
 }
