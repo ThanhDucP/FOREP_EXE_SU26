@@ -6,6 +6,7 @@ import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.dto.Requests.SelectSubscriptionPlanRequest;
 import com.forep.exe.dto.Requests.WorkspaceRegistrationRequest;
 import com.forep.exe.service.ForepService;
+import com.forep.exe.service.PayosPaymentReconciliationService;
 import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import com.forep.exe.service.WorkspaceValidationException;
 import jakarta.validation.Valid;
@@ -21,9 +22,12 @@ import java.util.UUID;
 public class PublicRegistrationController {
     private static final Logger log = LoggerFactory.getLogger(PublicRegistrationController.class);
     private final ForepService service;
+    private final PayosPaymentReconciliationService payosReconciliation;
 
-    public PublicRegistrationController(ForepService service) {
+    public PublicRegistrationController(ForepService service,
+                                        PayosPaymentReconciliationService payosReconciliation) {
         this.service = service;
+        this.payosReconciliation = payosReconciliation;
     }
 
     @GetMapping("/public/subscription-plans")
@@ -67,11 +71,17 @@ public class PublicRegistrationController {
 
     @GetMapping("/public/payments/{paymentCode}/status")
     ApiResponse<?> paymentStatus(@PathVariable String paymentCode, @RequestParam String token) {
+        // If PayOS already says PAID, activate the workspace immediately before returning status.
+        // The browser does not need to wait for a webhook or perform any manual confirmation.
+        payosReconciliation.reconcileByPaymentCode(paymentCode);
         return ApiResponse.ok(service.publicPaymentStatus(paymentCode, token));
     }
 
     @GetMapping("/payments/{orderCode}/status")
     ApiResponse<?> payosPaymentStatus(@PathVariable String orderCode) {
+        // Return/callback page can poll this endpoint. A direct server-to-server PayOS status
+        // check promotes PAID orders through the existing activation pipeline immediately.
+        payosReconciliation.reconcileByOrderCode(orderCode);
         return ApiResponse.ok(service.payosPaymentStatus(orderCode));
     }
 
@@ -83,8 +93,6 @@ public class PublicRegistrationController {
                     webhookValue(request, "orderCode"), request.code(), result.workspaceCreated(), result.workspaceId());
             return ApiResponse.ok(result);
         } catch (WorkspaceValidationException exception) {
-            // Activation validation failed (e.g. expired registration, duplicate email).
-            // Return HTTP 200 with an error body so PayOS does not retry the webhook.
             log.error("PayOS webhook activation failed for orderCode={} errorCode={} reason={}",
                     webhookValue(request, "orderCode"), exception.getErrorCode(), exception.getMessage());
             return ApiResponse.error(exception.getErrorCode(), exception.getMessage(), null);
