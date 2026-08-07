@@ -7,32 +7,38 @@ import com.forep.exe.persistence.PaymentTransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
- * Proactively monitors local PayOS payments that still need reconciliation or activation.
+ * Proactively monitors PayOS payments that still require provider reconciliation
+ * or workspace activation recovery.
  *
- * Runtime payment confirmation does not depend on webhook delivery. As soon as PayOS
- * reports PAID through its server API, reconciliation confirms the payment, activates
- * the workspace, creates subscription/owner accounts and sends credentials.
- *
- * PAID is intentionally monitored as a recovery state for older/interrupted flows where
- * PayOS had already been confirmed but workspace activation did not finish.
+ * Normal pending/processing rows are limited to a recent lookback window. Provider-
+ * confirmed PAID/SUCCESS rows with no workspace are recovered regardless of age so an
+ * interrupted legacy activation cannot remain stuck forever.
  */
 @Service
 public class PayosPendingPaymentMonitorService {
     private static final Logger log = LoggerFactory.getLogger(PayosPendingPaymentMonitorService.class);
 
-    private static final Set<PaymentTransactionStatus> MONITORED_STATUSES = EnumSet.of(
+    private static final Set<PaymentTransactionStatus> RECONCILIATION_STATUSES = EnumSet.of(
             PaymentTransactionStatus.PENDING,
-            PaymentTransactionStatus.PROCESSING,
-            PaymentTransactionStatus.PAID
+            PaymentTransactionStatus.PROCESSING
+    );
+
+    private static final Set<PaymentTransactionStatus> ACTIVATION_RECOVERY_STATUSES = EnumSet.of(
+            PaymentTransactionStatus.PAID,
+            PaymentTransactionStatus.SUCCESS
     );
 
     private final PaymentTransactionRepository paymentTransactions;
@@ -57,18 +63,35 @@ public class PayosPendingPaymentMonitorService {
     )
     public void reconcilePendingPayosPayments() {
         OffsetDateTime cutoff = OffsetDateTime.now().minusHours(lookbackHours);
+        PageRequest page = PageRequest.of(0, batchSize);
 
+        // Prioritize provider-confirmed rows whose workspace activation never finished.
+        List<PaymentTransactionEntity> recovery = paymentTransactions.findIncompleteActivations(
+                PaymentMethod.PAYOS,
+                ACTIVATION_RECOVERY_STATUSES,
+                page
+        );
+
+        // Query only recent pending/processing PayOS rows in the database instead of
+        // loading the complete payment table into memory every scheduling interval.
         List<PaymentTransactionEntity> pending = paymentTransactions
-                .findAllByOrderByCreatedAtDesc()
-                .stream()
-                .filter(payment -> payment.getPaymentMethod() == PaymentMethod.PAYOS)
-                .filter(payment -> MONITORED_STATUSES.contains(payment.getStatus()))
-                .filter(payment -> payment.getCreatedAt() != null && payment.getCreatedAt().isAfter(cutoff))
+                .findByPaymentMethodAndStatusInAndCreatedAtAfterOrderByCreatedAtDesc(
+                        PaymentMethod.PAYOS,
+                        RECONCILIATION_STATUSES,
+                        cutoff,
+                        page
+                );
+
+        Map<UUID, PaymentTransactionEntity> uniqueCandidates = new LinkedHashMap<>();
+        recovery.forEach(payment -> uniqueCandidates.put(payment.getId(), payment));
+        pending.forEach(payment -> uniqueCandidates.putIfAbsent(payment.getId(), payment));
+
+        List<PaymentTransactionEntity> candidates = uniqueCandidates.values().stream()
                 .filter(payment -> payment.getOrderCode() != null && !payment.getOrderCode().isBlank())
                 .limit(batchSize)
                 .toList();
 
-        for (PaymentTransactionEntity payment : pending) {
+        for (PaymentTransactionEntity payment : candidates) {
             try {
                 reconciliationService.reconcileByOrderCode(payment.getOrderCode());
             } catch (Exception exception) {
