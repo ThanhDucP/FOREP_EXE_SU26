@@ -7,20 +7,22 @@ import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.PayosConfigEntity;
 import com.forep.exe.persistence.PayosConfigRepository;
 import com.forep.exe.service.PayosPaymentService.PayosProviderConfig;
+import com.forep.exe.service.PayosPaymentService.PayosProviderException;
 import com.forep.exe.service.PayosPaymentService.ProviderPaymentStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.OffsetDateTime;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Reconciles a local pending PayOS transaction against PayOS server-to-server status.
+ * Reconciles local PayOS transactions against PayOS server-to-server status.
  *
- * This service is invoked from payment-status reads and by the proactive pending-payment monitor.
- * When PayOS reports PAID, the payment is sent directly into FOREP's existing confirmation +
- * workspace activation pipeline. No fake webhook is created and browser callback parameters are
- * never trusted as proof of payment.
+ * Webhook delivery is not part of this flow. Status reads and the scheduled monitor
+ * both query PayOS directly. A PAID provider state is sent immediately into the
+ * existing idempotent workspace activation pipeline.
  */
 @Service
 public class PayosPaymentReconciliationService {
@@ -58,8 +60,15 @@ public class PayosPaymentReconciliationService {
         if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
             return;
         }
-        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS
-                || payment.getStatus() == PaymentTransactionStatus.PAID) {
+        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS) {
+            return;
+        }
+        // Recover provider-confirmed rows left by an interrupted/older activation flow.
+        if (payment.getStatus() == PaymentTransactionStatus.PAID) {
+            activationService.activateProviderConfirmedPayment(
+                    payment.getId(),
+                    payment.getRawProviderResponse() == null ? "PayOS provider status already confirmed PAID." : payment.getRawProviderResponse()
+            );
             return;
         }
         if (payment.getStatus() == PaymentTransactionStatus.FAILED
@@ -69,11 +78,10 @@ public class PayosPaymentReconciliationService {
             return;
         }
 
-        PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID).orElse(null);
-        if (setting == null || !setting.isActive()) {
-            log.warn("Skipped PayOS reconciliation orderCode={} because PayOS is not configured/enabled.",
-                    payment.getOrderCode());
-            return;
+        PayosConfigEntity setting = payosConfigs.findById(PAYOS_CONFIG_ID)
+                .orElseThrow(() -> new PayosProviderException("PayOS is not configured."));
+        if (!setting.isActive()) {
+            throw new PayosProviderException("PayOS configuration is disabled.");
         }
 
         try {
@@ -87,60 +95,99 @@ public class PayosPaymentReconciliationService {
             );
 
             ProviderPaymentStatus providerStatus = payosPaymentService.getPaymentStatus(payment.getOrderCode(), config);
+            String providerState = providerStatus.status().trim().toUpperCase(Locale.ROOT);
             log.info("PayOS status lookup orderCode={} localStatus={} providerStatus={} amount={} amountPaid={}",
-                    payment.getOrderCode(), payment.getStatus(), providerStatus.status(),
+                    payment.getOrderCode(), payment.getStatus(), providerState,
                     providerStatus.amount(), providerStatus.amountPaid());
 
-            if (!"PAID".equalsIgnoreCase(providerStatus.status())) {
-                return;
-            }
-
-            long expectedAmount = payment.getAmount().longValueExact();
-            if (providerStatus.amount() > 0 && providerStatus.amount() != expectedAmount) {
-                log.error("PayOS reconciliation amount mismatch orderCode={} expected={} actual={}",
-                        payment.getOrderCode(), expectedAmount, providerStatus.amount());
-                return;
-            }
-            if (providerStatus.amountPaid() > 0 && providerStatus.amountPaid() < expectedAmount) {
-                log.warn("PayOS reconciliation ignored underpaid orderCode={} expected={} paid={}",
-                        payment.getOrderCode(), expectedAmount, providerStatus.amountPaid());
-                return;
-            }
-
-            String paymentLinkId = providerStatus.paymentLinkId();
-            if (paymentLinkId != null && !paymentLinkId.isBlank()) {
-                if (payment.getPaymentLinkId() != null
-                        && !payment.getPaymentLinkId().isBlank()
-                        && !paymentLinkId.equals(payment.getPaymentLinkId())) {
-                    log.error("PayOS reconciliation paymentLinkId mismatch orderCode={} expected={} actual={}",
-                            payment.getOrderCode(), payment.getPaymentLinkId(), paymentLinkId);
-                    return;
-                }
-                if (payment.getPaymentLinkId() == null || payment.getPaymentLinkId().isBlank()) {
-                    payment.setPaymentLinkId(paymentLinkId);
-                }
-                if (payment.getProviderTransactionId() == null || payment.getProviderTransactionId().isBlank()) {
-                    payment.setProviderTransactionId(paymentLinkId);
-                }
-            }
-
-            payment.setResponseCode("00");
             payment.setRawProviderResponse(providerStatus.rawResponse());
-            payment.setUpdatedAt(java.time.OffsetDateTime.now());
+            payment.setResponseCode(providerState);
+            payment.setUpdatedAt(OffsetDateTime.now());
+
+            if (!"PAID".equals(providerState)) {
+                syncNonPaidProviderState(payment, providerState);
+                return;
+            }
+
+            validatePaidProviderState(payment, providerStatus);
+            backfillProviderTransactionId(payment, providerStatus.paymentLinkId());
             paymentTransactions.save(payment);
 
-            // Directly reuse the existing idempotent payment confirmation/workspace activation pipeline.
-            // This creates the workspace, subscription, Business Owner account(s) and sends email credentials.
-            activationService.activateProviderConfirmedPayment(
-                    payment.getId(),
-                    providerStatus.rawResponse()
-            );
+            // Do not set local status to PAID before this call: the legacy confirmPayment
+            // routine treats PAID as already processed. The activation bridge validates
+            // the final state and retries recoverable PAID rows separately.
+            activationService.activateProviderConfirmedPayment(payment.getId(), providerStatus.rawResponse());
 
-            log.info("PayOS PAID orderCode={} activated directly from provider status.", payment.getOrderCode());
-        } catch (Exception exception) {
-            // Keep status reads available, but log the exact root cause so production no longer fails silently.
-            log.error("PayOS reconciliation failed orderCode={} reason={}",
-                    payment.getOrderCode(), exception.getMessage(), exception);
+            PaymentTransactionEntity activated = paymentTransactions.findById(payment.getId())
+                    .orElseThrow(() -> new IllegalStateException("Payment disappeared after PayOS activation."));
+            log.info("PayOS PAID orderCode={} activation finished localStatus={}",
+                    payment.getOrderCode(), activated.getStatus());
+        } catch (PayosProviderException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            String reason = rootMessage(exception);
+            log.error("PayOS reconciliation failed orderCode={} reason={}", payment.getOrderCode(), reason, exception);
+            throw new PayosProviderException(
+                    "PayOS đã xác nhận/đang được đối soát nhưng FOREP không thể hoàn tất xử lý: " + reason,
+                    exception
+            );
         }
+    }
+
+    private void validatePaidProviderState(PaymentTransactionEntity payment, ProviderPaymentStatus providerStatus) {
+        long expectedAmount = payment.getAmount().longValueExact();
+        if (providerStatus.amount() > 0 && providerStatus.amount() != expectedAmount) {
+            throw new IllegalStateException(
+                    "PayOS amount mismatch. expected=" + expectedAmount + ", actual=" + providerStatus.amount());
+        }
+        if (providerStatus.amountPaid() > 0 && providerStatus.amountPaid() < expectedAmount) {
+            throw new IllegalStateException(
+                    "PayOS transaction is underpaid. expected=" + expectedAmount + ", paid=" + providerStatus.amountPaid());
+        }
+
+        String providerPaymentLinkId = providerStatus.paymentLinkId();
+        if (providerPaymentLinkId != null && !providerPaymentLinkId.isBlank()
+                && payment.getPaymentLinkId() != null && !payment.getPaymentLinkId().isBlank()
+                && !providerPaymentLinkId.equals(payment.getPaymentLinkId())) {
+            throw new IllegalStateException(
+                    "PayOS paymentLinkId mismatch for orderCode=" + payment.getOrderCode());
+        }
+    }
+
+    private void backfillProviderTransactionId(PaymentTransactionEntity payment, String providerPaymentLinkId) {
+        if (providerPaymentLinkId == null || providerPaymentLinkId.isBlank()) {
+            return;
+        }
+        if (payment.getPaymentLinkId() == null || payment.getPaymentLinkId().isBlank()) {
+            payment.setPaymentLinkId(providerPaymentLinkId);
+        }
+        if (payment.getProviderTransactionId() == null || payment.getProviderTransactionId().isBlank()) {
+            payment.setProviderTransactionId(providerPaymentLinkId);
+        }
+    }
+
+    private void syncNonPaidProviderState(PaymentTransactionEntity payment, String providerState) {
+        PaymentTransactionStatus next = switch (providerState) {
+            case "PROCESSING" -> PaymentTransactionStatus.PROCESSING;
+            case "FAILED" -> PaymentTransactionStatus.FAILED;
+            case "CANCELLED", "CANCELED" -> PaymentTransactionStatus.CANCELLED;
+            case "EXPIRED" -> PaymentTransactionStatus.EXPIRED;
+            case "REFUNDED" -> PaymentTransactionStatus.REFUNDED;
+            case "PENDING" -> payment.getStatus() == PaymentTransactionStatus.PROCESSING
+                    ? PaymentTransactionStatus.PROCESSING
+                    : PaymentTransactionStatus.PENDING;
+            default -> payment.getStatus();
+        };
+        payment.setStatus(next);
+        paymentTransactions.save(payment);
+    }
+
+    private String rootMessage(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor.getCause() != null && cursor.getCause() != cursor) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        return message == null || message.isBlank() ? cursor.getClass().getSimpleName() : message;
     }
 }
