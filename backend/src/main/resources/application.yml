@@ -33,6 +33,10 @@ forep:
     webhook-url: ${FOREP_PAYOS_WEBHOOK_URL:https://forep-exe-backend.onrender.com/api/payments/payos/webhook}
     webhook-refresh-ms: ${FOREP_PAYOS_WEBHOOK_REFRESH_MS:60000}
     webhook-refresh-initial-ms: ${FOREP_PAYOS_WEBHOOK_REFRESH_INITIAL_MS:15000}
+    pending-monitor-delay-ms: ${FOREP_PAYOS_PENDING_MONITOR_DELAY_MS:5000}
+    pending-monitor-initial-delay-ms: ${FOREP_PAYOS_PENDING_MONITOR_INITIAL_DELAY_MS:5000}
+    pending-monitor-batch-size: ${FOREP_PAYOS_PENDING_MONITOR_BATCH_SIZE:20}
+    pending-monitor-lookback-hours: ${FOREP_PAYOS_PENDING_MONITOR_LOOKBACK_HOURS:24}
   mail:
     from-name: ${MAIL_FROM_NAME:FOREP EXE}
   ai:
