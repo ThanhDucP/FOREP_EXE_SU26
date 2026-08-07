@@ -10,8 +10,8 @@ import com.forep.exe.domain.Enums.SubscriptionPlanStatus;
 import com.forep.exe.domain.Enums.UserStatus;
 import com.forep.exe.domain.Enums.WorkspaceStatus;
 import com.forep.exe.dto.Requests.CreateHrAccountRequest;
-import com.forep.exe.dto.Requests.ConfirmPayosPaymentRequest;
 import com.forep.exe.dto.Requests.CreatePaymentRequest;
+
 import com.forep.exe.dto.Requests.PayosWebhookRequest;
 import com.forep.exe.dto.Requests.UpdatePayosConfigRequest;
 import com.forep.exe.persistence.AuditLogRepository;
@@ -107,16 +107,19 @@ class WorkspaceAccountFlowIntegrationTest {
     void activationCreatesExactlyOneOwnerAndIsSequentiallyIdempotent() {
         SubscriptionPlanEntity plan = plan(5);
         WorkspaceRegistrationEntity registration = registration(plan, "FO", "owner@forep.vn", "OwnerPass!2026");
-        successfulPayment(registration, plan);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
+        PayosWebhookRequest callback = signedWebhook(payment, payment.getAmount().longValueExact());
 
-        var first = service.approveWorkspaceRegistration(registration.getId(), null);
-        var second = service.approveWorkspaceRegistration(registration.getId(), null);
+        var first = service.handlePayosWebhook(callback);
+        // Second call is idempotent – webhook already processed
+        var second = service.handlePayosWebhook(callback);
 
+        assertTrue(first.success());
+        assertTrue(first.workspaceCreated());
         assertNotNull(first.workspaceId());
+        assertTrue(second.success());
         assertEquals(first.workspaceId(), second.workspaceId());
-        assertEquals(1, first.generatedOwnerAccounts().size());
-        assertTrue(second.generatedOwnerAccounts().isEmpty());
         List<UserEntity> owners = users.findByWorkspaceIdAndRoleOrderByFullNameAsc(first.workspaceId(), Role.BUSINESS_OWNER);
         assertEquals(1, owners.size());
         assertEquals("owner.fo", owners.getFirst().getUsername());
@@ -124,6 +127,7 @@ class WorkspaceAccountFlowIntegrationTest {
         assertTrue(passwordEncoder.matches("OwnerPass!2026", owners.getFirst().getPasswordHash()));
         assertFalse(owners.getFirst().isMustChangePassword());
         assertEquals(1, workspaceSubscriptions.findByWorkspaceIdOrderByCreatedAtDesc(first.workspaceId()).size());
+        assertEquals(PaymentTransactionStatus.SUCCESS, payments.findById(payment.getId()).orElseThrow().getStatus());
     }
 
     @Test
@@ -131,11 +135,12 @@ class WorkspaceAccountFlowIntegrationTest {
         SubscriptionPlanEntity plan = plan(3);
         WorkspaceRegistrationEntity registration = registration(plan, "CC", "owner@concurrent.vn", "OwnerPass!2026");
         PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            Future<?> first = executor.submit(() -> confirmAfter(start, payment.getId()));
-            Future<?> second = executor.submit(() -> confirmAfter(start, payment.getId()));
+            Future<?> first = executor.submit(() -> confirmAfter(start, payment));
+            Future<?> second = executor.submit(() -> confirmAfter(start, payment));
             start.countDown();
             first.get();
             second.get();
@@ -148,7 +153,7 @@ class WorkspaceAccountFlowIntegrationTest {
         assertEquals(1, workspaces.count());
         assertEquals(1, users.findByWorkspaceIdAndRoleOrderByFullNameAsc(activated.getWorkspaceId(), Role.BUSINESS_OWNER).size());
         assertEquals(1, workspaceSubscriptions.findByWorkspaceIdOrderByCreatedAtDesc(activated.getWorkspaceId()).size());
-        assertEquals(PaymentTransactionStatus.PAID, payments.findById(payment.getId()).orElseThrow().getStatus());
+        assertEquals(PaymentTransactionStatus.SUCCESS, payments.findById(payment.getId()).orElseThrow().getStatus());
     }
 
     @Test
@@ -158,12 +163,13 @@ class WorkspaceAccountFlowIntegrationTest {
         users.saveAndFlush(occupied);
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "FO", "new-owner@forep.vn", "OwnerPass!2026");
-        successfulPayment(registration, plan);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
-        var activated = service.approveWorkspaceRegistration(registration.getId(), null);
+        var result = service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact()));
 
-        UserEntity owner = users.findByWorkspaceIdAndRoleOrderByFullNameAsc(activated.workspaceId(), Role.BUSINESS_OWNER).getFirst();
+        assertTrue(result.workspaceCreated());
+        UserEntity owner = users.findByWorkspaceIdAndRoleOrderByFullNameAsc(result.workspaceId(), Role.BUSINESS_OWNER).getFirst();
         assertEquals("owner.fo2", owner.getUsername());
     }
 
@@ -172,16 +178,16 @@ class WorkspaceAccountFlowIntegrationTest {
         rolePermissions.deleteAll(rolePermissions.findByRoleAndEnabledTrue(Role.BUSINESS_OWNER));
         SubscriptionPlanEntity plan = plan(1);
         WorkspaceRegistrationEntity registration = registration(plan, "MS", "owner@missing-seed.vn", "OwnerPass!2026");
-        successfulPayment(registration, plan);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
         assertThrows(IllegalStateException.class,
-                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+                () -> service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact())));
 
         assertEquals(0, workspaces.count());
         assertEquals(0, workspaceSubscriptions.count());
         assertEquals(0, users.count());
-        assertEquals(null, registrations.findById(registration.getId()).orElseThrow().getWorkspaceId());
+        assertNull(registrations.findById(registration.getId()).orElseThrow().getWorkspaceId());
     }
 
     @Test
@@ -260,17 +266,18 @@ class WorkspaceAccountFlowIntegrationTest {
         assertEquals(UserStatus.ACTIVE, users.findById(hrB.getId()).orElseThrow().getStatus());
     }
 
-    private void confirmAfter(CountDownLatch start, UUID paymentId) {
+    private void confirmAfter(CountDownLatch start, PaymentTransactionEntity payment) {
         try {
             start.await();
-            authenticate(Role.PLATFORM_ADMIN, null);
-            String orderId = payments.findById(paymentId).orElseThrow().getOrderCode();
-            service.adminConfirmPayment(paymentId, new ConfirmPayosPaymentRequest("PAYOS-LINK-CONCURRENT", orderId, null));
+            PayosWebhookRequest callback = signedWebhook(payment, payment.getAmount().longValueExact());
+            try {
+                service.handlePayosWebhook(callback);
+            } catch (IllegalArgumentException ignored) {
+                // One of the two concurrent calls may get a locking or idempotency error; that is expected.
+            }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
-        } finally {
-            SecurityContextHolder.clearContext();
         }
     }
 
@@ -340,8 +347,8 @@ class WorkspaceAccountFlowIntegrationTest {
         registration.setMaxUsers(plan.getMaxUsers());
         registration.setMaxOwnerAccounts(plan.getMaxOwnerAccounts());
         registration.setMaxEmployeeAccounts(plan.getMaxEmployeeAccounts());
-        registration.setPaymentStatus(PaymentStatus.CONFIRMED);
-        registration.setRegistrationStatus(RegistrationStatus.PAYMENT_CONFIRMED);
+        registration.setPaymentStatus(PaymentStatus.PENDING);
+        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT);
         registration.setRegistrationToken(UUID.randomUUID().toString());
         registration.setExpiredAt(now.plusDays(1));
         registration.setCreatedAt(now);
@@ -405,8 +412,12 @@ class WorkspaceAccountFlowIntegrationTest {
         var first = service.handlePayosWebhook(callback);
         var second = service.handlePayosWebhook(callback);
 
-        assertEquals(PaymentTransactionStatus.PAID, first.status());
-        assertEquals(PaymentTransactionStatus.PAID, second.status());
+        assertTrue(first.success());
+        assertTrue(first.workspaceCreated());
+        assertNotNull(first.workspaceId());
+        assertTrue(second.success());
+        assertEquals(first.workspaceId(), second.workspaceId());
+        assertEquals(PaymentTransactionStatus.SUCCESS, payments.findById(payment.getId()).orElseThrow().getStatus());
         assertEquals(1, workspaces.count());
         assertEquals(1, workspaceSubscriptions.count());
     }
@@ -452,14 +463,14 @@ class WorkspaceAccountFlowIntegrationTest {
 
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "FO", "taken@forep.vn", "OwnerPass!2026");
-        successfulPayment(registration, plan);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
         WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
-                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+                () -> service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact())));
 
         assertEquals(WorkspaceRegistrationValidationService.ERR_OWNER_EMAIL_ALREADY_EXISTS, exception.getErrorCode());
-        // Verify rollback occurred: no new workspace, no workspace subscriptions, registration workspaceId is still null
+        // Verify rollback: no new workspace, no workspace subscriptions, registration workspaceId is still null
         assertEquals(1, workspaces.count()); // only otherWorkspace exists
         assertEquals(0, workspaceSubscriptions.count());
         assertNull(registrations.findById(registration.getId()).orElseThrow().getWorkspaceId());
@@ -470,12 +481,12 @@ class WorkspaceAccountFlowIntegrationTest {
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "EX", "expired@forep.vn", "OwnerPass!2026");
         registration.setExpiredAt(OffsetDateTime.now().minusMinutes(5));
-        registration.setRegistrationStatus(RegistrationStatus.PENDING_PAYMENT); // make it non-activatable to trigger expiry check
         registrations.saveAndFlush(registration);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
         WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
-                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+                () -> service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact())));
 
         assertEquals(WorkspaceRegistrationValidationService.ERR_REGISTRATION_EXPIRED, exception.getErrorCode());
     }
@@ -486,10 +497,11 @@ class WorkspaceAccountFlowIntegrationTest {
         WorkspaceRegistrationEntity registration = registration(plan, "MS", "missing@forep.vn", "OwnerPass!2026");
         registration.setBusinessName("  ");
         registrations.saveAndFlush(registration);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
         WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
-                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+                () -> service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact())));
 
         assertEquals(WorkspaceRegistrationValidationService.ERR_MISSING_BUSINESS_NAME, exception.getErrorCode());
     }
@@ -500,12 +512,15 @@ class WorkspaceAccountFlowIntegrationTest {
         WorkspaceRegistrationEntity registration = registration(plan, "RJ", "rejected@forep.vn", "OwnerPass!2026");
         registration.setRegistrationStatus(RegistrationStatus.REJECTED);
         registrations.saveAndFlush(registration);
-        authenticate(Role.PLATFORM_ADMIN, null);
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
 
-        WorkspaceValidationException exception = assertThrows(WorkspaceValidationException.class,
-                () -> service.approveWorkspaceRegistration(registration.getId(), null));
+        // A rejected registration with REJECTED status cannot be confirmed; webhook should fail
+        // because confirmPayment validates the registration can reach PAYMENT_CONFIRMED.
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> service.handlePayosWebhook(signedWebhook(payment, payment.getAmount().longValueExact())));
 
-        assertEquals(WorkspaceRegistrationValidationService.ERR_INVALID_REGISTRATION_STATUS, exception.getErrorCode());
+        assertNotNull(exception.getMessage());
     }
 
     @Test

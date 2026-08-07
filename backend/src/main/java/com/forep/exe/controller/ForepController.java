@@ -134,7 +134,8 @@ public class ForepController {
 
     @PostMapping("/payments/payos/webhook")
     ApiResponse<?> payosWebhook(@RequestBody PayosWebhookRequest request) {
-        return ApiResponse.ok(service.handlePayosWebhook(request));
+        ForepService.WorkspaceActivationResponse result = service.handlePayosWebhook(request);
+        return ApiResponse.ok(result);
     }
 
     @GetMapping("/admin/workspaces")
@@ -213,18 +214,24 @@ public class ForepController {
     }
 
     @PatchMapping("/admin/workspace-registrations/{id}/approve")
+    @ResponseStatus(HttpStatus.GONE)
     ApiResponse<?> approveWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
-        return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
+        // Disabled: workspace is now activated automatically via the PayOS webhook.
+        return ApiResponse.error("ENDPOINT_DISABLED", "Phê duyệt thủ công đã bị vô hiệu hóa. Workspace được tạo tự động qua PayOS webhook.", null);
     }
 
     @PatchMapping("/admin/workspace-registrations/{id}/confirm-payment")
+    @ResponseStatus(HttpStatus.GONE)
     ApiResponse<?> confirmRegistrationPayment(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
-        return ApiResponse.ok(service.confirmRegistrationPayment(id, request));
+        // Disabled: payment confirmation is now handled automatically via the PayOS webhook.
+        return ApiResponse.error("ENDPOINT_DISABLED", "Xác nhận thanh toán thủ công đã bị vô hiệu hóa. Thanh toán được xác nhận tự động qua PayOS webhook.", null);
     }
 
     @PostMapping("/admin/workspace-registrations/{id}/activate")
+    @ResponseStatus(HttpStatus.GONE)
     ApiResponse<?> activateWorkspaceRegistration(@PathVariable UUID id, @RequestBody(required = false) ReviewRegistrationRequest request) {
-        return ApiResponse.ok(service.approveWorkspaceRegistration(id, request));
+        // Disabled: workspace is now activated automatically via the PayOS webhook.
+        return ApiResponse.error("ENDPOINT_DISABLED", "Kích hoạt thủ công đã bị vô hiệu hóa. Workspace được tạo tự động qua PayOS webhook.", null);
     }
 
     @PatchMapping("/admin/payments/{paymentId}/reject")

@@ -78,9 +78,16 @@ public class PublicRegistrationController {
     @PostMapping("/payments/payos/webhook")
     ApiResponse<?> payosWebhook(@RequestBody PayosWebhookRequest request) {
         try {
-            ApiResponse<?> response = ApiResponse.ok(service.handlePayosWebhook(request));
-            log.info("Accepted PayOS webhook orderCode={} code={}", webhookValue(request, "orderCode"), request.code());
-            return response;
+            ForepService.WorkspaceActivationResponse result = service.handlePayosWebhook(request);
+            log.info("Accepted PayOS webhook orderCode={} code={} workspaceCreated={} workspaceId={}",
+                    webhookValue(request, "orderCode"), request.code(), result.workspaceCreated(), result.workspaceId());
+            return ApiResponse.ok(result);
+        } catch (WorkspaceValidationException exception) {
+            // Activation validation failed (e.g. expired registration, duplicate email).
+            // Return HTTP 200 with an error body so PayOS does not retry the webhook.
+            log.error("PayOS webhook activation failed for orderCode={} errorCode={} reason={}",
+                    webhookValue(request, "orderCode"), exception.getErrorCode(), exception.getMessage());
+            return ApiResponse.error(exception.getErrorCode(), exception.getMessage(), null);
         } catch (IllegalArgumentException | IllegalStateException exception) {
             log.warn("Rejected PayOS webhook orderCode={} reason={}", webhookValue(request, "orderCode"), exception.getMessage());
             return ApiResponse.error("PAYOS_WEBHOOK_REJECTED", exception.getMessage(), null);

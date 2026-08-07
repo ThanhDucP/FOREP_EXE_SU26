@@ -2193,7 +2193,7 @@ public class ForepService {
         return new PayosPaymentStatusView(payment.getOrderCode(), status, payment.getAmount());
     }
 
-    public PaymentTransactionView handlePayosWebhook(PayosWebhookRequest request) {
+    public WorkspaceActivationResponse handlePayosWebhook(PayosWebhookRequest request) {
         if (request == null || request.data() == null) {
             throw new IllegalArgumentException("PayOS webhook data is required.");
         }
@@ -2208,6 +2208,14 @@ public class ForepService {
                 .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found."));
         if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
             throw new IllegalArgumentException("Payment provider does not match PayOS.");
+        }
+        // Idempotency: if already processed, return current state without re-processing
+        if (payment.getStatus() == PaymentTransactionStatus.SUCCESS || payment.getStatus() == PaymentTransactionStatus.PAID) {
+            log.info("Webhook for orderCode={} already processed (status={}). Returning current state.", orderCode, payment.getStatus());
+            WorkspaceRegistrationEntity existingReg = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+            UUID existingWorkspaceId = existingReg.getWorkspaceId();
+            return new WorkspaceActivationResponse(true, existingWorkspaceId != null, existingWorkspaceId,
+                    "Payment already processed. Workspace" + (existingWorkspaceId != null ? " has been created." : " activation is complete."));
         }
         long amount = requiredWebhookLong(request.data(), "amount");
         if (payment.getAmount().compareTo(BigDecimal.valueOf(amount)) != 0) {
@@ -2226,27 +2234,26 @@ public class ForepService {
         sanitizedWebhookData.put("success", request.success());
         sanitizedWebhookData.put("data", request.data());
         String sanitizedWebhook = toJson(sanitizedWebhookData);
-        return success ? confirmPayment(payment.getId(), false, sanitizedWebhook) : failPayment(payment.getId(), sanitizedWebhook);
+        if (success) {
+            confirmPayment(payment.getId(), false, sanitizedWebhook);
+            WorkspaceRegistrationEntity updatedReg = requireWorkspaceRegistration(payment.getWorkspaceRegistrationId());
+            UUID workspaceId = updatedReg.getWorkspaceId();
+            log.info("PayOS webhook processed successfully for orderCode={}. workspaceId={}", orderCode, workspaceId);
+            return new WorkspaceActivationResponse(true, workspaceId != null, workspaceId,
+                    workspaceId != null ? "Workspace has been created successfully." : "Payment confirmed. Workspace activation is complete.");
+        } else {
+            failPayment(payment.getId(), sanitizedWebhook);
+            log.warn("PayOS webhook reported failure for orderCode={} code={}", orderCode, request.code());
+            return new WorkspaceActivationResponse(false, false, null, "Payment failed or was cancelled by the provider.");
+        }
     }
 
     public PaymentTransactionView adminConfirmPayment(UUID paymentId, ConfirmPayosPaymentRequest request) {
         requireSystemAdmin();
-        if (request == null || !hasText(request.paymentLinkId()) || !hasText(request.orderCode())) {
-            throw new IllegalArgumentException("Both PayOS paymentLinkId and orderCode are required to confirm payment.");
-        }
-        PaymentTransactionEntity payment = requirePayment(paymentId);
-        if (payment.getPaymentMethod() != PaymentMethod.PAYOS) {
-            throw new IllegalArgumentException("Only PayOS payments can be confirmed.");
-        }
-        if (!payment.getOrderCode().equals(request.orderCode().trim())) {
-            throw new IllegalArgumentException("PayOS orderCode does not match this payment invoice.");
-        }
-        assertPayosPaymentLinkIdAvailable(paymentId, request.paymentLinkId());
-        payment.setPaymentLinkId(request.paymentLinkId().trim());
-        payment.setProviderTransactionId(request.paymentLinkId().trim());
-        payment.setUpdatedAt(OffsetDateTime.now());
-        paymentTransactions.save(payment);
-        return confirmPayment(paymentId, true, request.note());
+        // Manual payment confirmation is disabled. All payments are confirmed automatically
+        // via the PayOS webhook callback. Admin role is read-only for payment history.
+        throw new IllegalArgumentException(
+                "Xác nhận thanh toán thủ công đã bị vô hiệu hóa. Thanh toán được xác nhận tự động qua PayOS webhook.");
     }
 
     public PaymentTransactionView adminRejectPayment(UUID paymentId, ReviewRegistrationRequest request) {
@@ -2271,26 +2278,10 @@ public class ForepService {
 
     public WorkspaceRegistrationView confirmRegistrationPayment(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
-        if (registrationId != null) {
-            requireWorkspaceRegistration(registrationId);
-            throw new IllegalArgumentException("Manual payment-proof confirmation is disabled. Confirm the PayOS paymentLinkId instead.");
-        }
-        WorkspaceRegistrationEntity registration = workspaceRegistrations.findById(registrationId).orElseThrow(() -> new IllegalArgumentException("Không tìm thấy đăng ký workspace."));
-        if (List.of(RegistrationStatus.APPROVED, RegistrationStatus.REJECTED).contains(registration.getRegistrationStatus())) {
-            throw new IllegalArgumentException("Không thể xác nhận thanh toán cho hồ sơ đã đóng.");
-        }
-        if (!hasText(registration.getPaymentProofUrl())) {
-            throw new IllegalArgumentException("Chưa có minh chứng thanh toán để xác nhận.");
-        }
-        registration.setPaymentStatus(PaymentStatus.CONFIRMED);
-        registration.setRegistrationStatus(RegistrationStatus.PAYMENT_SUBMITTED);
-        registration.setReviewedBy(currentUser().userId());
-        registration.setReviewedAt(OffsetDateTime.now());
-        registration.setReviewNote(request == null ? null : request.note());
-        registration.setUpdatedAt(OffsetDateTime.now());
-        registration = workspaceRegistrations.save(registration);
-        audit(currentUser().workspaceId(), "ADMIN_CONFIRM_REGISTRATION_PAYMENT", "WORKSPACE_REGISTRATION", registration.getId(), null, toWorkspaceRegistrationView(registration));
-        return toWorkspaceRegistrationView(registration);
+        // Manual payment-proof confirmation is disabled.
+        // All workspace payments are confirmed automatically via the PayOS webhook.
+        throw new IllegalArgumentException(
+                "Xác nhận thanh toán thủ công đã bị vô hiệu hóa. Thanh toán được xác nhận tự động qua PayOS webhook.");
     }
 
     public WorkspaceRegistrationView requestRegistrationPaymentCorrection(UUID registrationId, ReviewRegistrationRequest request) {
@@ -2312,39 +2303,11 @@ public class ForepService {
 
     public WorkspaceRegistrationView approveWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
         requireSystemAdmin();
-        WorkspaceRegistrationEntity registration = requireWorkspaceRegistration(registrationId);
-        
-        RegistrationStatus currentStatus = registration.getRegistrationStatus();
-        if (currentStatus == RegistrationStatus.ACTIVATED) {
-            log.info("Registration {} is already ACTIVATED – returning current state", registrationId);
-            return toWorkspaceRegistrationView(registration, List.of());
-        }
-
-        if (currentStatus == RegistrationStatus.REJECTED
-                || currentStatus == RegistrationStatus.CANCELLED
-                || currentStatus == RegistrationStatus.EXPIRED) {
-            log.warn("Attempted to approve registration {} with terminal status {}",
-                    registrationId, currentStatus);
-            throw new WorkspaceValidationException(
-                    WorkspaceRegistrationValidationService.ERR_INVALID_REGISTRATION_STATUS,
-                    "Hồ sơ đăng ký ở trạng thái " + currentStatus + " không thể được phê duyệt.");
-        }
-        
-        // Run pre-activation validation first to catch expiration or other validation errors early
-        workspaceRegistrationValidator.validateForActivation(registration);
-
-        PaymentTransactionEntity successfulPayment = paymentTransactions
-                .findByWorkspaceRegistrationIdOrderByCreatedAtDesc(registrationId).stream()
-                .filter(payment -> (payment.getStatus() == PaymentTransactionStatus.PAID || payment.getStatus() == PaymentTransactionStatus.SUCCESS)
-                        && payment.getPaymentMethod() == PaymentMethod.PAYOS
-                        && hasText(payment.getPaymentLinkId()))
-                .findFirst().orElse(null);
-        if (registration.getWorkspaceId() == null && successfulPayment == null) {
-            throw new IllegalArgumentException("Workspace approval requires a successful PayOS payment.");
-        }
-        List<AccountProvisioningView> generatedOwnerAccounts = activateWorkspaceForRegistration(
-                registration, request == null ? null : request.note(), successfulPayment == null ? null : successfulPayment.getId());
-        return toWorkspaceRegistrationView(requireWorkspaceRegistration(registrationId), generatedOwnerAccounts);
+        // Manual workspace approval is disabled.
+        // Workspace activation happens automatically after a successful PayOS payment webhook.
+        // Admin role is read-only for payment/registration history.
+        throw new IllegalArgumentException(
+                "Phê duyệt Workspace thủ công đã bị vô hiệu hóa. Workspace được tạo tự động sau khi thanh toán thành công qua PayOS webhook.");
     }
 
     public WorkspaceRegistrationView rejectWorkspaceRegistration(UUID registrationId, ReviewRegistrationRequest request) {
@@ -4966,6 +4929,10 @@ public class ForepService {
         }
         WorkspaceRegistrationEntity registration = workspaceRegistrations.findByIdForUpdate(payment.getWorkspaceRegistrationId())
                 .orElseThrow(() -> new IllegalArgumentException("Workspace registration not found."));
+        if (List.of(RegistrationStatus.REJECTED, RegistrationStatus.CANCELLED, RegistrationStatus.EXPIRED)
+                .contains(registration.getRegistrationStatus())) {
+            throw new IllegalArgumentException("Hồ sơ đăng ký ở trạng thái " + registration.getRegistrationStatus() + " không thể được thanh toán.");
+        }
         SubscriptionPlanEntity plan = requireSubscriptionPlan(payment.getSubscriptionPlanId());
         if (payment.getPaymentMethod() != PaymentMethod.PAYOS || !hasText(payment.getPaymentLinkId())) {
             throw new IllegalArgumentException("A verified PayOS paymentLinkId is required before payment can be confirmed.");
@@ -4974,7 +4941,7 @@ public class ForepService {
             throw new IllegalArgumentException("Payment amount does not match the selected subscription plan.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        payment.setStatus(PaymentTransactionStatus.PAID);
+        payment.setStatus(PaymentTransactionStatus.SUCCESS);
         payment.setPaidAt(now);
         payment.setConfirmedAt(now);
         payment.setConfirmedBy(adminOverride ? safeCurrentUserId() : null);
@@ -5210,17 +5177,25 @@ public class ForepService {
         String email = normalizeEmail(registration.getOwnerEmail());
         validateNewAccountIdentity(workspace.getId(), email, registration.getOwnerPhone());
         String username = accountNamingService.generateUniqueUsername(AccountType.BUSINESS_OWNER, workspace.getName(), accountWorkspaceCode(workspace));
-        String temporaryPassword = secureTemporaryPassword();
-        String passwordHash = passwordEncoder.encode(temporaryPassword);
+        String temporaryPassword = null;
+        String passwordHash = registration.getOwnerPasswordHash();
+        boolean generatedPassword = false;
+        if (!hasText(passwordHash)) {
+            temporaryPassword = secureTemporaryPassword();
+            passwordHash = passwordEncoder.encode(temporaryPassword);
+            generatedPassword = true;
+        }
         String fullName = hasText(registration.getOwnerFullName())
                 ? registration.getOwnerFullName()
                 : registration.getRepresentativeFullName();
         UserEntity owner = newOwnerAccount(workspace, fullName, email, registration.getOwnerPhone(), username,
-                passwordHash, true, now);
+                passwordHash, generatedPassword, now);
         owner = saveAccount(owner, "Email, phone or username already exists.");
         audit(workspace.getId(), "ACTIVATION_CREATE_INITIAL_BUSINESS_OWNER", "USER", owner.getId(), null,
                 Map.of("username", username, "email", email));
-        credentialsEmailService.sendInitialCredentials(email, username, temporaryPassword, workspace.getName());
+        if (generatedPassword) {
+            credentialsEmailService.sendInitialCredentials(email, username, temporaryPassword, workspace.getName());
+        }
         return List.of(toAccountProvisioningView(owner, temporaryPassword));
     }
 
@@ -5825,5 +5800,15 @@ public class ForepService {
     public record AuditLogView(UUID id, UUID workspaceId, UUID actorId, String actorName, String actorRole, String action, String entityType, UUID entityId, String result, String ipAddress, String userAgent, String requestId, String metadata, String oldValue, String newValue, OffsetDateTime createdAt) {}
     public record AuditLogPageView(List<AuditLogView> items, int page, int size, long totalElements, int totalPages) {}
     private record AssignmentPlan(AssignmentType assignmentType, UUID primaryAssigneeId, UUID teamLeaderId, List<UUID> participantIds) {}
+
+    /**
+     * Response returned by the PayOS webhook handler after a payment is processed.
+     * Contains workspace activation details for the client.
+     */
+    public record WorkspaceActivationResponse(
+            boolean success,
+            boolean workspaceCreated,
+            UUID workspaceId,
+            String message) {}
 }
 
