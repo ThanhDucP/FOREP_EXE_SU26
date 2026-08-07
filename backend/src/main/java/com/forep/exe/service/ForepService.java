@@ -2222,11 +2222,19 @@ public class ForepService {
             throw new IllegalArgumentException("Webhook amount does not match the payment transaction.");
         }
         String paymentLinkId = requiredWebhookText(request.data(), "paymentLinkId");
-        if (!paymentLinkId.equals(payment.getPaymentLinkId())) {
+        String persistedPaymentLinkId = payment.getPaymentLinkId();
+        if (hasText(persistedPaymentLinkId) && !paymentLinkId.equals(persistedPaymentLinkId)) {
             throw new IllegalArgumentException("Webhook paymentLinkId does not match the payment transaction.");
         }
-        boolean success = Boolean.TRUE.equals(request.success()) && "00".equals(request.code())
-                && "00".equals(String.valueOf(request.data().get("code")));
+        if (!hasText(persistedPaymentLinkId)) {
+            payment.setPaymentLinkId(paymentLinkId);
+            if (!hasText(payment.getProviderTransactionId())) {
+                payment.setProviderTransactionId(paymentLinkId);
+            }
+        }
+        boolean success = Boolean.TRUE.equals(request.success())
+                && isPayosSuccessCode(request.code())
+                && isPayosDataSuccessCode(request.data().get("code"));
         payment.setResponseCode(String.valueOf(request.data().get("code")));
         paymentTransactions.save(payment);
         Map<String, Object> sanitizedWebhookData = new LinkedHashMap<>();
@@ -5286,6 +5294,21 @@ public class ForepService {
         } catch (ArithmeticException | NumberFormatException exception) {
             throw new IllegalArgumentException("PayOS webhook " + field + " must be a positive integer.");
         }
+    }
+
+    private boolean isPayosSuccessCode(Object code) {
+        if (code == null) {
+            return false;
+        }
+        String normalized = String.valueOf(code).trim();
+        return "00".equals(normalized) || "0".equals(normalized);
+    }
+
+    private boolean isPayosDataSuccessCode(Object code) {
+        if (code == null) {
+            return true;
+        }
+        return isPayosSuccessCode(code);
     }
 
     private SubscriptionPlanEntity requireActiveSubscriptionPlan(UUID planId) {

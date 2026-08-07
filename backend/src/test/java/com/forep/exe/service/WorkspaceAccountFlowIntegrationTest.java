@@ -436,6 +436,59 @@ class WorkspaceAccountFlowIntegrationTest {
     }
 
     @Test
+    void payosWebhookWithoutDataCodeStillConfirmsPayment() {
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "NC", "owner@no-code.vn", "OwnerPass!2026");
+        PaymentTransactionEntity payment = payment(registration, plan);
+        savePayosConfig();
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("orderCode", Long.parseLong(payment.getOrderCode()));
+        payload.put("amount", payment.getAmount().longValueExact());
+        payload.put("paymentLinkId", payment.getPaymentLinkId());
+        payload.put("desc", "success");
+        String signature = payosPaymentService.hmacSha256(payosPaymentService.webhookRawSignature(payload), "CHECKSUM");
+        PayosWebhookRequest callback = new PayosWebhookRequest("00", "success", true, payload, signature);
+
+        var result = service.handlePayosWebhook(callback);
+
+        assertTrue(result.success());
+        assertTrue(result.workspaceCreated());
+        assertEquals(PaymentTransactionStatus.SUCCESS, payments.findById(payment.getId()).orElseThrow().getStatus());
+        assertEquals(1, workspaces.count());
+    }
+
+    @Test
+    void payosWebhookBackfillsMissingPersistedPaymentLinkId() {
+        SubscriptionPlanEntity plan = plan(2);
+        WorkspaceRegistrationEntity registration = registration(plan, "BL", "owner@backfill-link.vn", "OwnerPass!2026");
+        PaymentTransactionEntity payment = payment(registration, plan);
+        String expectedPaymentLinkId = payment.getPaymentLinkId();
+        payment.setPaymentLinkId(null);
+        payment.setProviderTransactionId(null);
+        payments.saveAndFlush(payment);
+        savePayosConfig();
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("orderCode", Long.parseLong(payment.getOrderCode()));
+        payload.put("amount", payment.getAmount().longValueExact());
+        payload.put("paymentLinkId", expectedPaymentLinkId);
+        payload.put("code", "00");
+        payload.put("desc", "success");
+        String signature = payosPaymentService.hmacSha256(payosPaymentService.webhookRawSignature(payload), "CHECKSUM");
+        PayosWebhookRequest callback = new PayosWebhookRequest("00", "success", true, payload, signature);
+
+        var result = service.handlePayosWebhook(callback);
+        PaymentTransactionEntity updated = payments.findById(payment.getId()).orElseThrow();
+
+        assertTrue(result.success());
+        assertTrue(result.workspaceCreated());
+        assertEquals(expectedPaymentLinkId, updated.getPaymentLinkId());
+        assertEquals(expectedPaymentLinkId, updated.getProviderTransactionId());
+        assertEquals(PaymentTransactionStatus.SUCCESS, updated.getStatus());
+    }
+
+    @Test
     void providerFailureLeavesCommittedFailedPaymentForReconciliation() {
         SubscriptionPlanEntity plan = plan(2);
         WorkspaceRegistrationEntity registration = registration(plan, "PF", "owner@provider-failure.vn", "OwnerPass!2026");
