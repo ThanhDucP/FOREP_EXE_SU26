@@ -5,6 +5,7 @@ import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.WorkspaceRegistrationEntity;
 import com.forep.exe.persistence.WorkspaceRegistrationRepository;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.ReflectionUtils;
@@ -23,7 +24,7 @@ import java.util.UUID;
  */
 @Service
 public class PayosWorkspaceActivationService {
-    private final ForepService forepService;
+    private final ForepService forepServiceTarget;
     private final PaymentTransactionRepository paymentTransactions;
     private final WorkspaceRegistrationRepository workspaceRegistrations;
     private final Method confirmPaymentMethod;
@@ -32,7 +33,7 @@ public class PayosWorkspaceActivationService {
             ForepService forepService,
             PaymentTransactionRepository paymentTransactions,
             WorkspaceRegistrationRepository workspaceRegistrations) {
-        this.forepService = forepService;
+        this.forepServiceTarget = unwrapForepServiceTarget(forepService);
         this.paymentTransactions = paymentTransactions;
         this.workspaceRegistrations = workspaceRegistrations;
 
@@ -75,9 +76,14 @@ public class PayosWorkspaceActivationService {
             paymentTransactions.save(payment);
         }
 
+        // ForepService is @Transactional and therefore normally injected as a Spring
+        // CGLIB proxy. Reflectively invoking its private method on that proxy bypasses
+        // the interceptor and executes against the proxy instance itself; constructor-
+        // injected superclass fields can then be null. Invoke the private method on the
+        // real initialized singleton target instead.
         ReflectionUtils.invokeMethod(
                 confirmPaymentMethod,
-                forepService,
+                forepServiceTarget,
                 paymentId,
                 false,
                 providerEvidence
@@ -103,5 +109,17 @@ public class PayosWorkspaceActivationService {
                     "Workspace was created but payment did not finish in a successful state. status="
                             + updatedPayment.getStatus());
         }
+    }
+
+    private ForepService unwrapForepServiceTarget(ForepService forepService) {
+        Object singletonTarget = AopProxyUtils.getSingletonTarget(forepService);
+        if (singletonTarget == null) {
+            return forepService;
+        }
+        if (!(singletonTarget instanceof ForepService target)) {
+            throw new IllegalStateException(
+                    "Unexpected ForepService proxy target type: " + singletonTarget.getClass().getName());
+        }
+        return target;
     }
 }
