@@ -13,7 +13,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -132,6 +135,27 @@ public class PayosPaymentService {
         return hmacSha256(createRawSignature(orderCode, amount, description, returnUrl, cancelUrl), checksumKey);
     }
 
+    /**
+     * Legacy compatibility only. Runtime PayOS activation no longer depends on webhook delivery.
+     * The legacy webhook endpoint is blocked by Spring Security and can be removed once the old
+     * /api/v1 controller surface is retired.
+     */
+    @Deprecated
+    public boolean verifyWebhook(Map<String, Object> data, String signature, String checksumKey) {
+        if (data == null || blank(signature) || blank(checksumKey)) return false;
+        String expected = hmacSha256(webhookRawSignature(data), checksumKey);
+        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII),
+                signature.trim().toLowerCase().getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private String webhookRawSignature(Map<String, Object> data) {
+        return data.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + signatureValue(entry.getValue()))
+                .reduce((left, right) -> left + "&" + right)
+                .orElse("");
+    }
+
     String hmacSha256(String raw, String key) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -167,6 +191,24 @@ public class PayosPaymentService {
         if (value instanceof Number number) return number.longValue();
         try { return Long.parseLong(value.toString()); }
         catch (NumberFormatException exception) { return 0L; }
+    }
+
+    private String signatureValue(Object value) {
+        if (value == null) return "";
+        if (value instanceof List<?> list) {
+            List<Object> sorted = new ArrayList<>();
+            for (Object item : list) sorted.add(item instanceof Map<?, ?> map ? sortedMap(map) : item);
+            return json(sorted);
+        }
+        if (value instanceof Map<?, ?> map) return json(sortedMap(map));
+        return value.toString();
+    }
+
+    private Map<String, Object> sortedMap(Map<?, ?> source) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.entrySet().stream().sorted(Comparator.comparing(entry -> entry.getKey().toString()))
+                .forEach(entry -> result.put(entry.getKey().toString(), entry.getValue()));
+        return result;
     }
 
     private String json(Object value) {
