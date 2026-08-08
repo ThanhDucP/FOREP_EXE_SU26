@@ -19,7 +19,6 @@ import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
@@ -251,7 +250,7 @@ public class EmployeeImportTemplateService {
         style.setFont(font);
         style.setFillForegroundColor(fillColor.getIndex());
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-        style.setHorizontalAlignment(HorizontalAlignment.CENTER);
+        style.setAlignment(HorizontalAlignment.CENTER);
         style.setBorderTop(BorderStyle.THIN);
         style.setBorderBottom(BorderStyle.THIN);
         style.setBorderLeft(BorderStyle.THIN);
