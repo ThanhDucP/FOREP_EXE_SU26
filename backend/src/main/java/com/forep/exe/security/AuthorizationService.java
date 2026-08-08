@@ -109,8 +109,6 @@ public class AuthorizationService {
         permissions.put(Role.BUSINESS_OWNER, EnumSet.of(
                 Permission.WORKSPACE_VIEW,
                 Permission.WORKSPACE_UPDATE,
-                Permission.PAYMENT_STATUS_VIEW,
-                Permission.PAYMENT_HISTORY_VIEW,
                 Permission.SUBSCRIPTION_VIEW,
                 Permission.EMPLOYEE_VIEW,
                 Permission.DEPARTMENT_VIEW,
