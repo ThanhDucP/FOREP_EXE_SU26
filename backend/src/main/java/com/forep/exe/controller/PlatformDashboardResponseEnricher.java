@@ -1,11 +1,14 @@
 package com.forep.exe.controller;
 
 import com.forep.exe.domain.Enums.PaymentTransactionStatus;
+import com.forep.exe.domain.Enums.WorkspaceSubscriptionStatus;
 import com.forep.exe.dto.ApiResponse;
 import com.forep.exe.persistence.PaymentTransactionEntity;
 import com.forep.exe.persistence.PaymentTransactionRepository;
 import com.forep.exe.persistence.SubscriptionPlanEntity;
 import com.forep.exe.persistence.SubscriptionPlanRepository;
+import com.forep.exe.persistence.WorkspaceSubscriptionEntity;
+import com.forep.exe.persistence.WorkspaceSubscriptionRepository;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -22,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 @RestControllerAdvice(assignableTypes = AdminPlatformController.class)
@@ -31,14 +35,23 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
     private static final String REVENUE_QUARTERLY_PATH = "/api/admin/dashboard/revenue/quarterly";
     private static final String REVENUE_YEARLY_PATH = "/api/admin/dashboard/revenue/yearly";
     private static final String REVENUE_BY_PLAN_PATH = "/api/admin/dashboard/revenue/by-plan";
+    private static final Set<WorkspaceSubscriptionStatus> REVENUE_SUBSCRIPTION_STATUSES = Set.of(
+            WorkspaceSubscriptionStatus.ACTIVE,
+            WorkspaceSubscriptionStatus.EXPIRED,
+            WorkspaceSubscriptionStatus.UPGRADED,
+            WorkspaceSubscriptionStatus.DOWNGRADED
+    );
 
     private final PaymentTransactionRepository paymentTransactions;
     private final SubscriptionPlanRepository subscriptionPlans;
+    private final WorkspaceSubscriptionRepository workspaceSubscriptions;
 
     public PlatformDashboardResponseEnricher(PaymentTransactionRepository paymentTransactions,
-                                             SubscriptionPlanRepository subscriptionPlans) {
+                                             SubscriptionPlanRepository subscriptionPlans,
+                                             WorkspaceSubscriptionRepository workspaceSubscriptions) {
         this.paymentTransactions = paymentTransactions;
         this.subscriptionPlans = subscriptionPlans;
+        this.workspaceSubscriptions = workspaceSubscriptions;
     }
 
     @Override
@@ -60,16 +73,20 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
             return enrichOverview(body);
         }
         if (matches(path, REVENUE_MONTHLY_PATH)) {
-            return ApiResponse.ok(seriesPayload("Doanh thu theo tháng", monthlySeries()));
+            RevenueSource source = revenueSource();
+            return ApiResponse.ok(seriesPayload("Doanh thu theo tháng", monthlySeries(source), source));
         }
         if (matches(path, REVENUE_QUARTERLY_PATH)) {
-            return ApiResponse.ok(seriesPayload("Doanh thu theo quý", quarterlySeries()));
+            RevenueSource source = revenueSource();
+            return ApiResponse.ok(seriesPayload("Doanh thu theo quý", quarterlySeries(source), source));
         }
         if (matches(path, REVENUE_YEARLY_PATH)) {
-            return ApiResponse.ok(seriesPayload("Doanh thu theo năm", yearlySeries()));
+            RevenueSource source = revenueSource();
+            return ApiResponse.ok(seriesPayload("Doanh thu theo năm", yearlySeries(source), source));
         }
         if (matches(path, REVENUE_BY_PLAN_PATH)) {
-            return ApiResponse.ok(seriesPayload("Doanh thu theo gói", byPlanSeries()));
+            RevenueSource source = revenueSource();
+            return ApiResponse.ok(seriesPayload("Doanh thu theo gói", byPlanSeries(source), source));
         }
         return body;
     }
@@ -100,31 +117,35 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
             }
         }
 
-        List<PaymentTransactionEntity> successful = successfulPayments();
-        BigDecimal totalRevenue = sumAmounts(successful);
-        BigDecimal monthRevenue = sumForMonth(successful, YearMonth.now());
-        int currentQuarter = quarterOf(OffsetDateTime.now());
-        int currentYear = OffsetDateTime.now().getYear();
-        BigDecimal quarterRevenue = sumForQuarter(successful, currentYear, currentQuarter);
-        BigDecimal yearRevenue = sumForYear(successful, currentYear);
+        RevenueSource source = revenueSource();
+        BigDecimal totalRevenue = totalRevenue(source);
+        BigDecimal monthRevenue = revenueForMonth(source, YearMonth.now());
+        OffsetDateTime now = OffsetDateTime.now();
+        BigDecimal quarterRevenue = revenueForQuarter(source, now.getYear(), quarterOf(now));
+        BigDecimal yearRevenue = revenueForYear(source, now.getYear());
 
-        // Override the old dashboard helpers with values computed directly from real paid rows.
         enriched.put("totalRevenue", totalRevenue);
         enriched.put("revenue", totalRevenue);
         enriched.put("revenueThisMonth", monthRevenue);
         enriched.put("revenueThisQuarter", quarterRevenue);
         enriched.put("revenueThisYear", yearRevenue);
         enriched.put("currency", "VND");
-        enriched.put("successfulPayments", successful.size());
+        enriched.put("successfulPayments", source.successfulPayments().size());
+        enriched.put("rawSuccessfulPaymentCount", source.successfulPayments().size());
+        enriched.put("activatedSubscriptionCount", source.activatedSubscriptions().size());
+        enriched.put("revenueSource", source.usePaymentTransactions() ? "PAYMENT_TRANSACTIONS" : "SUBSCRIPTION_FALLBACK");
 
         return ApiResponse.ok(enriched);
     }
 
-    private Map<String, Object> seriesPayload(String title, List<Map<String, Object>> series) {
+    private Map<String, Object> seriesPayload(String title,
+                                              List<Map<String, Object>> series,
+                                              RevenueSource source) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
         payload.put("series", series);
         payload.put("currency", "VND");
+        payload.put("revenueSource", source.usePaymentTransactions() ? "PAYMENT_TRANSACTIONS" : "SUBSCRIPTION_FALLBACK");
         payload.put("totalRevenue", series.stream()
                 .map(point -> point.get("value"))
                 .filter(BigDecimal.class::isInstance)
@@ -133,20 +154,45 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
         return payload;
     }
 
-    private List<Map<String, Object>> monthlySeries() {
+    private RevenueSource revenueSource() {
         List<PaymentTransactionEntity> successful = successfulPayments();
+        List<WorkspaceSubscriptionEntity> activated = activatedSubscriptions();
+        boolean usePaymentTransactions = sumPaymentAmounts(successful).compareTo(BigDecimal.ZERO) > 0;
+        return new RevenueSource(successful, activated, usePaymentTransactions);
+    }
+
+    private List<PaymentTransactionEntity> successfulPayments() {
+        return paymentTransactions.findAll().stream()
+                .filter(this::isSuccessful)
+                .toList();
+    }
+
+    private List<WorkspaceSubscriptionEntity> activatedSubscriptions() {
+        return workspaceSubscriptions.findAll().stream()
+                .filter(subscription -> REVENUE_SUBSCRIPTION_STATUSES.contains(subscription.getStatus()))
+                .filter(subscription -> subscription.getPrice() != null)
+                .filter(subscription -> subscription.getPrice().compareTo(BigDecimal.ZERO) > 0)
+                .toList();
+    }
+
+    private BigDecimal totalRevenue(RevenueSource source) {
+        return source.usePaymentTransactions()
+                ? sumPaymentAmounts(source.successfulPayments())
+                : sumSubscriptionPrices(source.activatedSubscriptions());
+    }
+
+    private List<Map<String, Object>> monthlySeries(RevenueSource source) {
         YearMonth current = YearMonth.now();
         List<Map<String, Object>> series = new ArrayList<>();
         for (int offset = 11; offset >= 0; offset--) {
             YearMonth period = current.minusMonths(offset);
             series.add(point(String.format("%02d/%d", period.getMonthValue(), period.getYear()),
-                    sumForMonth(successful, period)));
+                    revenueForMonth(source, period)));
         }
         return series;
     }
 
-    private List<Map<String, Object>> quarterlySeries() {
-        List<PaymentTransactionEntity> successful = successfulPayments();
+    private List<Map<String, Object>> quarterlySeries(RevenueSource source) {
         OffsetDateTime now = OffsetDateTime.now();
         int currentIndex = now.getYear() * 4 + quarterOf(now) - 1;
         List<Map<String, Object>> series = new ArrayList<>();
@@ -154,29 +200,37 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
             int index = currentIndex - offset;
             int year = Math.floorDiv(index, 4);
             int quarter = Math.floorMod(index, 4) + 1;
-            series.add(point("Q" + quarter + "/" + year, sumForQuarter(successful, year, quarter)));
+            series.add(point("Q" + quarter + "/" + year, revenueForQuarter(source, year, quarter)));
         }
         return series;
     }
 
-    private List<Map<String, Object>> yearlySeries() {
-        List<PaymentTransactionEntity> successful = successfulPayments();
+    private List<Map<String, Object>> yearlySeries(RevenueSource source) {
         int currentYear = OffsetDateTime.now().getYear();
         List<Map<String, Object>> series = new ArrayList<>();
         for (int offset = 4; offset >= 0; offset--) {
             int year = currentYear - offset;
-            series.add(point(String.valueOf(year), sumForYear(successful, year)));
+            series.add(point(String.valueOf(year), revenueForYear(source, year)));
         }
         return series;
     }
 
-    private List<Map<String, Object>> byPlanSeries() {
+    private List<Map<String, Object>> byPlanSeries(RevenueSource source) {
         Map<UUID, BigDecimal> totals = new LinkedHashMap<>();
-        for (PaymentTransactionEntity payment : successfulPayments()) {
-            if (payment.getSubscriptionPlanId() == null || payment.getAmount() == null) {
-                continue;
+        if (source.usePaymentTransactions()) {
+            for (PaymentTransactionEntity payment : source.successfulPayments()) {
+                if (payment.getSubscriptionPlanId() == null || payment.getAmount() == null) {
+                    continue;
+                }
+                totals.merge(payment.getSubscriptionPlanId(), payment.getAmount(), BigDecimal::add);
             }
-            totals.merge(payment.getSubscriptionPlanId(), payment.getAmount(), BigDecimal::add);
+        } else {
+            for (WorkspaceSubscriptionEntity subscription : source.activatedSubscriptions()) {
+                if (subscription.getSubscriptionPlanId() == null || subscription.getPrice() == null) {
+                    continue;
+                }
+                totals.merge(subscription.getSubscriptionPlanId(), subscription.getPrice(), BigDecimal::add);
+            }
         }
 
         List<Map<String, Object>> series = new ArrayList<>();
@@ -190,10 +244,62 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
         return series;
     }
 
-    private List<PaymentTransactionEntity> successfulPayments() {
-        return paymentTransactions.findAll().stream()
-                .filter(this::isSuccessful)
-                .toList();
+    private BigDecimal revenueForMonth(RevenueSource source, YearMonth month) {
+        if (source.usePaymentTransactions()) {
+            return source.successfulPayments().stream()
+                    .filter(payment -> {
+                        OffsetDateTime time = effectivePaymentTime(payment);
+                        return time != null && YearMonth.from(time).equals(month);
+                    })
+                    .map(PaymentTransactionEntity::getAmount)
+                    .filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        return source.activatedSubscriptions().stream()
+                .filter(subscription -> subscription.getStartDate() != null)
+                .filter(subscription -> YearMonth.from(subscription.getStartDate()).equals(month))
+                .map(WorkspaceSubscriptionEntity::getPrice)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal revenueForQuarter(RevenueSource source, int year, int quarter) {
+        if (source.usePaymentTransactions()) {
+            return source.successfulPayments().stream()
+                    .filter(payment -> {
+                        OffsetDateTime time = effectivePaymentTime(payment);
+                        return time != null && time.getYear() == year && quarterOf(time) == quarter;
+                    })
+                    .map(PaymentTransactionEntity::getAmount)
+                    .filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        return source.activatedSubscriptions().stream()
+                .filter(subscription -> subscription.getStartDate() != null)
+                .filter(subscription -> subscription.getStartDate().getYear() == year
+                        && quarterOf(subscription.getStartDate()) == quarter)
+                .map(WorkspaceSubscriptionEntity::getPrice)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal revenueForYear(RevenueSource source, int year) {
+        if (source.usePaymentTransactions()) {
+            return source.successfulPayments().stream()
+                    .filter(payment -> {
+                        OffsetDateTime time = effectivePaymentTime(payment);
+                        return time != null && time.getYear() == year;
+                    })
+                    .map(PaymentTransactionEntity::getAmount)
+                    .filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        return source.activatedSubscriptions().stream()
+                .filter(subscription -> subscription.getStartDate() != null)
+                .filter(subscription -> subscription.getStartDate().getYear() == year)
+                .map(WorkspaceSubscriptionEntity::getPrice)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private boolean isSuccessful(PaymentTransactionEntity payment) {
@@ -201,42 +307,16 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
                 || payment.getStatus() == PaymentTransactionStatus.SUCCESS;
     }
 
-    private BigDecimal sumAmounts(List<PaymentTransactionEntity> payments) {
+    private BigDecimal sumPaymentAmounts(List<PaymentTransactionEntity> payments) {
         return payments.stream()
                 .map(PaymentTransactionEntity::getAmount)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    private BigDecimal sumForMonth(List<PaymentTransactionEntity> payments, YearMonth month) {
-        return payments.stream()
-                .filter(payment -> {
-                    OffsetDateTime time = effectivePaymentTime(payment);
-                    return time != null && YearMonth.from(time).equals(month);
-                })
-                .map(PaymentTransactionEntity::getAmount)
-                .filter(Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    private BigDecimal sumForQuarter(List<PaymentTransactionEntity> payments, int year, int quarter) {
-        return payments.stream()
-                .filter(payment -> {
-                    OffsetDateTime time = effectivePaymentTime(payment);
-                    return time != null && time.getYear() == year && quarterOf(time) == quarter;
-                })
-                .map(PaymentTransactionEntity::getAmount)
-                .filter(Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    private BigDecimal sumForYear(List<PaymentTransactionEntity> payments, int year) {
-        return payments.stream()
-                .filter(payment -> {
-                    OffsetDateTime time = effectivePaymentTime(payment);
-                    return time != null && time.getYear() == year;
-                })
-                .map(PaymentTransactionEntity::getAmount)
+    private BigDecimal sumSubscriptionPrices(List<WorkspaceSubscriptionEntity> subscriptions) {
+        return subscriptions.stream()
+                .map(WorkspaceSubscriptionEntity::getPrice)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
@@ -267,5 +347,11 @@ public class PlatformDashboardResponseEnricher implements ResponseBodyAdvice<Obj
         if (!target.containsKey(key) && value != null) {
             target.put(key, value);
         }
+    }
+
+    private record RevenueSource(
+            List<PaymentTransactionEntity> successfulPayments,
+            List<WorkspaceSubscriptionEntity> activatedSubscriptions,
+            boolean usePaymentTransactions) {
     }
 }
